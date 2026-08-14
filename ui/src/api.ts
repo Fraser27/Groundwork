@@ -319,6 +319,25 @@ export interface IngestEvent {
   reason?: string | null
 }
 
+/** A user as an admin sees them. `status` is Cognito's, e.g. FORCE_CHANGE_PASSWORD. */
+export interface TenantUser {
+  user_id: string
+  email: string
+  display_name: string
+  status: string
+  enabled: boolean
+  created_at: string
+}
+
+export interface CreatedUser {
+  user_id: string
+  email: string
+  display_name: string
+  status: string
+  tenant_id: string
+  note: string
+}
+
 // ── Governed metrics ─────────────────────────────────────────────────────────
 
 export interface MetricParameter {
@@ -618,6 +637,20 @@ export const api = {
   },
 
   listSources: (tenant: string) => request<Source[]>(`/tenants/${tenant}/sources`),
+
+  /**
+   * Invite a user. Cognito emails the temporary password, so no credential is ever
+   * returned here. The tenant is taken from the caller's token, not sent.
+   */
+  createUser: (tenant: string, email: string, isAdmin = false) =>
+    request<CreatedUser>(`/tenants/${tenant}/users`, {
+      method: 'POST',
+      body: JSON.stringify({ email, is_admin: isAdmin }),
+    }),
+
+  /** `mine` is users this admin created; `tenant` is everyone in the firm. */
+  listUsers: (tenant: string, scope: 'mine' | 'tenant' = 'mine') =>
+    request<{ scope: string; users: TenantUser[] }>(`/tenants/${tenant}/users?scope=${scope}`),
   createSource: (tenant: string, s: Partial<Source>) =>
     request<Source>(`/tenants/${tenant}/sources`, { method: 'POST', body: JSON.stringify(s) }),
   listTables: (tenant: string) => request<TableSummary[]>(`/tenants/${tenant}/tables`),

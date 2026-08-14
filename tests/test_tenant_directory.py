@@ -15,11 +15,11 @@ from typing import Any
 import pytest
 
 from src.tenant_directory import (
-    PROFILE_SK,
+    KEY_ATTR,
     StaticTenantDirectory,
     TenantDirectory,
     UnknownUser,
-    user_pk,
+    user_key,
 )
 
 SUB = "84289448-90d1-70f2-1b62-82b68589ac67"
@@ -28,18 +28,17 @@ OTHER_SUB = "11111111-2222-3333-4444-555555555555"
 
 class FakeTable:
     def __init__(self) -> None:
-        self.items: dict[tuple[str, str], dict[str, Any]] = {}
+        self.items: dict[str, dict[str, Any]] = {}
         self.gets = 0
 
     def put_item(self, **kw: Any) -> dict[str, Any]:
         item = kw["Item"]
-        self.items[(item["PK"], item["SK"])] = item
+        self.items[item[KEY_ATTR]] = item
         return {}
 
     def get_item(self, **kw: Any) -> dict[str, Any]:
         self.gets += 1
-        key = kw["Key"]
-        item = self.items.get((key["PK"], key["SK"]))
+        item = self.items.get(kw["Key"][KEY_ATTR])
         return {"Item": item} if item else {}
 
     def query(self, **kw: Any) -> dict[str, Any]:
@@ -68,7 +67,7 @@ class TestResolution:
 
     def test_a_record_with_no_tenant_is_refused(self, directory, table):
         """A half-written record must not read as a valid binding."""
-        table.put_item(Item={"PK": user_pk(SUB), "SK": PROFILE_SK, "sub": SUB})
+        table.put_item(Item={KEY_ATTR: user_key(SUB), "sub": SUB})
         with pytest.raises(UnknownUser):
             directory.tenant_for(SUB)
 
@@ -84,21 +83,18 @@ class TestKeying:
         """An email can be reassigned to a different person; a sub cannot. The email is
         stored for lookup convenience but is never the identity."""
         directory.put_user(SUB, "demo-firm", email="lawyer@firm.example")
-        item = table.items[(user_pk(SUB), PROFILE_SK)]
-        assert item["PK"] == f"USER#{SUB}"
+        item = table.items[user_key(SUB)]
+        assert item[KEY_ATTR] == f"USER#{SUB}"
         assert item["email"] == "lawyer@firm.example"
 
-    def test_email_is_indexed_lowercased(self, directory, table):
-        """So an operator searching by a differently-cased address still finds the record."""
+    def test_email_is_stored_lowercased(self, directory, table):
+        """So an operator searching by a differently-cased address still matches."""
         directory.put_user(SUB, "demo-firm", email="Lawyer@Firm.Example")
-        item = table.items[(user_pk(SUB), PROFILE_SK)]
-        assert item["GSI1PK"] == "EMAIL#lawyer@firm.example"
+        assert table.items[user_key(SUB)]["email"] == "lawyer@firm.example"
 
     def test_a_user_without_an_email_still_binds(self, directory, table):
         directory.put_user(SUB, "demo-firm")
-        item = table.items[(user_pk(SUB), PROFILE_SK)]
-        assert item["tenant_id"] == "demo-firm"
-        assert "GSI1PK" not in item
+        assert table.items[user_key(SUB)]["tenant"] == "demo-firm"
 
 
 class TestCaching:

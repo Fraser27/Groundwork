@@ -328,30 +328,24 @@ export class DataStack extends cdk.Stack {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
     };
 
-    // Who belongs to which tenant. Keys are owned by `src/tenant_directory.py`:
-    //   PK = USER#{cognito sub}    SK = PROFILE
-    //   GSI1PK = EMAIL#{lowercased email}
+    // Who belongs to which tenant. Keys are owned by `src/tenant_directory.py`, which
+    // writes `tenant_id = USER#{cognito sub}` — the partition key is named `tenant_id` for
+    // historical reasons and holds an entity key, not a tenant id.
     //
-    // Single-table rather than one row per tenant, because the question actually asked on
-    // every request is "which tenant is this subject in" — and the answer must be a
-    // get_item, not a scan, since it sits on the authentication path.
+    // That naming is deliberate now rather than merely inherited: the key cannot be
+    // changed in place. DynamoDB replaces a table whose schema changes, which changes its
+    // ARN, and `LexGraphApp` consumes that ARN through a strong cross-stack export — so
+    // renaming it takes two coordinated deploys and a table migration. Not worth it for a
+    // column name. See the `defaultCrossStackReferences: strong` note in `config.ts`.
     //
     // Keyed on the Cognito `sub`, not email: an email can be reassigned to a different
-    // person, a sub cannot. The email is indexed separately so an operator can still find
-    // a record by the identifier they know.
+    // person, a sub cannot.
     const tenants = new dynamodb.Table(this, 'TenantTable', {
       ...common,
-      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      partitionKey: { name: 'tenant_id', type: dynamodb.AttributeType.STRING },
       // RETAIN: this table is the only mapping from a verified identity to a tenant.
       // Losing it orphans every S3 prefix and every graph node.
       removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
-
-    tenants.addGlobalSecondaryIndex({
-      indexName: 'GSI1',
-      partitionKey: { name: 'GSI1PK', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'GSI1SK', type: dynamodb.AttributeType.STRING },
     });
 
     // Ingest job state. Keys are owned by `src/documents/job_store.py`:

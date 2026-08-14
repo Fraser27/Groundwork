@@ -19,15 +19,25 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.access import AccessEvent, MatterAssignment, MatterScreen
-from src.api.deps import ServicesDep, TenantDep, require_admin
+from src.api.deps import Services, ServicesDep, TenantDep, require_admin
+from src.user_admin import UserAdmin, UserAdminError
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["access"])
+
+
+def _require_user_admin(services: Services) -> UserAdmin:
+    if services.user_admin is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "user administration needs a Cognito user pool (COGNITO_USER_POOL_ID unset)",
+        )
+    return services.user_admin
 
 
 class AssignRequest(BaseModel):
@@ -104,9 +114,7 @@ def _refuse(e: ValueError) -> HTTPException:
 
 
 @router.get("/tenants/{tenant}/access/users/{user_id}")
-async def user_access(
-    services: ServicesDep, principal: TenantDep, user_id: str
-) -> dict[str, Any]:
+async def user_access(services: ServicesDep, principal: TenantDep, user_id: str) -> dict[str, Any]:
     """One user's assignments, screens, and the decision each matter resolves to.
 
     Admin-only like the mutations: a user's screens name the matters they are walled off
@@ -252,8 +260,7 @@ async def audit(
     if bool(matter_id) == bool(user_id):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "pass exactly one of matter_id or user_id — the trail is read per matter "
-            "or per person",
+            "pass exactly one of matter_id or user_id — the trail is read per matter or per person",
         )
 
     store = services.access.store
@@ -266,4 +273,100 @@ async def audit(
         "matter_id": matter_id,
         "user_id": user_id,
         "events": [_event_out(e) for e in sorted(events, key=lambda e: e.at)],
+    }
+
+
+class CreateUserRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    is_admin: bool = False
+    """Whether to also add the new user to `platform-admin`. Off by default: an admin
+    inviting a colleague should have to say so deliberately."""
+
+
+@router.post("/tenants/{tenant}/users", status_code=status.HTTP_201_CREATED)
+async def create_user(
+    services: ServicesDep,
+    principal: TenantDep,
+    body: Annotated[CreateUserRequest, Body()],
+) -> dict[str, Any]:
+    """Invite a user into this tenant. Cognito emails them a temporary password.
+
+    The tenant is taken from the caller's own context, never from the request: an admin
+    can only create users inside their own firm, so there is no parameter to tamper with.
+
+    The temporary password is minted and mailed by Cognito, so it never passes through
+    this process and cannot land in a log or a response body.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    admin = _require_user_admin(services)
+
+    try:
+        entry = admin.create_user(
+            email=body.email.strip().lower(),
+            tenant_id=ctx.tenant_id,
+            admin_sub=ctx.user_id,
+            is_admin=body.is_admin,
+        )
+    except UserAdminError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+
+    # The token cannot carry the tenant, so the API reads it from here. Written after
+    # Cognito succeeds, because a binding for a user who does not exist is worse than a
+    # user with no binding — the latter is a clear refusal, the former is a phantom.
+    if services.tenant_directory is not None:
+        services.tenant_directory.put_user(entry.user_id, ctx.tenant_id, email=entry.email)
+
+    return {
+        "user_id": entry.user_id,
+        "email": entry.email,
+        "display_name": entry.display_name,
+        "status": entry.status,
+        "tenant_id": ctx.tenant_id,
+        "note": (
+            "Cognito has emailed a temporary password. They must change it at first "
+            "sign-in, and their tenant is fixed at creation and cannot be changed."
+        ),
+    }
+
+
+@router.get("/tenants/{tenant}/users")
+async def list_users(
+    services: ServicesDep,
+    principal: TenantDep,
+    scope: Annotated[str, Query(pattern="^(mine|tenant)$")] = "mine",
+) -> dict[str, Any]:
+    """Users this admin created, or everyone in the tenant.
+
+    `mine` is a `ListUsersInGroup` on the admin's ownership group, which is a real query.
+    `tenant` exists because the ownership model has a gap worth naming: if the admin who
+    invited someone leaves, their users are in a group nobody lists, and this is how they
+    stay reachable.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    admin = _require_user_admin(services)
+
+    try:
+        entries = (
+            admin.list_my_users(ctx.user_id)
+            if scope == "mine"
+            else admin.list_tenant_users(ctx.tenant_id)
+        )
+    except UserAdminError as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+
+    return {
+        "scope": scope,
+        "users": [
+            {
+                "user_id": e.user_id,
+                "email": e.email,
+                "display_name": e.display_name,
+                "status": e.status,
+                "enabled": e.enabled,
+                "created_at": e.created_at,
+            }
+            for e in entries
+        ],
     }

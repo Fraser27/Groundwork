@@ -34,10 +34,15 @@ from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
-#: Single-table keys. `PROFILE` rather than the user id in the sort key because there is
-#: exactly one profile per user, and a fixed sort key makes the read a get_item.
-USER_PK = "USER#"
-PROFILE_SK = "PROFILE"
+#: Entity-prefixed keys in a single-key table.
+#:
+#: The attribute is named `tenant_id` because that is the deployed table's partition key
+#: and it cannot be renamed in place — DynamoDB replaces the table, which changes the ARN
+#: that `LexGraphApp` imports. So the *name* is historical while the *value* is an entity
+#: key, and the `USER#` prefix is what keeps user records from colliding with anything else
+#: stored here later.
+KEY_ATTR = "tenant_id"
+USER_PREFIX = "USER#"
 
 #: Short enough that revoking access is measured in seconds, long enough that a burst of
 #: requests from one user is a single read.
@@ -61,8 +66,8 @@ class UnknownUser(LookupError):
     """
 
 
-def user_pk(sub: str) -> str:
-    return f"{USER_PK}{sub}"
+def user_key(sub: str) -> str:
+    return f"{USER_PREFIX}{sub}"
 
 
 class TenantDirectory:
@@ -103,9 +108,10 @@ class TenantDirectory:
         if cached is not None:
             return cached
 
-        got = self.table.get_item(Key={"PK": user_pk(sub), "SK": PROFILE_SK})
+        got = self.table.get_item(Key={KEY_ATTR: user_key(sub)})
         item = got.get("Item")
-        tenant_id = (item or {}).get("tenant_id")
+        # `tenant` rather than `tenant_id`: the key attribute already owns that name.
+        tenant_id = (item or {}).get("tenant")
         if not tenant_id:
             raise UnknownUser(f"no tenant binding for subject {sub!r}")
 
@@ -116,16 +122,14 @@ class TenantDirectory:
     def put_user(self, sub: str, tenant_id: str, *, email: str = "") -> None:
         """Bind a user to a tenant. Called by admin tooling, never by a request handler."""
         item: dict[str, Any] = {
-            "PK": user_pk(sub),
-            "SK": PROFILE_SK,
+            KEY_ATTR: user_key(sub),
             "sub": sub,
-            "tenant_id": tenant_id,
+            "tenant": tenant_id,
         }
         if email:
-            item["email"] = email
-            # So an operator can look someone up by the identifier they actually know.
-            item["GSI1PK"] = f"EMAIL#{email.lower()}"
-            item["GSI1SK"] = PROFILE_SK
+            # Stored for operator lookup only. Not indexed: adding a GSI would replace the
+            # table, and finding a record by email is a rare, manual act.
+            item["email"] = email.lower()
         self.table.put_item(Item=item)
         self.forget(sub)
         logger.info("bound subject %s to tenant %s", sub, tenant_id)

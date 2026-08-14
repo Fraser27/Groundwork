@@ -443,9 +443,22 @@ export class AppStack extends cdk.Stack {
       }),
     );
 
+    // Admins invite users from the app rather than the Cognito console, so the task needs
+    // the admin surface — scoped to this one pool. Notably absent:
+    // AdminSetUserPassword and AdminDeleteUser. Cognito mints and mails the temporary
+    // password itself, so the API never handles a credential, and nothing in the product
+    // deletes a user — an account is disabled, which keeps the audit trail intact.
     role.addToPolicy(
       new iam.PolicyStatement({
-        actions: ['cognito-idp:AdminGetUser', 'cognito-idp:AdminCreateUser', 'cognito-idp:ListUsers'],
+        actions: [
+          'cognito-idp:AdminGetUser',
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminAddUserToGroup',
+          'cognito-idp:ListUsers',
+          'cognito-idp:ListUsersInGroup',
+          'cognito-idp:CreateGroup',
+          'cognito-idp:GetGroup',
+        ],
         resources: [
           `arn:${cdk.Aws.PARTITION}:cognito-idp:${this.region}:${this.account}:userpool/${props.userPoolId}`,
         ],

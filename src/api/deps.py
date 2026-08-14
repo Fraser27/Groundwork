@@ -34,6 +34,7 @@ from src.query.metric_matcher import MetricMatcher
 from src.query.resolver import Resolver
 from src.query.vector_search import VectorSearch
 from src.tenant_directory import StaticTenantDirectory, TenantDirectory
+from src.user_admin import UserAdmin
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,14 @@ class Services:
     ingest_limiter: IngestLimiter | None = None
     """Bounds concurrent ingests. Shared across requests, so it is built once with the
     process rather than per call."""
+
+    tenant_directory: TenantDirectory | StaticTenantDirectory | None = None
+    """Which tenant a subject belongs to. The same instance `Authenticator` reads through,
+    so a binding written by the admin API is visible to the next request."""
+
+    user_admin: UserAdmin | None = None
+    """Creating and listing users. None without a user pool, which makes the admin routes
+    answer 503 rather than pretending to work."""
 
     def settings_for(self, tenant_id: str) -> GovernanceSettings:
         if tenant_id not in self.governance:
@@ -191,6 +200,9 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
     store = InMemoryAssertionStore()
     queue = ReviewQueue(store)
     access = AccessManager(_build_access_store(cfg))
+    # One instance, shared: the authenticator reads bindings the admin API writes, so a
+    # newly invited user can sign in without waiting for a cache in a second copy.
+    tenants = _build_tenant_directory(cfg)
 
     embedder: Embedder | None = None
     if cfg.vector.enabled:
@@ -204,7 +216,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
 
     return Services(
         config=cfg,
-        authenticator=Authenticator(cfg, access, _build_tenant_directory(cfg)),
+        authenticator=Authenticator(cfg, access, tenants),
         ontology=load_ontology(cfg.ontology_pack),
         review_queue=queue,
         access=access,
@@ -214,6 +226,12 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
         parser=_build_parser(cfg),
         job_store=_build_job_store(cfg),
         ingest_limiter=IngestLimiter(cfg.documents.max_concurrent_ingests),
+        tenant_directory=tenants,
+        user_admin=(
+            UserAdmin(cfg.auth.user_pool_id, region=cfg.auth.region)
+            if cfg.auth.user_pool_id
+            else None
+        ),
     )
 
 

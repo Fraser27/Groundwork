@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type Ontology, type Source, type TenantSettings } from '../api'
+import { api, type Ontology, type Source, type TenantSettings, type TenantUser } from '../api'
 import { getTenantId } from '../auth'
 import { HELP } from '../epistemic'
 import { fallback, MOCK_ONTOLOGY, MOCK_SETTINGS, MOCK_SOURCES } from '../mocks'
@@ -16,10 +16,40 @@ export default function Admin() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
+  const [users, setUsers] = useState<TenantUser[]>([])
+  const [newEmail, setNewEmail] = useState('')
+  const [newIsAdmin, setNewIsAdmin] = useState(false)
+  const [inviting, setInviting] = useState(false)
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 4000)
+  }
+
+  const loadUsers = () => {
+    // No mock fallback: an empty list is a truthful answer, and inventing colleagues on
+    // an admin screen would be actively misleading.
+    api
+      .listUsers(tenant)
+      .then((r) => setUsers(r.users))
+      .catch(() => setUsers([]))
+  }
+
+  const inviteUser = async () => {
+    const email = newEmail.trim().toLowerCase()
+    if (!email) return
+    setInviting(true)
+    try {
+      const created = await api.createUser(tenant, email, newIsAdmin)
+      showToast(`${created.email} invited. Cognito has emailed a temporary password.`)
+      setNewEmail('')
+      setNewIsAdmin(false)
+      loadUsers()
+    } catch (e) {
+      showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
+    } finally {
+      setInviting(false)
+    }
   }
 
   useEffect(() => {
@@ -35,6 +65,7 @@ export default function Admin() {
       .then(setOntology)
       .catch(console.error)
       .finally(() => setLoading(false))
+    loadUsers()
   }, [tenant])
 
   const patch = async (key: string, body: Partial<TenantSettings>, message: string) => {
@@ -77,6 +108,80 @@ export default function Admin() {
           </div>
           <MockFlag />
         </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <h3>People</h3>
+          <span className="card-note">
+            Cognito emails the temporary password &middot; tenant is fixed at creation
+          </span>
+        </div>
+
+        <div className="form-row">
+          <div className="toolbar-field" style={{ flex: 1, minWidth: 260 }}>
+            <label>Email address</label>
+            <input
+              type="email"
+              placeholder="colleague@firm.example"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') inviteUser()
+              }}
+              style={{ width: '100%' }}
+            />
+          </div>
+          <label className="checkbox-row" style={{ alignSelf: 'end' }}>
+            <input
+              type="checkbox"
+              checked={newIsAdmin}
+              onChange={(e) => setNewIsAdmin(e.target.checked)}
+            />
+            Also make them an administrator
+          </label>
+          <button
+            className="btn btn-primary"
+            style={{ alignSelf: 'end' }}
+            disabled={inviting || !newEmail.trim()}
+            onClick={inviteUser}
+          >
+            {inviting ? 'Inviting…' : 'Invite'}
+          </button>
+        </div>
+
+        {users.length === 0 ? (
+          <p className="card-note">
+            You have not invited anyone yet. A new user receives a temporary password by email and
+            must change it at first sign-in. Their tenant cannot be changed afterwards, so an
+            address in the wrong firm has to be re-invited rather than edited.
+          </p>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Invited</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.user_id}>
+                  <td>{u.display_name}</td>
+                  <td className="mono">{u.email}</td>
+                  <td>
+                    <span className="tag">
+                      {u.status === 'FORCE_CHANGE_PASSWORD' ? 'Invited' : 'Active'}
+                    </span>
+                  </td>
+                  <td className="muted">{fmtDateTime(u.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       <div className="admin-grid">

@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from typing import Any
 
 from neo4j import Auth, GraphDatabase
-from neo4j.auth_management import AuthManagers
+from neo4j.auth_management import AuthManager
 
 from src.graph.scope import ScopedQuery
 
@@ -75,6 +77,45 @@ def neptune_auth(uri: str, region: str) -> Auth:
     return Auth("basic", _DUMMY_USERNAME, json.dumps(signed), "realm")
 
 
+class _NeptuneAuthManager(AuthManager):
+    """Re-signs on a clock, not on an error.
+
+    `AuthManagers.basic` looked like the right tool and is not: it caches until the server
+    reports a *security* error, but Neptune rejects a stale signature as
+    `BoltProtocol.unexpectedException` — "Signature expired". That is not a security error,
+    so the provider is never re-invoked and every subsequent connection reuses the same
+    dead signature. The pool then fails permanently a few minutes after startup, which is
+    exactly what happened in deployment.
+
+    So expiry is tracked here instead. `get_auth` is called for each new connection, which
+    makes a timestamp check the natural place to decide whether to sign again.
+    """
+
+    def __init__(self, uri: str, region: str, *, lifetime: int = 60) -> None:
+        self._uri = uri
+        self._region = region
+        self._lifetime = lifetime
+        self._auth: Auth | None = None
+        self._signed_at = 0.0
+        # `get_auth` is called from whichever thread opens a connection.
+        self._lock = threading.Lock()
+
+    def get_auth(self) -> Auth:
+        with self._lock:
+            now = time.monotonic()
+            if self._auth is None or now - self._signed_at >= self._lifetime:
+                self._auth = neptune_auth(self._uri, self._region)
+                self._signed_at = now
+            return self._auth
+
+    def handle_security_exception(self, auth: Auth, error: Any) -> bool:
+        """Re-sign and let the driver retry once."""
+        with self._lock:
+            self._auth = None
+            self._signed_at = 0.0
+        return True
+
+
 class GraphClient:
     def __init__(
         self,
@@ -88,13 +129,7 @@ class GraphClient:
         if iam_auth:
             self._driver = GraphDatabase.driver(
                 uri,
-                # An AuthManager, not a bare token or a plain lambda. The driver wraps
-                # anything that is not an AuthManager in `AuthManagers.static`, which
-                # would sign once at startup and then replay that signature forever —
-                # working for about five minutes and failing with "Signature expired"
-                # thereafter. `basic` re-invokes the provider when the server rejects
-                # the credential, which is exactly what an expired signature does.
-                auth=AuthManagers.basic(lambda: neptune_auth(uri, region)),
+                auth=_NeptuneAuthManager(uri, region),
                 encrypted=True,
                 max_connection_lifetime=NEPTUNE_MAX_CONNECTION_LIFETIME_SECONDS,
             )

@@ -114,3 +114,43 @@ class TestConnectionLifetime:
         """A SigV4 signature lasts about five minutes and a pooled connection
         authenticates only on creation, so connections must be recycled sooner."""
         assert NEPTUNE_MAX_CONNECTION_LIFETIME_SECONDS < 300
+
+
+class TestAuthManagerRefresh:
+    """A SigV4 signature lasts ~5 minutes and Neptune reports a stale one as a *protocol*
+    error, not a security error. `AuthManagers.basic` only re-invokes its provider on a
+    security error, so it silently kept replaying a dead signature and the pool failed
+    permanently minutes after startup. Refresh must therefore be time-based."""
+
+    def test_the_signature_is_reused_within_its_lifetime(self, creds):
+        from src.graph.client import _NeptuneAuthManager
+
+        m = _NeptuneAuthManager(URI, "us-east-1", lifetime=300)
+        assert m.get_auth() is m.get_auth()
+
+    def test_the_signature_is_renewed_after_its_lifetime(self, creds, monkeypatch):
+        import src.graph.client as mod
+
+        clock = {"t": 1000.0}
+        monkeypatch.setattr(mod.time, "monotonic", lambda: clock["t"])
+        m = mod._NeptuneAuthManager(URI, "us-east-1", lifetime=60)
+        first = m.get_auth()
+
+        clock["t"] += 61
+        assert m.get_auth() is not first
+
+    def test_a_security_exception_forces_a_resign(self, creds):
+        """Belt and braces: if Neptune ever does classify it as a security error, the next
+        connection must not reuse the rejected signature."""
+        from src.graph.client import _NeptuneAuthManager
+
+        m = _NeptuneAuthManager(URI, "us-east-1", lifetime=300)
+        first = m.get_auth()
+        assert m.handle_security_exception(first, object()) is True
+        assert m.get_auth() is not first
+
+    def test_the_lifetime_is_well_inside_the_signature_window(self):
+        """Renewing at the boundary would race the server's own clock skew allowance."""
+        from src.graph.client import _NeptuneAuthManager
+
+        assert _NeptuneAuthManager(URI, "us-east-1")._lifetime <= 120
