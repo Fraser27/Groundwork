@@ -1,0 +1,45 @@
+# Keeping the build context small matters more than usual here: cdk/lib/app-stack.ts
+# builds the image from the repo ROOT, so anything not excluded is uploaded to ECR
+# as part of every deploy.
+
+.git/
+.gitignore
+
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tests are not shipped. The image runs the API, the workers and the MCP server;
+# none of them import tests/, and testcontainers would pull a Docker dependency
+# into a container that has no Docker.
+tests/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# The UI is built separately (Dockerfile.ui locally, s3-deployment bundling in
+# AWS). node_modules is the single largest thing in this repo.
+ui/node_modules/
+ui/dist/
+
+# CDK is the thing doing the building; it has no business inside the image.
+cdk/
+cdk.out/
+cdk.context.json
+
+# Never bake credentials into a layer.
+.env
+.env.local
+.env.*.local
+docker-compose.override.yml
+
+neo4j_data/
+
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,170 @@
+# Legal domain ontology — the default pack.
+#
+# The two-tier predicate split is the important part of this file.
+#
+# `governing` predicates drive decisions with legal consequence: conflicts,
+# privilege, deadlines, citation authority. These are a CLOSED set, validated at
+# write time. If an extractor proposes `is_counsel_to`, the write is REJECTED
+# rather than quietly recorded — because a conflict check that returns no rows
+# because of a synonym looks exactly like a clean conflict check.
+#
+# `descriptive` predicates are open, with exact-name grounding and no LLM. Sprawl
+# here costs retrieval precision, not a malpractice claim.
+#
+# The test for which tier a predicate belongs in: would a wrong answer here
+# embarrass you, or expose you? Embarrass -> descriptive. Expose -> governing.
+
+domain: legal
+version: 1
+
+entity_types:
+  - id: Matter
+    label: Matter
+    description: An engagement — a case, transaction, or advisory instruction.
+    help: The organising unit of legal work. Most other entities hang off a Matter.
+  - id: Party
+    label: Party
+    description: A person or organisation with an interest in a matter.
+    help: Clients, counterparties, and third parties are all Parties. The role is on the edge, not the node — the same company can be a client on one matter and adverse on another.
+  - id: Counsel
+    label: Counsel
+    description: A lawyer or firm acting on a matter.
+    help: Includes internal fee earners and external firms.
+  - id: Document
+    label: Document
+    description: A filing, contract, opinion, or correspondence item.
+    help: Documents are immutable in S3. What you see here is derived metadata plus extracted assertions.
+  - id: Authority
+    label: Authority
+    description: A cited case, statute, or regulation.
+    help: "A case, statute or regulation the document refers to. Its presence is
+      confirmed by finding the citation text on the page; what the document does with
+      it — relies on, distinguishes, overrules — is a reviewed judgement."
+  - id: Court
+    label: Court
+    description: A forum or tribunal.
+  - id: Deadline
+    label: Deadline
+    description: A date-bound obligation.
+    help: Limitation periods and filing deadlines. Governing predicates, because a missed one is negligence.
+  - id: Clause
+    label: Clause
+    description: A provision within a contract.
+
+# ── Closed vocabulary. Write-time validation. No LLM may invent these. ────────
+governing_predicates:
+  - id: REPRESENTS
+    label: represents
+    domain: [Counsel]
+    range: [Party]
+    description: Counsel acts for this party.
+    help: Half of every conflict check. Kept closed so `acts_for` and `is_counsel_to` can never fragment it.
+  - id: ADVERSE_TO
+    label: adverse to
+    domain: [Party, Matter]
+    range: [Party]
+    description: Positioned against this party.
+    help: The other half of a conflict check. If this predicate fragments, conflict checks silently under-report.
+    symmetric: true
+  - id: PARTY_TO
+    label: party to
+    domain: [Party]
+    range: [Matter]
+    description: Has an interest in this matter.
+  - id: CITES
+    label: cites
+    domain: [Document, Authority]
+    range: [Authority]
+    description: Refers to this authority.
+    help: "Asserts the document relied on this authority. A quote check can only
+      confirm the citation *appears* on the page, never that it was relied on rather
+      than distinguished — so this always needs review."
+  - id: OVERRULES
+    label: overrules
+    domain: [Authority]
+    range: [Authority]
+    description: Displaces the cited authority.
+    help: Governing because relying on overruled authority is a substantive error.
+  - id: DISTINGUISHES
+    label: distinguishes
+    domain: [Authority, Document]
+    range: [Authority]
+    description: Argues the cited authority does not apply.
+  - id: FILED_IN
+    label: filed in
+    domain: [Document, Matter]
+    range: [Court]
+    description: Lodged with this forum.
+  - id: DEADLINE_FOR
+    label: deadline for
+    domain: [Deadline]
+    range: [Matter, Document]
+    description: A date-bound obligation on this matter.
+  - id: SUBJECT_TO_PRIVILEGE
+    label: subject to privilege
+    domain: [Document, Clause]
+    range: [Matter]
+    description: Privileged material on this matter.
+    help: Drives redaction and disclosure. Never model-extracted without review.
+  - id: SUPERSEDES
+    label: supersedes
+    domain: [Document, Clause]
+    range: [Document, Clause]
+    description: Replaces the earlier instrument.
+  - id: GOVERNED_BY
+    label: governed by
+    domain: [Matter, Document, Clause]
+    range: [Authority]
+    description: Subject to this law or jurisdiction.
+  - id: CONTAINS_CLAUSE
+    label: contains clause
+    domain: [Document]
+    range: [Clause]
+    description: This document includes the provision.
+  - id: RELATES_TO_MATTER
+    label: relates to matter
+    domain: [Document, Party, Deadline]
+    range: [Matter]
+    description: Belongs to this matter.
+  - id: INSTRUCTS
+    label: instructs
+    domain: [Party]
+    range: [Counsel]
+    description: Retains this counsel.
+
+# ── Open, with exact-name grounding. No LLM adjudication. ─────────────────────
+descriptive_predicates:
+  - id: CONCERNS_TOPIC
+    label: concerns topic
+    description: Subject-matter tag.
+  - id: IN_INDUSTRY
+    label: in industry
+    description: Sector classification.
+  - id: HAS_DEAL_TYPE
+    label: has deal type
+    description: Transaction category.
+  - id: MENTIONS
+    label: mentions
+    description: Named in the text without a stronger relationship being established.
+    help: The safe default when an extractor sees two entities together but cannot justify a governing predicate.
+
+# Rules materialise INFERRED edges. Each carries premises, so any conclusion
+# unwinds into a proof tree.
+rules:
+  - id: conflict_check
+    version: v1
+    description: Flag a potential conflict where the firm both represents and opposes a party.
+    help: Fires on DECLARED/EXTRACTED_DET only — a conflict flag resting on an LLM guess would be worse than none.
+    when:
+      - "(c:Counsel)-[:REPRESENTS]->(p:Party)"
+      - "(m:Matter)-[:ADVERSE_TO]->(p:Party)"
+    then: "(m)-[:POTENTIAL_CONFLICT]->(p)"
+    min_premise_class: EXTRACTED_DET
+  - id: authority_stale
+    version: v1
+    description: Mark reliance on authority that has since been overruled.
+    when:
+      - "(d:Document)-[:CITES]->(a:Authority)"
+      - "(x:Authority)-[:OVERRULES]->(a:Authority)"
+    then: "(d)-[:RELIES_ON_STALE_AUTHORITY]->(a)"
+    min_premise_class: EXTRACTED_DET

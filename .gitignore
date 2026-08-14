@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+ui/dist/
+.npm/
+
+# CDK — cdk.out holds synthesised templates and bundled asset copies, which can
+# include a build of the app image. Generated, and occasionally large.
+cdk/cdk.out/
+cdk/*.js
+cdk/*.d.ts
+cdk/bin/*.js
+cdk/bin/*.d.ts
+cdk/lib/*.js
+cdk/lib/*.d.ts
+cdk.context.json
+
+# Environment — .env holds real credentials and, in a deployed config, the tenant
+# bypass. Never committed.
+.env
+.env.local
+.env.*.local
+
+# Local compose overrides may reference credentials or a personal AWS profile.
+docker-compose.override.yml
+
+# Docker volumes
+neo4j_data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

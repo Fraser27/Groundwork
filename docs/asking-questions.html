@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asking questions — LexGraph documentation</title>
+<meta name="description" content="The four resolution tiers, what each means for trust, and the ungoverned-query kill switch.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">Using it</p>
+<h1>Asking questions</h1>
+<p class="lede">A question is tried against four routes, most precise first. Which route answered is
+part of the answer, because "this came from an approved definition" and "a model wrote this query"
+are different claims about how much the number can be trusted.</p>
+
+<p class="source-ref">src/query/resolver.py</p>
+
+<h2 id="the-four-tiers">The four tiers</h2>
+
+<p>Each route is attempted in turn and declines if it cannot answer. The first one that can, does,
+and reports itself.</p>
+
+<div class="tier t1">
+  <div class="n">1</div>
+  <div>
+    <h3>Governed metric</h3>
+    <p>An approved metric definition matched the question, and that definition compiled to SQL.</p>
+    <p class="trust"><strong>Trust:</strong> the highest available. No model wrote any part of the
+    query. The same question produces the same SQL every time, so the same question produces the same
+    answer.</p>
+  </div>
+</div>
+
+<div class="tier t2">
+  <div class="n">2</div>
+  <div>
+    <h3>Graph traversal</h3>
+    <p>The answer came from walking assertions in the graph — only those above the confidence
+    threshold, approved where approval was required, and visible to this user.</p>
+    <p class="trust"><strong>Trust:</strong> every fact in the answer is a cited assertion that can be
+    opened to a page or a proof tree. A model may phrase the prose; it does not supply the facts.</p>
+  </div>
+</div>
+
+<div class="tier t3">
+  <div class="n">3</div>
+  <div>
+    <h3>Hybrid</h3>
+    <p>Relevant passages are retrieved by similarity, then the graph is expanded outward from the
+    documents they came from, following only trusted relationships.</p>
+    <p class="trust"><strong>Trust:</strong> sources are cited, and the expansion cannot pull in facts
+    that fail the trust filters. Less precise than tier 2 because similarity search decides what to
+    look at.</p>
+  </div>
+</div>
+
+<div class="tier t4">
+  <div class="n">4</div>
+  <div>
+    <h3>Generated SQL</h3>
+    <p>No approved definition matched, so a model writes SQL against the real schema. It is checked
+    against a query firewall before it runs.</p>
+    <p class="trust"><strong>Trust:</strong> not a governed answer. Treat it as a starting point, read
+    the SQL, and check it before relying on the number. This is the only tier an administrator can
+    switch off.</p>
+  </div>
+</div>
+
+<p>If all four decline, the answer says so plainly rather than producing something: <em>no approved
+metric matched and nothing relevant was found in the graph.</em> Rephrasing may help, or the question
+may need a metric definition that does not exist yet. An empty answer that admits it is empty is
+worth considerably more than a plausible one.</p>
+
+<h2 id="tier-2-is-the-point">Why tier 2 is the differentiating one</h2>
+
+<p>Tier 1 is a good idea that other systems have. Tier 3, in isolation, is what most document AI
+does: find similar passages, hand them to a model, get prose back.</p>
+
+<p>Tier 2 is different in kind. It expands along <em>assertions</em> rather than along similarity. A
+question like "which matters involve Acme Corporation" is answered by finding the Acme entity and
+walking the relationships attached to it — where every relationship walked has a class, a confidence,
+a method, and a page citation, and where relationships that fail the trust filters are not walked at
+all.</p>
+
+<p>The practical difference shows up in what comes back with the answer. Every resolution carries a
+list of the assertions it used. That list is what makes the answer <em>auditable</em> rather than
+merely <em>labelled</em>: each identifier in it resolves to a document span or a proof tree. A
+retrieval system can tell you which passages it looked at. This can tell you which facts it relied
+on, and let you reject any one of them.</p>
+
+<p>Matching in tier 2 is lexical — entity names and relationship names, not embeddings. That is
+deliberate rather than a shortcut: a question naming Acme Corporation should find the Acme entity by
+name, and doing it lexically means the result is reproducible and the reason for it is explainable.
+The system reports which terms matched, so the interface can explain <em>why</em> a fact was included.
+Semantics enter at tier 3, where they are labelled as such.</p>
+
+<h2 id="the-kill-switch">The kill switch</h2>
+
+<p>Tier 4 can be switched off per firm. When it is, a question that reaches it is refused rather than
+answered:</p>
+
+<blockquote>This question could not be answered from an approved metric or the knowledge graph, and
+ungoverned queries are switched off. An administrator can review blocked questions in Governance.</blockquote>
+
+<p>The reason only tier 4 has a switch is that it is the only tier where the system is
+<em>guessing at intent</em> rather than executing something a person approved. Tiers 1 through 3
+execute definitions, traversals and retrievals that a human designed. Tier 4 asks a model to invent a
+query, and the model's understanding of the question is the only thing standing between the user and a
+wrong number that looks right.</p>
+
+<p>Some firms will accept that trade for the coverage. Some will not, particularly during onboarding
+or in a regulated practice area. The switch makes that a policy choice rather than a product choice,
+and the application explains it to administrators this way:</p>
+
+<blockquote>Refuses any question that no approved governed metric can answer, rather than falling back
+to model-generated SQL. Governed metrics keep working. Refused questions are logged and make a good
+backlog of metrics worth defining.</blockquote>
+
+<div class="note">
+<div class="note-title">The refusal log is a backlog</div>
+<p>Refused questions are recorded — the firm, the user, the question, the reason, the time — and shown
+to administrators. This is not an audit trail for its own sake. <strong>A question people keep asking
+is a governed metric waiting to be written.</strong></p>
+<p>That reframes the switch from a restriction into a product feedback loop. Turn it on, watch what
+gets refused, and the list of definitions worth building writes itself in the users' own words.</p>
+</div>
+
+<h2 id="the-firewall">The query firewall</h2>
+
+<p>When tier 4 does run, the SQL a model produces is checked before it is executed. The check parses
+the query into a syntax tree and walks it, extracting every table referenced anywhere — including
+inside joins, common table expressions, subqueries and unions — and validates them against what the
+caller may read.</p>
+
+<p>Two properties are worth calling out, because a simpler check misses both:</p>
+
+<ul>
+<li><strong>It fails closed on a parse error.</strong> A query that cannot be understood is refused,
+not allowed through on the grounds that nothing suspicious was found.</li>
+<li><strong>It rejects anything that is not a single read.</strong> A comparable implementation checked
+only table names, which means <code>DELETE FROM allowed_table</code> would have passed — the table was
+allowed, and nothing looked at the verb. Non-read statements and multiple stacked statements are both
+refused.</li>
+</ul>
+
+<div class="note gap">
+<div class="note-title">Not built yet</div>
+<p>Tier 4 has no SQL generator wired up, so in practice it always declines. The firewall exists and is
+tested; the model-backed generator that would feed it does not. The kill switch, however, is fully
+wired and does refuse — so a firm that turns it on gets the refusal and the audit entry today.</p>
+</div>
+
+<h2 id="governed-metrics">What makes a metric governed</h2>
+
+<p>A governed metric is a definition in a file that compiles to SQL deterministically. It is not a
+saved query and not a prompt. The fields that carry governance weight, rather than merely describing
+the number:</p>
+
+<table>
+<thead><tr><th>Field</th><th>What it governs</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>Time grains</strong></td>
+  <td>The only time buckets this metric may be reported in. Asking for a grain outside the list fails
+  compilation rather than quietly answering at the wrong one.</td>
+</tr>
+<tr>
+  <td><strong>Time grain column</strong></td>
+  <td>The single column those grains govern. Grouping by any other time-like column is refused as a
+  bypass.</td>
+</tr>
+<tr>
+  <td><strong>Additivity</strong></td>
+  <td>Whether the measure may be summed across periods. Fees billed may; a headcount may not, and
+  summing it produces a number that means nothing.</td>
+</tr>
+<tr>
+  <td><strong>Parameters</strong></td>
+  <td>The closed set of columns a caller may filter on.</td>
+</tr>
+</tbody>
+</table>
+
+<p>Two of the compiler's governance rules are hard refusals rather than warnings: summing a
+semi-additive measure across a time grain, and slicing by time on a column the metric does not govern.
+Both produce a number that looks fine and is wrong, which is the category this system treats most
+severely.</p>
+
+<p>A metric can also be compiled <em>without</em> being executed. That is not a debugging convenience
+— it is the point of a governed metric. A reviewer can read exactly what a definition will do before
+approving it.</p>
+
+<div class="note gap">
+<div class="note-title">Not built yet</div>
+<p>No query executor is connected, so tier 1 currently returns the compiled SQL with no result
+attached. Requesting the SQL without running it is the honest mode locally.</p>
+</div>
+
+<h2 id="composition-bug">A composition bug worth recording</h2>
+
+<p>Metrics can be defined in terms of other metrics. Doing that naively caused a real, subtle
+error in the system this compiler was modelled on.</p>
+
+<div class="note example">
+<div class="note-title">Comparing one month's billings to another month's time</div>
+<p>A realisation rate is fees billed divided by the standard value of the time recorded. Two component
+metrics, combined.</p>
+<p>The reference implementation joined the two components on their shared dimension <em>names</em>.
+But the two components measure time on different columns — billings are dated by invoice date, time
+entries by the date the work was done. There is no shared name to align on. The join produced a
+number, and the number compared one month's billings against a different month's recorded time.</p>
+<p>Nothing errored. The rate was plausible. It was wrong in a way that would require somebody to
+reconcile it by hand to notice.</p>
+<p>The fix is that every component buckets its time into a shared alias, so the two halves are
+explicitly aligned on the same period rather than implicitly on a name collision.</p>
+</div>
+
+<p>Composition is also limited to one level deep, on the grounds that a reviewer must be able to read
+the emitted SQL and follow it. A definition three levels deep compiles to something nobody will
+check, and an unchecked governed metric is a governed metric in name only.</p>
+
+<h2 id="what-you-get-back">What comes back with an answer</h2>
+
+<p>Every resolution carries:</p>
+
+<ul>
+<li><strong>the tier</strong> that answered, and whether it counts as governed</li>
+<li><strong>a plain-language explanation</strong> of what that tier means, written for a lawyer</li>
+<li><strong>the SQL</strong>, where SQL was involved, in full</li>
+<li><strong>citations</strong> — document, page — where documents were involved</li>
+<li><strong>the assertions used</strong>, each of which can be opened to its provenance</li>
+<li><strong>the tiers attempted</strong>, so a tier-3 answer visibly shows that tiers 1 and 2
+declined</li>
+<li><strong>warnings</strong>, including the explicit one attached to every tier-4 answer</li>
+</ul>
+
+<p>The tier list being visible matters more than it looks. A user who sees that the governed route was
+tried and declined knows something useful: the question is not one the firm has defined an approved
+answer for. That is a fact about the firm's own governance, surfaced for free by the answer.</p>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

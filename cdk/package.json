@@ -1,0 +1,24 @@
+{
+  "name": "lexgraph-cdk",
+  "version": "0.1.0",
+  "private": true,
+  "bin": { "lexgraph": "bin/app.js" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "synth": "cdk synth --quiet",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy --all",
+    "destroy": "cdk destroy --all"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.265.0",
+    "constructs": "^10.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "aws-cdk": "^2.1126.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.0"
+  }
+}

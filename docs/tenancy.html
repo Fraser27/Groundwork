@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tenancy and ethical walls — LexGraph documentation</title>
+<meta name="description" content="Logical isolation between firms, the ethical wall model, why a denial beats a permission, and why a walled matter answers 404 rather than 403.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">How it works</p>
+<h1>Tenancy and ethical walls</h1>
+<p class="lede">Two firms' data sits in one database, separated by a filter. That is an
+uncomfortable sentence, and the honest version of it raised the stakes on one file until it was
+built to a standard that matches.</p>
+
+<p class="source-ref">src/graph/scope.py · src/graph/client.py · src/api/app.py</p>
+
+<h2 id="two-levels">Two levels of isolation</h2>
+
+<p>A <strong>tenant</strong> is one firm. A <strong>matter</strong> is one engagement — a case, a
+transaction, an advisory instruction — inside a firm. Both are enforced as filters on every read,
+and they differ in exactly one respect: who is allowed to change them.</p>
+
+<table>
+<thead><tr><th>Level</th><th>Set by</th><th>Changes</th></tr></thead>
+<tbody>
+<tr>
+  <td><strong>Tenant</strong></td>
+  <td>Fixed at authentication, read from the verified sign-in token. Never from a request
+  parameter — a caller who could name their own tenant could widen their own access.</td>
+  <td>Effectively never.</td>
+</tr>
+<tr>
+  <td><strong>Matter</strong></td>
+  <td>The caller's authorisation grants: a list of matters they may see, and a list they may
+  not.</td>
+  <td>Weekly, as staffing changes.</td>
+</tr>
+</tbody>
+</table>
+
+<p>The matter level changing weekly is why it must be <em>policy</em> rather than data layout. An
+ethical wall goes up when a lawyer is staffed onto a matter that conflicts with one they have been
+working on, and it has to take effect immediately. If isolation were a property of where data
+lived, raising a wall would be a data migration, and nobody raises a wall that takes a
+migration.</p>
+
+<h2 id="not-per-matter">Why not a separate graph per matter?</h2>
+
+<p>Because conflict checking is, by definition, across matters — and the shared entity is the
+signal.</p>
+
+<p>If Acme Corp appears in forty matters, that is <em>one</em> node with forty relationships
+attached. A query asking "does the firm both represent and oppose this company?" is a short walk
+around that node. Split the graph per matter and Acme Corp becomes forty unconnected nodes, the
+walk is impossible, and the conflict check has to be rebuilt as a search-and-compare across
+databases — which is the thing knowledge graphs are good at, given up for an isolation model that
+was not needed.</p>
+
+<h2 id="named-graph-correction">The correction: there is no structural isolation</h2>
+
+<p>An earlier version of this design claimed tenants were isolated <em>structurally</em>, each in
+its own named graph, and said so in the project's own README. It was wrong.</p>
+
+<div class="note reversal">
+<div class="note-title">The reversal</div>
+<p>Named graphs are a concept from RDF and SPARQL, a different family of graph technology. The
+graph database in use here — Neptune Database — holds <strong>one property graph per cluster</strong>,
+and the query language it speaks, openCypher, has no notion of a named graph at all. There was
+nothing to isolate structurally. The claim described a feature of a different product.</p>
+<p>So tenant and matter isolation are <strong>both</strong> property filters, differing only in who
+may change them. This was corrected in the code and in that module's own documentation rather than
+quietly patched, because the honest version raises the stakes on that one module: it is now the only
+thing standing between two firms' data, and it should be read knowing that.</p>
+</div>
+
+<p>A related option was examined and rejected. Neptune <em>Analytics</em>, a sibling product, does
+have discrete graph resources, so a graph per tenant is expressible there. But each one provisions
+a minimum of around 32 GB of capacity with no automatic scaling, which makes it a per-customer
+deployment shape rather than multi-tenant software. It also speaks only openCypher and has no
+full-text search. The considered conclusion is that a graph per tenant is affordable only if each
+tenant is a deployment, and that is a different business.</p>
+
+<h2 id="the-only-thing-between">What that one module does about it</h2>
+
+<p>The design rule the scoping module exists to enforce is stated in the code as: <em>it must be
+impossible to express an unscoped query.</em> Not discouraged. Not reviewed for. Impossible. One
+forgotten tenant filter in one code path is a cross-firm privilege breach, and a privilege breach
+is not a bug that gets patched and moved past.</p>
+
+<p>Three mechanisms, layered:</p>
+
+<ul>
+<li><strong>No part of the system outside the graph package writes a graph query by hand.</strong>
+Callers describe the shape of the traversal they want; the scoping module owns the filter clause.
+The metric compiler, for instance, reads a schema interface rather than the graph client, partly for
+this reason — and gained the side benefit that its tests need no database.</li>
+<li><strong>The client refuses to run a read that has not been scoped.</strong> A read must contain
+a placeholder token where the scoping clause belongs; a query without it is rejected before it
+reaches the database. Interpolating anything else is not offered.</li>
+<li><strong>There is no argument anywhere meaning "skip scoping".</strong> The narrow query object
+the scoping module returns can be narrowed further by a caller but has no operation that
+widens it.</li>
+</ul>
+
+<p>Every scoped read composes five independent filters, each of which was a deliberate decision and
+so is named explicitly rather than buried in a query string:</p>
+
+<ol>
+<li><strong>Tenant</strong> — the firm, from the verified token.</li>
+<li><strong>Matter walls</strong> — the allowlist, then the denylist.</li>
+<li><strong>Trust classes</strong> — which kinds of belief may inform an answer. Guesses are
+excluded here, and excluded a second time even if a caller passes them in explicitly.</li>
+<li><strong>Confidence threshold</strong> — facts below the floor are visible in the review queue
+but do not shape answers.</li>
+<li><strong>Time</strong> — by default only facts believed now; optionally, what was believed on a
+given date.</li>
+</ol>
+
+<p>That last one is how "what did the file show when we advised?" is answered. Asking as of a past
+date returns facts that were believed then, <em>including ones since retracted</em>, because the
+question is about what was known at the time and not about what is true now.</p>
+
+<h2 id="denylist-wins">Why a denial always beats a permission</h2>
+
+<p>A user's matter access is two lists: an <strong>allowlist</strong> of matters they may see, and a
+<strong>denylist</strong> of matters they may not. The denylist is applied after the allowlist and always
+wins.</p>
+
+<p>The reason is that ethical walls and broad roles coexist, and they coexist in exactly the
+configuration where getting this wrong is worst. A senior partner has firm-wide access as a matter
+of role. That same partner is walled off from one matter because they previously acted for the other
+side. If a permission could satisfy a request that a wall forbids, then the broadest role in the
+firm defeats every wall in the firm — and the people with the broadest roles are precisely the
+people most likely to have a conflicting history.</p>
+
+<p>So the wall wins. This mirrors the underlying authorisation language, where a <code>forbid</code>
+overrides any <code>permit</code>, and it means a wall cannot be defeated by also holding a broad
+role. The application says it to users this way:</p>
+
+<blockquote>An ethical wall. Matters you are walled off from are invisible to you: they do not appear
+in results, counts, or the graph. A denial always beats a permission, so a broad role cannot defeat
+a wall.</blockquote>
+
+<h2 id="404-not-403">Why a walled matter answers 404 and not 403</h2>
+
+<p>This is a small technical decision with a large consequence, and it is the one most likely to
+look like a bug to somebody who has not been told.</p>
+
+<p>When a user requests something they are not permitted to see, the conventional response is
+<strong>403 Forbidden</strong>: <em>this exists, and you may not have it.</em> LexGraph returns
+<strong>404 Not Found</strong>: <em>there is no such thing here.</em></p>
+
+<div class="note warn">
+<div class="note-title">Why the conventional answer leaks</div>
+<p>A 403 confirms existence. And confirming existence is exactly what an ethical wall is meant to
+prevent.</p>
+<p>Consider a lawyer walled off from the firm's work for a company they used to act against. If
+probing a matter identifier returns 403, they learn the matter exists. Probe a list of plausible
+identifiers, or client names, and the 403 responses map out the firm's engagements — which is
+material non-public information about who the firm acts for, obtainable by a user who was
+specifically walled off from learning it. No document was read. The error codes were enough.</p>
+</div>
+
+<p>So the refusal is deliberately vague, and it is vague consistently. The scoping layer's own error
+message does not distinguish "walled off" from "does not exist". The review queue's lookup does not
+distinguish them. The document store's lookup does not distinguish them. The web layer maps every
+scope violation to 404 in one place rather than leaving each route to remember. A vagueness that
+holds in four places out of five is not vagueness; the fifth place is the whole answer.</p>
+
+<h2 id="silent-filtering">The one thing a walled user <em>is</em> told</h2>
+
+<p>There is a tension here, and resolving it correctly is the most interesting part of the
+model.</p>
+
+<p>Perfect vagueness would mean a walled user's results are silently narrower than they believe. And
+silent filtering is a more dangerous failure than the one the wall prevents. A lawyer who runs a
+conflict check and sees "no conflicts found" concludes there are no conflicts. If the truth was "no
+conflicts <em>that you can see</em>", the wall has caused precisely the harm it was built to
+prevent — the firm proceeds on a clean conflict report that was never clean.</p>
+
+<p>The resolution is that the two questions are different questions:</p>
+
+<ul>
+<li><strong>"Does matter X exist?"</strong> — asked by probing a specific identifier. Refused
+without distinction. Answering it lets a user enumerate what they are walled off from.</li>
+<li><strong>"Is my view of this complete?"</strong> — asked implicitly by every user, all the time.
+Answered honestly with an aggregate: <em>3 matters withheld by an ethical wall</em>. No names, no
+identifiers, nothing that narrows down which. Enough for the lawyer to know their result is partial
+and to escalate rather than rely on it.</li>
+</ul>
+
+<p>A count is not a leak. Knowing that three matters are withheld tells a user nothing about which
+three, and it prevents them drawing a false conclusion from an incomplete answer.</p>
+
+<div class="note gap">
+<div class="note-title">Known gap to close</div>
+<p>The interface currently derives that count on the client side from a flag on each matter, which
+would require the server to send walled matter objects to a user who may not see them — precisely
+what the model forbids. The endpoint must return visible matters plus a withheld count, never the
+walled objects even flagged as such. This is recorded as a required change in the project's own API
+contract; it is not yet made.</p>
+</div>
+
+<h2 id="agents">Automated callers have no identity of their own</h2>
+
+<p>LexGraph exposes its capabilities to AI agents as tools. Those tools carry no service identity
+and no standalone credentials. Every call carries the acting user's delegated token and is
+authorised as that user, with that user's walls.</p>
+
+<p>This is non-negotiable where privilege is involved. An agent with its own broad credentials is a
+path around every ethical wall in the firm, and it is a path that leaves no trace of whose question
+it was answering. The tool surface runs the same code as the web interface — the same scoping
+module, the same vocabulary gate — for a related reason: a tool that answered a question differently
+from the equivalent web request would mean two implementations of governance, and the tool one is
+the one nobody audits.</p>
+
+<h2 id="cluster-key">The seam for physical separation</h2>
+
+<p>Some customers will eventually require their data to be physically separate rather than
+logically separated. The scoping module anticipates it with a single function that returns a
+storage key for a tenant. Today that key is used for naming resources — storage prefixes, search
+index names. If a contract ever requires a separate database cluster per firm, it becomes the
+cluster selector, and no calling code changes.</p>
+
+<p>This is cheap to have now because every read already carries tenant identity through one place.
+It would be close to impossible to add later if those filters were scattered across hundreds of
+call sites, which is the argument for the discipline in the first place.</p>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

@@ -1,0 +1,257 @@
+"""Runtime-tunable governance settings.
+
+Everything here is deliberately *not* a constant. These are the knobs an
+administrator has to be able to turn without a redeploy: trust thresholds, model
+ids, and the kill switch. Same pattern as rosetta-sdl's `system_config` node —
+defaults come from env, overrides are persisted in the graph and survive a restart.
+
+The reason this file exists rather than a pile of module-level constants: a firm
+onboarding a new practice area will want a different confidence floor, and a model
+deprecation should be a settings change rather than a release.
+
+One coupling is load-bearing enough to enforce in code rather than document:
+`model_confidence_cap` must stay below `min_confidence_floor`. That gap is what
+guarantees an unreviewed model assertion cannot shape an answer even if the review
+gate were bypassed — defence in depth, not just policy. `validate()` refuses any
+combination that closes it.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any
+
+# Imported rather than redeclared. These previously existed in both modules with
+# *different* values, and since the pipeline reads config while the UI showed
+# governance, an administrator could see a model id the system was not using.
+from src.constants import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EXTRACTION_MODEL,
+    DEFAULT_OCR_MODEL,
+    DEFAULT_SYNTHESIS_MODEL,
+)
+
+#: The question-answering model. Named separately from synthesis because a firm may
+#: want a cheaper model reading questions than writing answers.
+DEFAULT_QUERY_MODEL = DEFAULT_SYNTHESIS_MODEL
+DEFAULT_ENRICHMENT_MODEL = DEFAULT_OCR_MODEL
+
+
+class GovernanceError(ValueError):
+    """Raised when a settings change would break a safety invariant."""
+
+
+@dataclass
+class GovernanceSettings:
+    """Tenant-scoped governance configuration.
+
+    Field order matters only for how the UI groups them; see `FIELD_HELP` for the
+    text shown next to each control.
+    """
+
+    # ── Trust thresholds ──────────────────────────────────────────────────────
+    min_confidence_floor: float = 0.8
+    """Assertions below this do not inform answers. They remain visible in the
+    review queue — this gates retrieval, not storage."""
+
+    model_confidence_cap: float = 0.79
+    """Ceiling applied to every model extraction. Must stay below
+    `min_confidence_floor`, so an unreviewed model claim sits under the retrieval
+    floor by construction."""
+
+    auto_assert_deterministic: bool = True
+    """Whether quote-verified presence claims go live without review. Turning this off
+    sends even confirmed quotes to the queue — slower, but a firm may want it during
+    onboarding while it builds trust in the pipeline."""
+
+    require_review_for_governing: bool = True
+    """Force review for governing predicates (conflicts, privilege, deadlines)
+    regardless of epistemic class. Belt-and-braces for the predicates where a wrong
+    answer is an exposure rather than an embarrassment."""
+
+    # ── Kill switches ─────────────────────────────────────────────────────────
+    block_ungoverned_queries: bool = False
+    """Refuse tier-4 LLM-generated SQL entirely. Refusals are recorded so an admin
+    can see what users are trying to ask."""
+
+    block_model_extraction: bool = False
+    """Stop reading documents with a model. Since extraction is now model-only, this
+    halts new facts from documents entirely — upload, transcription and search still
+    work, so a document remains findable and readable."""
+
+    # ── Models ────────────────────────────────────────────────────────────────
+    query_model: str = DEFAULT_QUERY_MODEL
+
+    ocr_model: str = DEFAULT_OCR_MODEL
+    """Vision model that transcribes document pages. Deliberately separate from the
+    extraction model: transcription is mechanical and a cheap model does it well, so
+    paying extraction rates for it is waste. Changing it does not invalidate stored
+    text — the method string records which model produced each transcription."""
+
+    extraction_model: str = DEFAULT_EXTRACTION_MODEL
+    enrichment_model: str = DEFAULT_ENRICHMENT_MODEL
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    """Changing this is a data migration: existing vectors were written by the old
+    model and mixing generations degrades retrieval silently. The UI warns and
+    requires re-embedding."""
+
+    # ── Ontology ──────────────────────────────────────────────────────────────
+    ontology_domain: str = "legal"
+    enforce_closed_vocabulary: bool = True
+    """Reject governing predicates outside the pack. Disabling this is how predicate
+    sprawl starts, and sprawl is what makes a conflict check silently miss rows."""
+
+    # ── Retrieval ─────────────────────────────────────────────────────────────
+    vector_top_k: int = 20
+    graph_expand_depth: int = 2
+
+    updated_by: str | None = field(default=None)
+    updated_at: str | None = field(default=None)
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        if not 0.0 <= self.min_confidence_floor <= 1.0:
+            raise GovernanceError("min_confidence_floor must be in [0,1]")
+        if not 0.0 <= self.model_confidence_cap <= 1.0:
+            raise GovernanceError("model_confidence_cap must be in [0,1]")
+        if self.model_confidence_cap >= self.min_confidence_floor:
+            raise GovernanceError(
+                f"model_confidence_cap ({self.model_confidence_cap}) must stay below "
+                f"min_confidence_floor ({self.min_confidence_floor}). The gap is what "
+                "keeps an unreviewed model assertion out of answers even if the review "
+                "gate is bypassed; closing it removes that guarantee."
+            )
+        if self.vector_top_k < 1:
+            raise GovernanceError("vector_top_k must be >= 1")
+        if not 1 <= self.graph_expand_depth <= 5:
+            raise GovernanceError(
+                "graph_expand_depth must be 1-5; deeper traversals fan out badly and "
+                "pull in weakly related matters"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_env(cls) -> GovernanceSettings:
+        def _f(name: str, default: float) -> float:
+            raw = os.getenv(name)
+            return float(raw) if raw else default
+
+        def _b(name: str, default: bool) -> bool:
+            raw = os.getenv(name)
+            return raw.lower() in {"1", "true", "yes"} if raw else default
+
+        return cls(
+            min_confidence_floor=_f("LEXGRAPH_MIN_CONFIDENCE", 0.8),
+            model_confidence_cap=_f("LEXGRAPH_MODEL_CONFIDENCE_CAP", 0.79),
+            auto_assert_deterministic=_b("LEXGRAPH_AUTO_ASSERT_DET", True),
+            require_review_for_governing=_b("LEXGRAPH_REVIEW_GOVERNING", True),
+            block_ungoverned_queries=_b("LEXGRAPH_BLOCK_UNGOVERNED", False),
+            block_model_extraction=_b("LEXGRAPH_BLOCK_MODEL_EXTRACTION", False),
+            query_model=os.getenv("LEXGRAPH_QUERY_MODEL", DEFAULT_QUERY_MODEL),
+            ocr_model=os.getenv("LEXGRAPH_OCR_MODEL", DEFAULT_OCR_MODEL),
+            extraction_model=os.getenv("LEXGRAPH_EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),
+            enrichment_model=os.getenv("LEXGRAPH_ENRICHMENT_MODEL", DEFAULT_ENRICHMENT_MODEL),
+            embedding_model=os.getenv("LEXGRAPH_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+            ontology_domain=os.getenv("LEXGRAPH_ONTOLOGY_DOMAIN", "legal"),
+            enforce_closed_vocabulary=_b("LEXGRAPH_CLOSED_VOCABULARY", True),
+            vector_top_k=int(os.getenv("LEXGRAPH_VECTOR_TOP_K", "20")),
+            graph_expand_depth=int(os.getenv("LEXGRAPH_GRAPH_DEPTH", "2")),
+        )
+
+    def apply(self, patch: dict[str, Any], *, updated_by: str) -> GovernanceSettings:
+        """Return a new validated instance with `patch` applied.
+
+        Returns rather than mutates so a rejected change cannot leave the live
+        settings half-updated.
+        """
+        known = {f.name for f in fields(self)} - {"updated_by", "updated_at"}
+        unknown = set(patch) - known
+        if unknown:
+            raise GovernanceError(f"unknown settings: {sorted(unknown)}")
+
+        merged = {**self.to_dict(), **patch}
+        merged["updated_by"] = updated_by
+        merged.pop("updated_at", None)
+        candidate = GovernanceSettings(**merged)
+        return candidate
+
+    def effective_model_confidence(self, raw: float) -> float:
+        """Clamp a model extractor's self-reported confidence."""
+        return min(raw, self.model_confidence_cap)
+
+
+#: Plain-language help for each control, surfaced as UI tooltips. Written for a
+#: lawyer-administrator, not a data engineer — hence "will not be used in answers"
+#: rather than "excluded from the retrieval candidate set".
+FIELD_HELP: dict[str, str] = {
+    "min_confidence_floor": (
+        "How certain the system must be before a fact is used in an answer. Facts below "
+        "this still appear in the review queue, they just do not influence results. "
+        "Raising it makes answers more conservative and may leave questions unanswered."
+    ),
+    "model_confidence_cap": (
+        "The highest confidence an AI-extracted fact may claim. Kept just below the "
+        "confidence floor on purpose, so an AI claim can never influence an answer until "
+        "a person has approved it. The system will not let you raise this to or above "
+        "the floor."
+    ),
+    "auto_assert_deterministic": (
+        "Whether a fact goes straight into the knowledge graph when its quoted words were "
+        "found on the page. The system checks the quote is really there, so nothing is "
+        "taken on the AI's word — but the check only settles that the words appear, never "
+        "what they mean. Switch off to have a person confirm even those."
+    ),
+    "require_review_for_governing": (
+        "Always require human approval for the relationships that carry legal "
+        "consequence: who represents whom, who is adverse to whom, privilege, and "
+        "deadlines. Recommended on."
+    ),
+    "block_ungoverned_queries": (
+        "Refuse any question that cannot be answered from an approved metric or the "
+        "knowledge graph, instead of letting the AI write its own SQL. Blocked attempts "
+        "are recorded so you can see what people are asking for."
+    ),
+    "block_model_extraction": (
+        "Stop using AI to read documents for facts. Uploading, page transcription and "
+        "search keep working, so documents stay findable — but no new relationships are "
+        "proposed from them."
+    ),
+    "query_model": "The AI model used to interpret questions and generate SQL.",
+    "ocr_model": (
+        "The AI model that reads document pages and turns them into text. It also "
+        "describes charts, diagrams, signature blocks and handwriting, which plain OCR "
+        "cannot. A cheaper, faster model is the right choice here — reading words off a "
+        "page is mechanical work. Changing it does not affect documents already "
+        "processed; each one records which model read it."
+    ),
+    "extraction_model": "The AI model used to read documents and propose relationships.",
+    "enrichment_model": (
+        "The AI model used to write descriptions for database tables and columns. A "
+        "smaller, cheaper model is usually enough here."
+    ),
+    "embedding_model": (
+        "The model that converts document text into vectors for similarity search. "
+        "CHANGING THIS REQUIRES RE-PROCESSING EVERY DOCUMENT — existing vectors came "
+        "from the old model and mixing them degrades search quality without any visible "
+        "error."
+    ),
+    "ontology_domain": (
+        "Which vocabulary of entities and relationships to use. 'legal' covers matters, "
+        "parties, counsel, authorities and deadlines."
+    ),
+    "enforce_closed_vocabulary": (
+        "Reject relationships the ontology does not define. This is what stops the same "
+        "idea being recorded five different ways — if that happens, a conflict check can "
+        "return no results and look like a clean report. Strongly recommended on."
+    ),
+    "vector_top_k": "How many document passages to retrieve before expanding into the graph.",
+    "graph_expand_depth": (
+        "How many relationship hops to follow out from a retrieved passage. Two is "
+        "usually right; more pulls in weakly related matters."
+    ),
+}

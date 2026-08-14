@@ -1,0 +1,170 @@
+# Governed legal metrics.
+#
+# Each entry compiles to deterministic Athena SQL with no LLM in the path. The
+# fields that carry governance weight, rather than just describing the number:
+#
+#   time_grains       the ONLY grains this metric may be served at. Non-empty is a
+#                     hard restriction: ask for a grain outside it and compilation
+#                     fails rather than quietly answering at the wrong one.
+#   time_grain_column the single column time_grains governs. Grouping by any other
+#                     time-like column is refused as a bypass.
+#   aggregation       additive / semi_additive / non_additive. Drives whether the
+#                     compiler will let the measure be rolled up across time.
+#   parameters        the closed set of columns a caller may filter on.
+
+version: "1.0"
+
+metrics:
+  # A flow: money invoiced in a period. Freely summable across any dimension, which
+  # is what additive means and why every grain is allowed.
+  - metric_id: lm_001
+    name: fees_billed
+    synonyms: ["billings", "fees invoiced", "billed fees", "invoiced amount"]
+    definition: >
+      Value of time and disbursements invoiced to clients, excluding credit notes
+      and draft bills.
+    type: simple
+    expression: "SUM(invoice_amount)"
+    source_table: legal_ops.invoices
+    filters: ["invoice_status = 'ISSUED'"]
+    grain: ["invoice_date", "practice_group"]
+    time_grain_column: invoice_date
+    time_grains: ["day", "week", "month", "quarter", "year"]
+    parameters:
+      - column: practice_group
+        description: Restrict to one practice group, e.g. 'Disputes'.
+      - column: office
+        description: Billing office.
+      - column: invoice_date
+        operator: BETWEEN
+        description: Invoice date range.
+    aggregation: additive
+    value_type: currency
+    unit: GBP
+    format: "£#,##0"
+    owner: finance-ops
+
+  # The denominator for realization: what the recorded time was worth at standard
+  # rates before any write-off.
+  - metric_id: lm_002
+    name: standard_value
+    synonyms: ["time value", "value at standard rates", "gross time value"]
+    definition: >
+      Value of recorded billable time at each fee earner's standard rate, before
+      write-offs or discounts.
+    type: simple
+    expression: "SUM(hours * standard_rate)"
+    source_table: legal_ops.time_entries
+    filters: ["is_billable = true", "entry_status = 'POSTED'"]
+    grain: ["work_date", "practice_group"]
+    time_grain_column: work_date
+    time_grains: ["day", "week", "month", "quarter", "year"]
+    parameters:
+      - column: practice_group
+      - column: fee_earner_id
+      - column: work_date
+        operator: BETWEEN
+    aggregation: additive
+    value_type: currency
+    unit: GBP
+    owner: finance-ops
+
+  # A ratio, so non_additive: correct at whatever grain it is computed for, and
+  # meaningless if the returned rows are averaged together afterwards. Derived, so
+  # each side is recomputed from base rows at the target grain rather than rolled up.
+  - metric_id: lm_003
+    name: realization_rate
+    synonyms: ["realisation", "realization", "recovery rate", "collected rate"]
+    definition: >
+      Fees billed as a proportion of the standard value of the time recorded.
+      The firm's headline measure of how much recorded time converts to revenue.
+    type: derived
+    expression: "fees_billed / NULLIF(standard_value, 0)"
+    base_metrics: ["lm_001", "lm_002"]
+    grain: ["practice_group"]
+    time_grains: ["month", "quarter", "year"]
+    aggregation: non_additive
+    value_type: percent
+    unit: ratio
+    format: "0.0%"
+    owner: finance-ops
+
+  # A point-in-time snapshot, so semi_additive: summing WIP across practice groups
+  # is fine, summing it across months double-counts the same unbilled time. The
+  # compiler refuses a time_grain on this rather than returning an inflated number.
+  - metric_id: lm_004
+    name: matter_wip
+    synonyms: ["work in progress", "WIP", "unbilled time", "unbilled work"]
+    definition: >
+      Value of posted billable time not yet invoiced, as at the snapshot date.
+      A balance, not a flow.
+    type: simple
+    expression: "SUM(unbilled_value)"
+    source_table: legal_ops.matter_wip_daily
+    filters: ["matter_status = 'OPEN'"]
+    grain: ["snapshot_date", "practice_group"]
+    time_grain_column: snapshot_date
+    time_grains: ["day"]
+    parameters:
+      - column: practice_group
+      - column: matter_id
+      - column: snapshot_date
+        operator: BETWEEN
+    aggregation: semi_additive
+    value_type: currency
+    unit: GBP
+    owner: finance-ops
+
+  # An average, so non_additive. Joins to matters for the practice group, which is
+  # one-to-one on matter_id — declared as the PK in Glue so the compiler's fan-out
+  # check can confirm it rather than warn.
+  - metric_id: lm_005
+    name: average_matter_duration
+    synonyms: ["matter duration", "time to close", "matter lifecycle", "days open"]
+    definition: >
+      Mean number of days from opening to closure, across matters closed in the
+      period.
+    type: simple
+    expression: "AVG(DATE_DIFF('day', opened_date, closed_date))"
+    source_table: legal_ops.matters
+    joins:
+      - table: legal_ops.practice_groups
+        source_column: practice_group_id
+        target_column: practice_group_id
+        join_type: LEFT
+    filters: ["closed_date IS NOT NULL"]
+    grain: ["closed_date", "practice_group"]
+    time_grain_column: closed_date
+    time_grains: ["month", "quarter", "year"]
+    parameters:
+      - column: practice_group
+      - column: closed_date
+        operator: BETWEEN
+    aggregation: non_additive
+    value_type: duration
+    unit: days
+    format: "#,##0.0"
+    owner: practice-management
+
+  # A distinct count: immune to join fan-out, but still non_additive because
+  # summing distinct counts across rows double-counts anything appearing in two.
+  - metric_id: lm_006
+    name: open_matter_count
+    synonyms: ["open matters", "live matters", "active caseload", "caseload"]
+    definition: Number of distinct matters open as at the snapshot date.
+    type: simple
+    expression: "COUNT(DISTINCT matter_id)"
+    source_table: legal_ops.matter_wip_daily
+    filters: ["matter_status = 'OPEN'"]
+    grain: ["snapshot_date", "practice_group"]
+    time_grain_column: snapshot_date
+    time_grains: ["day", "week", "month"]
+    parameters:
+      - column: practice_group
+      - column: office
+      - column: snapshot_date
+        operator: BETWEEN
+    aggregation: non_additive
+    value_type: count
+    unit: matters
+    owner: practice-management

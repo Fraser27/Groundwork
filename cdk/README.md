@@ -1,0 +1,226 @@
+# LexGraph infrastructure
+
+Six CDK stacks. This is a deliberate reduction of AWS's context-ontology-accelerator,
+which needs 16 — we dropped DataZone/SMUS, Ontop VKG, Smithy codegen, and the
+separate metric service.
+
+| Stack | Holds | Redeployed |
+|---|---|---|
+| `LexGraphNetwork` | VPC, subnets, security groups, VPC endpoints | rarely |
+| `LexGraphData` | Neptune, OpenSearch Serverless, DynamoDB, S3 | rarely |
+| `LexGraphAuth` | Cognito user pool + hosted UI, Cedar policy store | rarely |
+| `LexGraphApp` | ECS Fargate (FastAPI) behind an ALB | constantly |
+| `LexGraphMcp` | MCP server on Bedrock AgentCore Runtime | often |
+| `LexGraphWeb` | CloudFront + S3 for the React UI | often |
+
+The split is by **deploy cadence and blast radius**, not by feature. `data` is
+separate because Neptune takes ~15 minutes to create and holds the only state that
+cannot be rebuilt; `app` is separate because it is redeployed several times a day
+and a rollback there must not take a CloudFormation lock on the graph.
+
+## Prerequisites
+
+- Node 20+, an AWS account, credentials with admin-ish rights for the first deploy
+- Docker running — `app` builds an ARM64 image, and `web` bundles the UI in a container
+- Bedrock model access enabled in the target region for the models in `.env.example`
+- CDK bootstrapped: `npx cdk bootstrap aws://<account>/us-east-1`
+
+## Deploy
+
+```bash
+cd cdk && npm install
+npx cdk synth --quiet              # all six stacks, no AWS calls
+npx cdk deploy --all               # ~25-30 min, most of it Neptune
+```
+
+`synth` and `diff` operate on every stack by default and reject `--all`; `deploy`
+and `destroy` require it. `make synth` / `make deploy` wrap both correctly.
+
+### The two-pass callback URL
+
+There is one genuinely circular requirement: the Cognito hosted UI needs the
+CloudFront domain as a callback URL, and CloudFront sits behind the ALB, which needs
+Cognito's issuer. It is broken with context rather than a custom resource:
+
+```bash
+npx cdk deploy --all
+# read the LexGraphWeb.WebUrl output, then:
+#   cdk.json → "webOrigin": "https://dxxxxx.cloudfront.net"
+npx cdk deploy LexGraphAuth
+```
+
+Two passes, but no Lambda whose failure mode is a half-configured login page.
+
+### Availability Zones — read this before touching the network stack
+
+`SUPPORTED_AZ_IDS` in `lib/network-stack.ts` is the intersection of the AZs that
+**AgentCore Runtime** supports for VPC connectivity and those the **OpenSearch
+Serverless** data-plane endpoint is offered in. The intersection is smaller than
+either list. In `us-east-1` AgentCore supports only `use1-az1`, `use1-az2` and
+`use1-az4` — put a subnet in `use1-az3` and `LexGraphMcp` fails to create with an
+error naming the *subnet*, not the zone.
+
+Those are AZ **IDs**. AZ *names* are shuffled per account, so `us-east-1a` is a
+different physical zone in your account than in mine. Resolve the mapping once:
+
+```bash
+aws ec2 describe-availability-zones \
+  --query 'AvailabilityZones[].[ZoneName,ZoneId]' --output text
+```
+
+then set the matching names in `cdk.json`:
+
+```json
+"availabilityZones": ["us-east-1a", "us-east-1b"]
+```
+
+Until you do, CDK picks the first two AZs, which works for `network` and `data` and
+is the first thing to check if `mcp` will not deploy.
+
+## Tunable context
+
+All in `cdk.json`, read by `lib/config.ts`. Context rather than CloudFormation
+parameters so `cdk diff` shows the real consequence of a change instead of hiding
+it until deploy.
+
+| Key | Default | Notes |
+|---|---|---|
+| `neptuneInstanceClass` | `db.t4g.medium` | Raise before any load test — see below |
+| `neptuneInstanceCount` | `1` | Writer only; >1 adds read replicas |
+| `neptuneParameterGroupFamily` | `neptune1.4` | Must track the engine's major line |
+| `vectorMinOcu` | `0` | 0 enables NextGen scale-to-zero |
+| `vectorMaxOcu` | `4` | Spend ceiling |
+| `appCpu` / `appMemoryMiB` | `512` / `1024` | Fargate task size |
+| `appDesiredCount` | `1` | No redundancy at 1 |
+| `defaultOntology` | `legal` | Pack from `ontologies/` |
+| `availabilityZones` | unset | See above |
+| `webOrigin` | unset | Set after the first deploy |
+
+## Cost
+
+Rough `us-east-1` monthly figures, one instance, light use. **Be sceptical of the
+total** — it assumes an idle vector store and no meaningful document volume. Page
+transcription is one Bedrock vision call per page, so a large scanned bundle is a
+real, usage-driven cost that none of these lines predicts.
+
+| Item | Cost | Scales with |
+|---|---|---|
+| Neptune `db.t4g.medium` | **free for 750 hrs, then ~$50/mo** | wall-clock time, always |
+| Neptune storage + I/O | ~$1–10 | graph size, query volume |
+| NAT gateway | ~$33 + data | always on |
+| ALB | ~$17 + LCUs | always on |
+| Fargate (0.5 vCPU/1 GB) | ~$18 | task count × uptime |
+| Interface VPC endpoints (8 × 2 AZs) | ~$117 | AZ count × endpoint count |
+| OpenSearch Serverless | **$0 idle**, ~$175/OCU-month active | traffic |
+| DynamoDB, S3, CloudFront | a few dollars | usage |
+| AgentCore Runtime | per-invocation | tool calls |
+| **Idle floor** | **~$195–250/mo** | |
+
+Two things to be honest about:
+
+**Neptune Database has no scale-to-zero.** It bills continuously from creation to
+deletion whether or not a single query is run. After the 750 free instance-hours
+(~31 days of one instance) that is ~$50/mo forever. This is the single biggest
+reason not to leave a dev stack up over a holiday. If you need a graph that costs
+nothing while idle, Neptune Database is the wrong product — but Neptune Analytics
+has a 32 m-NCU floor per graph and no autoscaling, which suits multi-tenant SaaS
+even less.
+
+**The eight interface endpoints cost more than the Fargate service.** At ~$7.20/mo
+per endpoint per AZ, two AZs makes ~$58/mo. They buy the ability to run the app in
+private subnets without paying NAT data-processing on every Bedrock call, and they
+are the right shape for handling privileged documents. For a throwaway dev stack
+they are the first thing to cut.
+
+### `db.t4g.medium` is not a production instance
+
+Free-tier eligible for 750 hours, Graviton so cheaper than `t3`, and AWS says
+plainly it is not for production. Concretely, on the `T` family:
+
+- 2:1 RAM-to-vCPU (vs 8:1 on `R`) disables the DFE engine statistics that make
+  **openCypher** fast — and openCypher is the only query language we use
+- large traversals raise `OutOfMemoryException`
+- Graph Explorer and the Neptune GenAI integrations do not work
+- AWS explicitly advises against load testing on it; results are not indicative
+
+This is intended for now. Raise `neptuneInstanceClass` to `db.r6g.large` or larger
+before any performance work — it is a context change, not a code edit. Watch
+`BufferCacheHitRatio` (below 99.9% means not enough RAM) and
+`MainRequestQueuePendingRequests` (above zero means not enough vCPU).
+
+## Teardown gotchas
+
+```bash
+npx cdk destroy --all
+```
+
+**Resources that survive by design.** Each is deliberate; each keeps billing.
+
+| Resource | Policy | Why |
+|---|---|---|
+| Document bucket | `RETAIN` | S3 is the only source of truth. Neptune and the vector index are derived — this is not. |
+| Document KMS key | `RETAIN` | Destroying it makes every object in the retained bucket permanently unreadable. |
+| `TenantTable` | `RETAIN` | Maps a JWT claim to a live tenant. Losing it orphans every S3 prefix and graph node. |
+| `GrantTable` | `RETAIN` | Ethical walls. A lost denylist entry is a privilege breach, not an outage. |
+| Neptune cluster | `SNAPSHOT` | A final snapshot is taken and kept. It bills as storage. |
+| Cognito user pool | `DESTROY` | Currently destroyed. **Change to `RETAIN` before the first real tenant** — there is no import path back. |
+
+**The document bucket is versioned and RETAINed**, so emptying it means deleting
+every version, not every key. Object Lock is off (see below), so no bypass header is
+needed.
+
+**Other things that block or linger:**
+
+- **Deletion order.** Destroy stacks in reverse (`web`, `mcp`, `app`, `auth`,
+  `data`, `network`), or the strong cross-stack exports refuse. `cdk destroy --all`
+  handles this; destroying `LexGraphData` alone will not.
+- **The VPC will not delete** while the OpenSearch Serverless VPC endpoint's ENIs
+  exist. It resolves on its own after a few minutes; retry rather than hand-deleting.
+- **The Cognito domain prefix** is `lexgraph-<account-id>` and is globally unique.
+  Recreating too soon after a destroy can collide while the old one drains.
+- **ECR images** from `DockerImageAsset` live in the CDK bootstrap asset repository
+  and are not deleted with the stack. They accumulate; each is a few hundred MB.
+- **CloudWatch log groups** for Neptune audit logs and the AgentCore runtime persist
+  independently.
+- **The final Neptune snapshot** is charged as snapshot storage indefinitely. Delete
+  it explicitly when you are certain.
+
+To tear down and genuinely stop all charges, after `cdk destroy --all`: delete the
+final Neptune snapshot, empty and delete the document bucket (all versions),
+schedule the KMS key for deletion, drop the two retained tables, and prune the ECR
+repository.
+
+## Object Lock: enable it before production
+
+The document bucket ships **without** S3 Object Lock. For a system of record holding
+privileged material that is the wrong long-term default, so this is a deliberate
+staging decision rather than a recommendation.
+
+Why it is off now:
+
+- **Object Lock can only be enabled when a bucket is created.** There is no way to
+  add it later, and no way to remove it once set. Getting it wrong in either
+  direction costs a bucket migration.
+- Uploads arrive by **presigned POST under `raw/`**, so a default retention would
+  lock every abandoned, mistaken or malicious upload for the full period. Clearing a
+  typo would require `s3:BypassGovernanceRetention`.
+- The processed key is **content-addressed**, so the object that lands is not yet the
+  object that becomes the record. Locking on arrival locks the wrong thing.
+
+For production, create the bucket with `objectLockEnabled: true` and apply retention
+**per object on the processed copy**, once the bytes are hashed and the document has
+actually entered the record — not as a bucket-wide default:
+
+```ts
+objectLockEnabled: true,
+// No objectLockDefaultRetention: retention is set per object after hashing.
+```
+
+then pass `ObjectLockMode: 'GOVERNANCE'` and an `ObjectLockRetainUntilDate` on the
+`copy_object` call that writes the processed key, and keep the `raw/` prefix
+unlocked so the lifecycle rule can still expire it.
+
+Use `GOVERNANCE`, not `COMPLIANCE`. Under `COMPLIANCE` nobody — including AWS root —
+can delete before the retention period expires, which would make a GDPR erasure
+request impossible to honour. `GOVERNANCE` keeps erasure possible for an operator
+holding the bypass permission, which is the point.

@@ -1,0 +1,98 @@
+# Healthcare domain pack.
+#
+# Present to keep the platform honestly domain-agnostic. Legal is the focus, but if
+# a second pack ever stops loading the abstraction has rotted and we want to know
+# from a test rather than from a customer.
+#
+# The same two-tier split applies, and the same test decides the tier: would a
+# wrong answer embarrass you, or expose you? Here "expose" means patient harm or
+# a HIPAA finding, so contraindications and consent are governing.
+
+domain: healthcare
+version: 1
+
+entity_types:
+  - id: Patient
+    label: Patient
+    description: A person receiving care.
+    help: Equivalent to Party in the legal pack — the subject the record is about.
+  - id: Encounter
+    label: Encounter
+    description: An episode of care.
+    help: "Plays the role Matter does in the legal pack: the organising unit."
+  - id: Clinician
+    label: Clinician
+    description: A treating professional.
+  - id: Diagnosis
+    label: Diagnosis
+    description: A coded condition.
+  - id: Medication
+    label: Medication
+    description: A prescribed drug.
+  - id: Procedure
+    label: Procedure
+    description: A clinical intervention.
+  - id: Document
+    label: Document
+    description: A clinical note, report, or discharge summary.
+
+governing_predicates:
+  - id: HAS_DIAGNOSIS
+    label: has diagnosis
+    domain: [Patient, Encounter]
+    range: [Diagnosis]
+    description: The patient is diagnosed with this condition.
+  - id: PRESCRIBED
+    label: prescribed
+    domain: [Clinician]
+    range: [Medication]
+    description: The clinician prescribed this medication.
+  - id: CONTRAINDICATED_WITH
+    label: contraindicated with
+    domain: [Medication]
+    range: [Medication, Diagnosis]
+    description: Unsafe in combination.
+    help: Governing for the same reason ADVERSE_TO is in the legal pack — a missed edge causes direct harm.
+    symmetric: true
+  - id: ALLERGIC_TO
+    label: allergic to
+    domain: [Patient]
+    range: [Medication]
+    description: Known adverse reaction.
+  - id: CONSENT_GIVEN_FOR
+    label: consent given for
+    domain: [Patient]
+    range: [Procedure]
+    description: Documented consent.
+    help: The analogue of SUBJECT_TO_PRIVILEGE — drives what may lawfully proceed.
+  - id: PERFORMED
+    label: performed
+    domain: [Clinician]
+    range: [Procedure]
+    description: The clinician carried out the procedure.
+  - id: RELATES_TO_ENCOUNTER
+    label: relates to encounter
+    domain: [Document, Diagnosis, Procedure]
+    range: [Encounter]
+    description: Belongs to this episode of care.
+
+descriptive_predicates:
+  - id: CONCERNS_TOPIC
+    label: concerns topic
+    description: Subject-matter tag.
+  - id: IN_SPECIALTY
+    label: in specialty
+    description: Clinical specialty classification.
+  - id: MENTIONS
+    label: mentions
+    description: Named in the text without a stronger relationship established.
+
+rules:
+  - id: contraindication_alert
+    version: v1
+    description: Flag a prescription that conflicts with a known allergy.
+    when:
+      - "(c:Clinician)-[:PRESCRIBED]->(m:Medication)"
+      - "(p:Patient)-[:ALLERGIC_TO]->(m:Medication)"
+    then: "(p)-[:CONTRAINDICATION_ALERT]->(m)"
+    min_premise_class: EXTRACTED_DET

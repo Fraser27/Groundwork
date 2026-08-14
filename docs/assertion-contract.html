@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The assertion contract — LexGraph documentation</title>
+<meta name="description" content="The five epistemic classes, the five enforced invariants, and why review state is derived rather than chosen.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">Start here</p>
+<h1>The assertion contract</h1>
+<p class="lede">Every relationship in the graph is an assertion, and there is one function that
+can create one. That is what makes the guarantees on this page hold for the whole system rather
+than for the code paths somebody remembered to check.</p>
+
+<p class="source-ref">src/graph/assertions.py</p>
+
+<h2 id="what-an-assertion-is">What an assertion is</h2>
+
+<p>A knowledge graph is entities joined by relationships. "Counsel Smith represents Acme Corp" is
+a relationship between two entities. In most systems that is the whole of it: a line connecting
+two dots, perhaps with a confidence number attached.</p>
+
+<p>In LexGraph the same relationship is an <strong>assertion</strong>, and it carries:</p>
+
+<table>
+<thead><tr><th>Field</th><th>What it records</th></tr></thead>
+<tbody>
+<tr><td><code>tenant_id</code></td><td>Which firm this belongs to. Never optional.</td></tr>
+<tr><td><code>subject</code>, <code>predicate</code>, <code>object</code></td><td>The claim itself: who, what relationship, to whom.</td></tr>
+<tr><td><code>epistemic_class</code></td><td>How the system came to believe it. One of five; see below.</td></tr>
+<tr><td><code>method</code></td><td>The specific, versioned thing that produced it — a named model, a rule with its version, a catalogue scan.</td></tr>
+<tr><td><code>confidence</code></td><td>A number from 0 to 1 for this one fact.</td></tr>
+<tr><td><code>source_locator</code></td><td>Where it came from, precisely enough to check by hand. For a document: the file, the page, and the quoted sentence.</td></tr>
+<tr><td><code>premises</code></td><td>For a derived fact, the facts it was derived from. Unwinds into a proof tree.</td></tr>
+<tr><td><code>rule_id</code>, <code>rule_version</code></td><td>Which rule derived it, if a rule did.</td></tr>
+<tr><td><code>valid_from</code>, <code>valid_until</code></td><td><em>World time</em> — the period during which the fact was actually true.</td></tr>
+<tr><td><code>recorded_at</code>, <code>superseded_at</code></td><td><em>Transaction time</em> — when the system learned it, and when it stopped believing it.</td></tr>
+<tr><td><code>review_state</code></td><td>Whether a person has signed it off. Derived, not chosen — see below.</td></tr>
+<tr><td><code>matter_id</code></td><td>Which matter it belongs to, if any. This is what an ethical wall filters on.</td></tr>
+</tbody>
+</table>
+
+<p>Two clocks rather than one is worth pausing on. <strong>World time</strong> is when something
+was true; <strong>transaction time</strong> is when the system found out. Keeping both is what
+makes "what did the file show on the date we advised?" answerable — a real requirement in legal
+work, and one that is brutal to retrofit, because the information simply was not captured.</p>
+
+<p>The identifier of an assertion is a hash of its own content, which has a useful consequence:
+re-ingesting the same document produces the same identifiers and therefore changes nothing. The
+<code>method</code> is part of that hash, so re-extracting with an improved extractor produces
+new assertions that supersede the old generation rather than colliding with it.</p>
+
+<h2 id="the-five-classes">The five classes</h2>
+
+<p>This is the axis the whole design turns on. Without it, a citation parsed out of a filing and
+a language model's opinion are both simply edges, and there is no way to tell them apart at the
+moment somebody asks a question.</p>
+
+<h3><span class="badge declared">DECLARED</span></h3>
+<p>A system of record said so — a case management export, a scan of the data catalogue. Not
+inferred and not extracted from prose. If the source says it, it is true by definition of the
+source; if it is wrong, the source is wrong. Enters the graph without review.</p>
+
+<h3><span class="badge det">EXTRACTED_DET</span></h3>
+<p>A claim that a deterministic check <em>confirmed</em>. Note carefully what this does and does
+not mean, because the name is misleading if you assume the obvious reading.</p>
+
+<p>It does <strong>not</strong> mean "a regular expression found it". There is no pattern-matching
+layer in the system at all. What it means is: a model proposed that some text appears on some
+page, and a string search against that page either confirmed the words are there or it did not.
+The proposal is probabilistic. The confirmation is not, and the confirmation is what the class
+records.</p>
+
+<p>Only <em>presence</em> claims can qualify, because presence is the only thing such a check can
+establish. "This quote appears on page 7" is verifiable. "This holding undercuts that argument"
+is not. <a href="extraction.html">How extraction works</a> covers this in full — it is the most
+important idea in the system and the easiest to misread.</p>
+
+<h3><span class="badge model">EXTRACTED_MODEL</span></h3>
+<p>A model's <em>interpretation</em>, which nothing can mechanically confirm. Everything semantic
+lands here: whether a citation was relied on or distinguished, whether one clause supersedes
+another, whether a party is adverse to another. This is the class the review queue exists for,
+and separating it from verified presence is what keeps that queue small enough to actually be
+read.</p>
+
+<h3><span class="badge inferred">INFERRED</span></h3>
+<p>Derived by a rule from other assertions. It carries its <strong>premises</strong> — the facts
+it rests on — so it can always be explained as a proof tree, and so that retracting a premise
+retracts the conclusion.</p>
+
+<div class="note gap">
+<div class="note-title">Not built yet</div>
+<p>No reasoning engine is wired up. The class, the premise structure, the proof-tree plumbing and
+the confidence ceiling below are all built and tested, and two rules are written out in the legal
+vocabulary pack (a conflict check and a stale-authority check). Nothing currently fires them, so
+in practice no inferred assertions exist.</p>
+</div>
+
+<h3><span class="badge predicted">PREDICTED</span></h3>
+<p>A statistical guess from the shape of the graph — the kind of suggestion a link-prediction
+model makes. Nobody asserted it and no document says it. It is a research hint, never a finding,
+and it is excluded from answers entirely unless a caller explicitly opts in to seeing
+suggestions. The exclusion is enforced in the scoping layer rather than left to each screen, and
+a caller who passes the class in explicitly still does not get it without the flag.</p>
+
+<h2 id="the-invariants">The five enforced invariants</h2>
+
+<p>These are checked by the single function that builds assertions. Each one is cheap to enforce
+at that boundary and expensive or impossible to bolt on later.</p>
+
+<h3>1. Attribution is mandatory</h3>
+<p>A tenant, a method, and a source locator are all required. An unattributed edge is not
+defensible, and a system whose purpose is to answer "why do you believe this?" cannot hold facts
+that have no answer. The method must be specific and versioned — <code>llm:claude-sonnet-5</code>,
+<code>rule:conflict_check@v2</code>, <code>glue:catalog_scan</code> — so that improving a producer
+supersedes its old output instead of silently mixing generations.</p>
+
+<h3>2. An inference must name its premises</h3>
+<p>A derived fact with no stated basis cannot be explained, and it cannot be retracted correctly
+either: nothing knows to withdraw it when the thing it rested on is withdrawn. So an inference
+with an empty premise list is refused. The reverse is also refused — premises on a fact that was
+not inferred are meaningless, and quietly accepting them would make the proof tree unreliable.</p>
+
+<h3>3. An inference is never more confident than its weakest premise</h3>
+<p>Without this rule, a chain of guesses can launder itself into a certainty: three facts at 0.6
+combine into a conclusion at 0.95, and nothing in the record shows what happened. The build
+function refuses any inference whose confidence exceeds the minimum of its premises.</p>
+
+<h3>4. Governing relationships are validated against a closed list at write time</h3>
+<p>The failure this prevents is specific and worth stating concretely. An extractor records
+<code>is_counsel_to</code>. A conflict check queries <code>REPRESENTS</code>. Zero rows come back.
+The report reads as a clean conflict check, and it is not one — it is a query that missed a
+synonym. A write that fails loudly is enormously preferable to a query that silently returns
+nothing. See <a href="predicates.html">The predicate vocabulary</a>.</p>
+
+<h3>5. Review state is derived from the class, never accepted from the caller</h3>
+<p>See below. This is the invariant most worth understanding.</p>
+
+<div class="note">
+<div class="note-title">A sixth rule, enforced elsewhere</div>
+<p>Retracting a fact must transitively retract every conclusion that rested on it. That cannot
+live with the other five because they each inspect one candidate assertion in isolation, whereas
+this one has to walk the graph of premises. It lives in the retraction module instead. Nothing is
+ever deleted: a retraction marks the fact superseded from a moment in time, so a reading of the
+graph as it stood before that moment still shows the fact <em>and</em> still shows the conclusion
+it supported. That is what transaction time is for.</p>
+<p>Why it matters more than it looks: the failure is silent. Retract the extraction that said
+counsel represents a party, leave the conflict flag standing, and the graph now asserts a conflict
+whose stated basis has been withdrawn. Every "why do you believe this?" answer for that flag then
+cites a retracted premise — which is precisely the question the system exists to answer well.</p>
+</div>
+
+<h2 id="derived-review-state">Why review state is derived, not chosen</h2>
+
+<p>The obvious design is a field that each part of the pipeline sets: a citation parser writes
+<code>AUTO_ASSERTED</code>, a model extractor writes <code>PENDING</code>. It is also the design
+that fails, and it fails in the way that is hardest to detect.</p>
+
+<p>If review state is an input, then every code path that creates an assertion is a code path
+that can opt out of review. Not maliciously — by a mistaken default, a copy-pasted call, a new
+ingest route written in a hurry, a well-intentioned bulk backfill. And the failure is invisible:
+the graph looks the same, answers look the same, and the only symptom is that some facts nobody
+approved are shaping results. A code review cannot catch it reliably, because the check is
+"did the author of this call site think about review?" and the answer is unknowable from the
+diff.</p>
+
+<p>So review state is not a parameter. The function that builds an assertion computes it from the
+epistemic class and nothing else:</p>
+
+<pre><code>DECLARED         → AUTO_ASSERTED
+EXTRACTED_DET    → AUTO_ASSERTED
+EXTRACTED_MODEL  → PENDING
+INFERRED         → PENDING
+PREDICTED        → PENDING</code></pre>
+
+<p>The two auto-asserted classes are exactly the two that involve no unverified judgement. A
+catalogue is a system of record. A confirmed quote was confirmed. Neither has anything for a
+human signature to add, and asking for one would be theatre.</p>
+
+<p>Everything else waits. Because the mapping is computed rather than supplied, "no ingest path
+can opt out of review" is a property of the type, not a convention the team maintains.</p>
+
+<p>The application's own wording for this, shown to users as a tooltip, is worth quoting because
+it is the same claim in plainer words:</p>
+
+<blockquote>Whether a person has signed this off. Derived from how the fact was reached, not
+chosen: a fact declared by a system of record, or a quote the system confirmed is on the page,
+goes live directly. Anything a model read into a document, and anything inferred, waits for a
+person. No ingest path can opt out of review.</blockquote>
+
+<h2 id="two-gates">Two gates that are easily confused</h2>
+
+<p>There are two separate questions about a fact, and conflating them causes real confusion:</p>
+
+<ol>
+<li><strong>Review state</strong> — has a human signed off on this claim? Derived from the class,
+as above.</li>
+<li><strong>Staged or live</strong> — is this claim in the part of the graph that queries read? An
+auto-asserted citation is signed off the moment it is created, but it still has to be
+<em>written</em>.</li>
+</ol>
+
+<p>Keeping them apart is what makes a bad extraction run harmless. Staging is a transaction
+boundary: a whole document's assertions land together or not at all, so a half-ingested filing
+never looks like a complete one. A document that failed halfway through extraction contributes
+nothing rather than contributing a misleading subset. And since the original file is held
+immutably, re-running costs a re-extraction and nothing else.</p>
+
+<h2 id="storage">How this is stored, and why it is denormalised</h2>
+
+<p>A fact is written in two places at once:</p>
+
+<pre><code>(:Matter)-[:ADVERSE_TO {assertion_id, epistemic_class, confidence,
+                        review_state, superseded_at, tenant_id,
+                        matter_id}]-&gt;(:Party)
+
+(:Assertion {assertion_id, method, source_locator, valid_from,
+             recorded_at, reviewed_by, ...})-[:PREMISE]-&gt;(:Assertion)</code></pre>
+
+<p>The relationship itself carries only the small subset a filtered traversal needs, so "walk
+only the edges I trust" stays a single hop. The full provenance and the premise structure live on
+a separate node and are read only when somebody asks <em>why</em>.</p>
+
+<p>This is deliberately not the textbook answer. Storing every fact purely as a node with
+relationships pointing at it — full reification — would make every read three times the hops.
+Storing everything on the relationship's own properties could not express a proof tree at all,
+because a relationship cannot point at another relationship. The cost of the hybrid is two writes
+per fact that have to stay consistent with each other, which is a real cost, accepted knowingly.</p>
+
+<div class="note gap">
+<div class="note-title">Not built yet</div>
+<p>The writer that would perform those two writes does not exist. Assertions are currently held in
+an in-process store and are lost on restart, and the read path reads from that store rather than
+from the graph database. The schema, the indexes and the scoped-read mechanism are all in place.
+Note that the in-memory store maintains a reverse index from premise to conclusion, which the
+retraction cascade walks — whatever replaces it has to maintain the same thing, or cascading
+retraction breaks silently.</p>
+</div>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

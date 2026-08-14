@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provenance — LexGraph documentation</title>
+<meta name="description" content="File, page and verbatim quote; why character offsets were demoted; why presigned URLs are never stored.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">How it works</p>
+<h1>Provenance</h1>
+<p class="lede">A citation is only worth having if somebody can check it. That single test decided
+the shape of provenance in this system, and it overturned the design that came first.</p>
+
+<p class="source-ref">src/graph/assertions.py (SourceLocator) · src/documents/storage.py</p>
+
+<h2 id="the-test">The test a citation has to pass</h2>
+
+<p>Ask what a lawyer actually does when they want to verify a claim about a document. They open
+the file, turn to the page, and look for the sentence. That is the whole procedure, it works with
+any viewer, and it has worked for as long as there have been documents.</p>
+
+<p>So provenance for a fact read from a document is three things:</p>
+
+<ul>
+<li><strong>the file</strong> — which document, by identity, plus its original filename for
+display</li>
+<li><strong>the page</strong> — the page the passage came from, carried through conversion and
+splitting</li>
+<li><strong>the quote</strong> — the words themselves, copied exactly</li>
+</ul>
+
+<p>Nothing else is required, and nothing else is trusted. The application phrases it this way to
+users:</p>
+
+<blockquote>The citation for a fact read from a document: the file, the page, and the words
+themselves. It is deliberately what you would use to check it by hand — open the file at that page
+and search for the sentence. Any viewer can do that, and it still works after the document is
+re-processed.</blockquote>
+
+<p>The quote is load-bearing rather than decorative. It is what a document viewer searches for,
+what a reviewer reads when deciding whether to approve a claim, and what a fingerprint is taken
+over so that a later change to the underlying document becomes detectable. A document citation
+without a quote is <strong>refused at construction</strong> — the object cannot be created. A
+citation with nothing to search for cannot be checked, which defeats the point of recording it.</p>
+
+<h2 id="offsets-demoted">Why character offsets were demoted</h2>
+
+<p>The first design made character offsets the primary mechanism: a fact pointed at characters
+1,240 to 1,318 of a document. This is precise, it is easy to compute, and it is a false precision.
+It was reversed, and the reasoning is the useful part.</p>
+
+<div class="note reversal">
+<div class="note-title">The reversal</div>
+<p>Character offsets index the document converter's <strong>reconstructed text buffer</strong>, not
+the PDF. (The converter is Amazon Textract, which returns text plus layout and page numbers.) There are
+two problems with that, and each is sufficient on its own.</p>
+<p><strong>No viewer can seek to them.</strong> The buffer is an intermediate artefact produced
+during conversion. It is not the file the user opens, and there is no mapping from a position in it
+to a position on a rendered page. A citation that points into it is only checkable by a program
+that reproduces the same conversion — which is to say, only by the system making the claim. That is
+not provenance; it is the system citing itself.</p>
+<p><strong>Re-parsing shifts them.</strong> When the document conversion service changes version,
+its reconstruction of the same PDF changes slightly — a header handled differently, a table
+serialised in another order, whitespace normalised in a new way — and every offset after that point
+moves. Nothing errors. Stored assertions silently now point at different text than they did. A
+citation that was correct on Tuesday quotes a different sentence on Wednesday, and there is no
+signal anywhere that it happened.</p>
+<p>There was a test asserting the offsets were internally consistent. It passed. It was verifying
+consistency with a buffer nobody can see.</p>
+</div>
+
+<p>Offsets are still recorded, as optional diagnostic metadata, and they are useful for debugging a
+chunking problem. They are never the citation. The application labels them for users so nobody
+mistakes them for one:</p>
+
+<blockquote>An internal position within the extracted text, kept only for diagnosis. It does not
+correspond to a position in the file you would open, so it is not the citation — the file, page and
+quote are. Safe to ignore.</blockquote>
+
+<p>File, page and quote survive re-parsing. If the converter changes and the page a sentence lands
+on is unchanged, the citation still resolves. If a page number did change, the quote still finds
+it. The mechanism degrades gracefully; offsets fail silently. That is the whole argument.</p>
+
+<h2 id="span-hash">The fingerprint</h2>
+
+<p>Alongside the quote, a hash of the quoted text is stored when the fact is recorded. Its purpose
+is narrow and worth stating: it detects the case where the underlying document has been replaced.
+If the words at the cited location no longer hash to the recorded value, the fact is flagged rather
+than left to drift. In the application's words:</p>
+
+<blockquote>A fingerprint of the quoted words taken when the fact was recorded. If the underlying
+document is ever replaced, the fingerprint stops matching and the fact is flagged rather than
+silently drifting.</blockquote>
+
+<h2 id="structured-provenance">Provenance for facts from databases</h2>
+
+<p>Facts that come from structured sources — the data catalogue, a table of invoices — carry a
+different locator: the source, the table, the column, and a hash of the query that produced the
+result. The same requirement applies: it must be possible to go back to where the number came from
+and get the same number.</p>
+
+<p>Structured sources never move their data into LexGraph. Only metadata about them — tables,
+columns, metric definitions — enters the graph. The rows themselves are queried in place at the
+moment a question is asked. A locator therefore describes a repeatable query, not a copy.</p>
+
+<h2 id="presigned-urls">Why presigned URLs are never stored</h2>
+
+<p>Documents live in object storage that is not publicly readable. To let a user open one, the
+system mints a <strong>presigned URL</strong>: a link that carries its own temporary
+authorisation and expires.</p>
+
+<p>It is tempting to store that link on the fact, so that "check this citation" is a stored
+hyperlink. Two reasons not to, and they point in opposite directions.</p>
+
+<h3>An expiring credential is provenance that stops resolving</h3>
+<p>A presigned URL is valid for minutes. An audit trail whose citations are dead links a week later
+is worse than useless, because the failure looks like the fact being wrong rather than the link
+having expired. Provenance has to resolve when someone asks in two years, in a dispute, about a
+document nobody has opened since.</p>
+
+<h3>A stored URL is a bearer credential sitting in a database</h3>
+<p>Once a presigned URL exists, it answers to nobody. It carries its own authorisation, so it works
+for whoever holds it, regardless of who they are, whether they are logged in, or whether they were
+ever entitled to the document. It bypasses every application-level check by design. Writing one
+into a record is putting a working key to a client's file into a row that will be backed up,
+replicated, and read by processes that have no idea what it is.</p>
+
+<div class="note">
+<div class="note-title">What is done instead</div>
+<p>The fact stores the document's identity. A link is minted at the moment somebody clicks, and only
+<strong>after</strong> that caller's access to the document's matter has been checked — because once
+the URL exists, no later check can stop it. The storage layer adds its own tenant check as a second
+line of defence, which is cheap and catches a wrong document identifier before it becomes a
+credential.</p>
+<p>Links default to <strong>15 minutes</strong> and are hard-capped at <strong>one hour</strong>.
+Beyond that a link stops being a click-through and becomes an unrevocable, unauditable copy of the
+document. The cap is enforced, not advisory.</p>
+</div>
+
+<p>Two small details in the same code are there for the reviewer's benefit rather than for
+security. The link asks the browser to display the file inline rather than download it, because a
+reviewer is checking a citation, not collecting a file. And if the fact cites a page, the page
+number is appended as a URL fragment — fragments are never sent to the server, so this does not
+disturb the link's signature, and every PDF viewer honours it. The reviewer lands on the cited
+page.</p>
+
+<h2 id="s3-is-truth">The original file is the only source of truth</h2>
+
+<p>Uploaded bytes go to immutable, versioned, encrypted object storage, and everything else — the
+graph, the search index — is a <em>derived index</em> that can be dropped and rebuilt from it.</p>
+
+<p>This has one consequence that matters more than it sounds: <strong>a bad extraction run is never
+a data-loss event</strong>. If an extractor is wrong, if a model behaves badly, if a whole ingest
+pass produces nonsense, the remedy is to discard the derived facts and run again. The evidence is
+untouched. That is what makes it reasonable to change extraction logic at all, which is in turn
+what made it possible to delete the pattern-matching extractor rather than living with it.</p>
+
+<p>Keys in storage are content-addressed under a per-firm prefix. The prefix is not decoration: a
+storage policy can pin a role to one firm's prefix, so a bug that computes the wrong key fails at
+the storage permission boundary instead of reading another firm's file. Content addressing also
+makes a double upload idempotent — the same bytes produce the same key, and the second upload is
+skipped rather than creating a second version that a retention policy would then forbid deleting.</p>
+
+<p>Deleting a document writes a deletion marker rather than destroying bytes, and object lock means
+a genuine erasure requires a privileged bypass. That shape is intentional: routine deletes are
+recoverable, and an actual erasure request is a deliberate, audited act rather than a click.</p>
+
+<h2 id="proof-trees">Provenance for derived facts</h2>
+
+<p>A fact that a rule worked out has no page to cite, because no document says it. Its provenance
+is its <strong>premises</strong> — the facts it was derived from — and following those down
+produces a proof tree that terminates in documents and records.</p>
+
+<blockquote>The full chain of reasoning behind an inferred fact, unwound to the documents and
+records at its base. If any step in it is wrong, the conclusion is wrong, and you can see which
+step.</blockquote>
+
+<p>Two contract rules make this trustworthy rather than decorative. A derived fact with no premises
+cannot be created at all. And a derived fact can never be more confident than the weakest fact it
+rests on, so a chain of uncertain steps cannot present itself as a certainty.</p>
+
+<div class="note gap">
+<div class="note-title">Not built yet</div>
+<p>No reasoning engine fires the rules, so no derived facts currently exist. The premise structure,
+the confidence ceiling, the retraction cascade that walks premises, and the interface for reading a
+proof tree are all built and tested. Two rules are written out in the legal vocabulary pack. There
+is nothing to execute them.</p>
+</div>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

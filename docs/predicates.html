@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The predicate vocabulary — LexGraph documentation</title>
+<meta name="description" content="Governing relationships are a closed list; descriptive ones are open. The conflict-check failure the closed list prevents, and why grounding uses no language model.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">How it works</p>
+<h1>The predicate vocabulary</h1>
+<p class="lede">A predicate is the middle of a fact: the relationship in "counsel <em>represents</em>
+party". LexGraph keeps two vocabularies of them, one closed and one open, and the test for which
+list a relationship belongs in is a single question about consequences.</p>
+
+<p class="source-ref">src/ontology/loader.py · ontologies/legal.yaml</p>
+
+<h2 id="two-tiers">Two tiers</h2>
+
+<p>Every fact in the graph is three parts: a subject, a predicate, an object.
+<em>Counsel Smith — represents — Acme Corp.</em> The predicate is the relationship name, and how
+strictly it is controlled turns out to matter a great deal.</p>
+
+<div class="cards">
+  <div class="card">
+    <h3>Governing predicates</h3>
+    <p><strong>Closed list.</strong> Fourteen of them in the legal pack. These drive decisions with
+    legal consequence: conflicts, privilege, deadlines, citation authority. A fact using a name
+    outside the list is <em>rejected when written</em>.</p>
+  </div>
+  <div class="card">
+    <h3>Descriptive predicates</h3>
+    <p><strong>Open list.</strong> Subject-matter tags: what a document is about, what industry a
+    party is in, what kind of deal something is. Sprawl here costs search precision, not a
+    negligence claim.</p>
+  </div>
+</div>
+
+<p>The test for which tier a relationship belongs in, stated in the vocabulary file itself:</p>
+
+<blockquote>Would a wrong answer here embarrass you, or expose you? Embarrass → descriptive.
+Expose → governing.</blockquote>
+
+<p>The legal pack's governing list covers <code>REPRESENTS</code>, <code>ADVERSE_TO</code>,
+<code>PARTY_TO</code>, <code>CITES</code>, <code>OVERRULES</code>, <code>DISTINGUISHES</code>,
+<code>FILED_IN</code>, <code>DEADLINE_FOR</code>, <code>SUBJECT_TO_PRIVILEGE</code>,
+<code>SUPERSEDES</code>, <code>GOVERNED_BY</code>, <code>CONTAINS_CLAUSE</code>,
+<code>RELATES_TO_MATTER</code> and <code>INSTRUCTS</code>. Its descriptive list is
+<code>CONCERNS_TOPIC</code>, <code>IN_INDUSTRY</code>, <code>HAS_DEAL_TYPE</code> and
+<code>MENTIONS</code>.</p>
+
+<p>A relationship name the vocabulary has never seen at all is treated as descriptive. That
+asymmetry is intentional: a new subject-matter tag should not require a vocabulary release, whereas
+a new <em>governing</em> relationship is a deliberate schema decision that somebody should have to
+make on purpose.</p>
+
+<h2 id="the-failure">The failure the closed list prevents</h2>
+
+<p>This is not a data-quality annoyance. It is the single most instructive failure in the system,
+because the symptom is a clean-looking report.</p>
+
+<div class="note example">
+<div class="note-title">The conflict check that returns nothing</div>
+<p>An extractor reads a document and records that a firm acts for a company. It names the
+relationship <code>is_counsel_to</code> — a reasonable name, produced by a model that was not told
+otherwise, or by a developer who did not check.</p>
+<p>Later, a conflict check runs. It asks the graph: <em>who do we represent?</em> It queries
+<code>REPRESENTS</code>.</p>
+<p><strong>Zero rows come back.</strong></p>
+<p>Now look at what that means from the outside. The check ran. It did not error. It returned a
+result. The result was empty. Every signal available to the person reading the report says the same
+thing an actually-clean conflict check would say: <em>no conflicts found</em>.</p>
+<p>The firm proceeds. The conflict exists, is recorded in the graph, and was invisible to the query
+that was written to find it — because of a synonym.</p>
+<p>This is not a bug that produces a wrong number. It is a bug that produces a <em>reassuring</em>
+number, and it is why the check is at write time.</p>
+</div>
+
+<p>The design conclusion follows directly: <strong>a write that fails loudly is enormously
+preferable to a query that silently returns nothing.</strong> So a governing relationship name is
+validated against the closed list at the moment a fact is created, and an unapproved name is
+refused with an error that explains what to do — map it to an approved relationship, or classify it
+as descriptive.</p>
+
+<p>The same reasoning is why the descriptive list is open. If a document is tagged
+<code>concerns_topic: shipping</code> by one extractor and <code>about_subject: shipping</code> by
+another, search precision suffers. Somebody finds fewer relevant documents than they might have.
+That is a bad day. It is not a malpractice event, and paying the cost of a closed list — a
+vocabulary release for every new tag — to prevent it would be paying the wrong price.</p>
+
+<h2 id="grounding">Why grounding uses no language model</h2>
+
+<p><strong>Grounding</strong> is the step that maps a proposed relationship name onto one the
+vocabulary knows. When a model returns <code>acts_on_behalf_of</code>, something has to decide
+whether that means <code>REPRESENTS</code>.</p>
+
+<p>In LexGraph that decision is made by exact matching and nothing else. The proposed name is
+normalised — trimmed, upper-cased, spaces and hyphens turned into underscores — and compared against
+the vocabulary's identifiers and their display labels. A match returns the canonical name. No match
+returns nothing, and the claim is dropped.</p>
+
+<p>So <code>represents</code>, <code>REPRESENTS</code>, <code>Represents</code> and
+<code>adverse to</code> all ground successfully. <code>acts_on_behalf_of</code> does not, and is
+discarded.</p>
+
+<div class="note">
+<div class="note-title">The rejected alternative</div>
+<p>A more permissive mode exists in a comparable system: a language model adjudicates whether two
+relationship names mean the same thing, and maps the proposal onto the vocabulary accordingly. It
+would raise recall noticeably, and it was rejected.</p>
+<p>The reason is that a model deciding <code>acts_on_behalf_of</code> means <code>REPRESENTS</code>
+is <strong>a schema decision made by a model</strong>. Schema decisions in a system that must be
+defensible belong to people, in a versioned file, reviewable by whoever will have to answer for
+them. A model that gets it right nine times in ten is a model that has silently redefined a
+governing relationship one time in ten, and there is no record of it having happened.</p>
+<p>Losing recall to strictness is a visible cost — a claim was dropped, and the log says so. Gaining
+recall by letting a model edit the schema is an invisible cost. Between a visible cost and an
+invisible one, in this system, the visible one wins every time.</p>
+</div>
+
+<p>The consequence of strictness is that dropping claims is normal and expected. A model proposing
+an unrecognised relationship has its claim discarded and logged. That is the system working: no
+model output silently widens the vocabulary.</p>
+
+<h2 id="domain-agnostic">Vocabulary packs and domain-independence</h2>
+
+<p>The vocabulary lives in a file, not in code. A pack names the entity types of a domain, its two
+tiers of relationships, and its rules. The platform loads whichever pack it is pointed at, and the
+legal pack is simply the default.</p>
+
+<p>A second pack for healthcare ships alongside it. Not because healthcare is a target market, but
+because a claim to be domain-agnostic that has only ever been tested against one domain is a claim
+that will fail the first time it is tested. If the second pack ever stops loading cleanly, the
+abstraction has rotted, and it is much better to learn that from a test than from a customer.</p>
+
+<p>The healthcare pack applies the same two-tier test, with "expose" reinterpreted for the domain:
+there, it means patient harm or a regulatory finding, so contraindications and consent are
+governing. The entity types map recognisably onto the legal ones — a patient plays the role a party
+does, an encounter plays the role a matter does — which is a good sign that the abstraction is
+real rather than a legal model with the labels changed.</p>
+
+<h2 id="rules">Rules live in the pack too</h2>
+
+<p>A pack can define rules that derive new facts from existing ones. Each rule names the pattern it
+fires on, the fact it produces, its own version, and — importantly — the minimum kind of belief its
+premises must have.</p>
+
+<p>The legal pack defines two:</p>
+
+<table>
+<thead><tr><th>Rule</th><th>Fires when</th><th>Produces</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>conflict_check</code></td>
+  <td>The firm represents a party, and a matter is adverse to that same party.</td>
+  <td>A potential-conflict flag on that matter.</td>
+</tr>
+<tr>
+  <td><code>authority_stale</code></td>
+  <td>A document cites an authority, and another authority overrules it.</td>
+  <td>A flag that the document relies on stale authority.</td>
+</tr>
+</tbody>
+</table>
+
+<p>Both require premises at least as solid as a confirmed extraction. The pack states why for the
+conflict check, and the reasoning generalises: <em>a conflict flag resting on a language model's
+guess would be worse than none</em>. Worse, not merely less useful — because a false conflict flag
+consumes senior time, may cause a firm to decline profitable work, and erodes trust in every other
+flag the system raises. The rule declines to fire rather than fire on a guess.</p>
+
+<div class="note gap">
+<div class="note-title">Not built yet</div>
+<p>Nothing executes these rules. They are parsed, exposed through the interface, and carry a
+correctly-formed method string for the facts they would produce. No engine fires them, so no derived
+facts exist. The premise structure and the confidence ceiling that would constrain them are built
+and tested.</p>
+<p>Two other fields in the pack are similarly read but not yet acted on: a relationship can be marked
+<em>symmetric</em>, and a rule declares a minimum premise class. Both are parsed and shown through
+the interface; neither is enforced anywhere, because the component that would enforce them is the
+reasoning engine.</p>
+</div>
+
+<h2 id="mentions">The safe default</h2>
+
+<p>When an extractor sees two entities in the same passage but cannot justify anything stronger, the
+right answer is <code>MENTIONS</code> — a descriptive relationship recording that a name appears in
+the text, with no claim about what it was doing there.</p>
+
+<p>This is the relationship a verified quote produces, and the only one it may produce. It is also
+the deliberate answer to a case where a stronger relationship looks free and is not: a case caption
+reading "<em>Acme Corp v. Beta Holdings</em>" proves both names appear. It does not establish, by
+mechanical means, that Acme is adverse to Beta — reading adversity out of a caption is
+interpretation, and interpretation disqualifies a claim from being treated as mechanically
+confirmed.</p>
+
+<p>The consequence is honest and worth naming: adverse-party relationships do not come free from
+captions. If they are wanted, they belong to the model extractor with review, or to a rule with
+premises. That is a cost, and it is the correct cost. See
+<a href="extraction.html#only-mentions">How extraction works</a> for the citation-parsing version of
+the same mistake, which is the one that actually shipped before being reversed.</p>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

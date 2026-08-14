@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How extraction works — LexGraph documentation</title>
+<meta name="description" content="The single model extraction path, the quote verifier, and why EXTRACTED_DET means a check confirmed it rather than a regex found it.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">How it works</p>
+<h1>How extraction works</h1>
+<p class="lede">Reading facts out of documents is where a system like this either earns its
+defensibility or quietly loses it. LexGraph has one extraction path — a language model — and
+splits its output not by who proposed a claim but by whether the claim can be
+<em>checked</em>.</p>
+
+<p class="source-ref">src/documents/extractors/model.py</p>
+
+<h2 id="the-shape-of-it">The shape of it</h2>
+
+<p>A document arrives, is converted to text with page numbers preserved, and is split into
+passages. Each passage goes to a language model once, with a system prompt that asks for two
+kinds of claim and insists on keeping them separate, because they are checked differently:</p>
+
+<ol>
+<li><strong>Entities</strong> — something named in the passage: a party, a court, an authority, a
+date, a docket number. This is a claim about <em>presence only</em>. It is verified by searching
+the passage for the model's quote, so the quote must be copied exactly.</li>
+<li><strong>Relationships</strong> — something the passage supports that no search could confirm:
+that one holding undercuts another, that a clause supersedes an earlier one, that a party is
+positioned against another. These go to a human reviewer.</li>
+</ol>
+
+<p>Everything the model returns is then put through two gates before anything reaches the graph,
+both of them there because model output is untrusted input:</p>
+
+<ul>
+<li><strong>The relationship name must exist in the vocabulary</strong>, matched exactly. An
+invented name is dropped rather than quietly widening the schema. No model adjudicates whether
+two names mean the same thing — see <a href="predicates.html">The predicate vocabulary</a>.</li>
+<li><strong>The quote must actually appear in the passage.</strong> A claim whose quote cannot be
+found is dropped entirely, not stored with a caveat.</li>
+</ul>
+
+<h2 id="the-verifier">The verifier</h2>
+
+<p>The check itself is unglamorous, which is the point. The model returns a quote; the code
+searches the passage text for it. An exact match is preferred. Failing that, the quote is matched
+allowing any run of whitespace where the quote has a space, because a document converter's line
+joins legitimately differ from how a model echoes a passage — a sentence broken across two lines
+in the PDF comes back to the model as one line, and refusing that would reject correct claims for
+a typesetting reason.</p>
+
+<p>Anything beyond whitespace differences is paraphrase, and the claim is dropped. A quote a
+reader cannot find in the document is not provenance. The application says the same thing to
+users this way:</p>
+
+<blockquote>The words from the document, copied exactly. Not a summary: a paraphrase could not be
+searched for in the original, so a claim whose quote cannot be found on the stated page is refused
+rather than recorded.</blockquote>
+
+<p>When the check passes, both halves of what happened are recorded in the fact's
+<code>method</code> field:</p>
+
+<pre><code>llm:global.anthropic.claude-sonnet-5+verify:quote@v1</code></pre>
+
+<p>A model proposed it; the quote check confirmed it. The verifier carries its own version number,
+separate from the model's name, so that if quote matching ever changes the previous generation is
+superseded rather than mixed in with the new one.</p>
+
+<h2 id="what-det-means">Why EXTRACTED_DET means "a check confirmed it"</h2>
+
+<p>The class name <span class="badge det">EXTRACTED_DET</span> reads as though it means "extracted
+deterministically", and in an earlier version of this system it did: a regular expression found a
+citation and the citation went into the graph. That extractor no longer exists. The class was
+<em>redefined rather than retired</em>, and the redefinition is the most important idea on this
+page.</p>
+
+<div class="note reversal">
+<div class="note-title">The reversal</div>
+<p><span class="badge det">EXTRACTED_DET</span> no longer means "a regex found it". It means
+<strong>a deterministic check confirmed it</strong>: a model proposes that some text appears on
+some page, and a string search against that page either agrees or does not. The proposal is
+probabilistic; the confirmation is not, and the confirmation is what the class records.</p>
+<p>That keeps the class meaningful. It now means "a deterministic check confirmed this", rather
+than "a pattern matched something", and it lets the review queue hold only genuine judgement
+calls. No allowlist anywhere.</p>
+</div>
+
+<p>The value of this is that the split between "goes live immediately" and "waits for a person" no
+longer depends on <em>who proposed the claim</em>. It depends on whether the claim is
+<em>checkable</em>. A model is perfectly capable of producing a claim that a machine can verify,
+and when it does, a human signature adds nothing. Insisting on one would be theatre, and expensive
+theatre — see <a href="#why-split">why the split exists at all</a>.</p>
+
+<h2 id="only-mentions">Why only MENTIONS may be verified presence</h2>
+
+<p>A quote match establishes exactly one thing: that these words appear on this page. It
+establishes nothing about what they mean. So only relationships that claim <em>presence and
+nothing more</em> may carry the verified class. In the legal vocabulary that is a single
+relationship, <code>MENTIONS</code>, and the constraint is enforced by the assertion builder
+rather than left to the extractor's good behaviour.</p>
+
+<p>Anything that implies significance stays a model interpretation and waits for review:
+<code>CITES</code> implies reliance, <code>ADVERSE_TO</code> implies a position,
+<code>SUPERSEDES</code> implies a legal effect. None of those is established by finding words on a
+page.</p>
+
+<p>This constraint exists because of a specific, real bug in the earlier design.</p>
+
+<div class="note example">
+<div class="note-title">The Brown v. Board example</div>
+<p>The old citation parser auto-asserted <code>CITES</code> whenever it matched the shape of a
+case citation. So the sentence</p>
+<blockquote>The court declined to follow <em>Brown</em>.</blockquote>
+<p>was recorded in the graph as <strong>reliance on Brown</strong> — an edge asserting that this
+document cites that authority, entering the graph with no review, at high confidence, because a
+pattern had matched.</p>
+<p>The parser could not read negation. It could not read hypotheticals ("had the plaintiff relied
+on <em>Brown</em>…"), or a string cite in a passage distinguishing the case, or a reference inside
+a block quote from the opposing brief. It matched shape, not meaning.</p>
+<p>Now: the model reads the sentence and proposes something interpretive — that the document
+<em>distinguishes</em> Brown, say. Nothing can mechanically confirm that reading, so it is
+<span class="badge model">EXTRACTED_MODEL</span>, capped below the trust threshold, and waits for a
+lawyer. Separately, the fact that the words "Brown" appear on that page can be confirmed by
+search, so a <code>MENTIONS</code> edge is verified and goes live. The document becomes findable
+immediately; the claim about <em>reliance</em> does not exist until a person agrees with it.</p>
+</div>
+
+<p>The distinction the example turns on is worth stating flatly: <em>finding a name is not the
+same as recording what the name was doing there.</em> The old design collapsed the two, and the
+consequence was a graph that asserted reliance that never existed — the exact kind of fact this
+system would then confidently defend, with a page citation, to somebody who trusted it.</p>
+
+<h2 id="no-allowlists">Why there are no allowlists</h2>
+
+<p>The deleted extractor had real virtues. It ran in a third of a millisecond, made no network
+call, and produced byte-identical output across a hundred runs. Those are not small things, and
+they did not survive contact with the requirement. Three reasons, and the second is the
+subtle one:</p>
+
+<h3>Its offsets pointed into a buffer nobody can see</h3>
+<p>The character offsets it recorded indexed the document converter's <em>reconstructed text
+buffer</em>, not the PDF. No viewer can seek to them. There was a test proving the offsets were
+internally consistent, and it proved consistency with a buffer no user will ever open. Worse:
+re-parsing a document after a converter version change shifts every offset downstream, silently
+repointing stored assertions at the wrong text. See <a href="provenance.html">Provenance</a>.</p>
+
+<h3>Its allowlists silently missed anything not enumerated</h3>
+<p>It carried a list of roughly forty-five reporter abbreviations and around twenty court name
+patterns. A court that nobody had thought to enumerate simply <em>did not exist in the graph</em>.
+No error, no warning, no gap visible anywhere — the document was processed successfully and the
+court was absent.</p>
+
+<p>And then the failure compounded. A separate guard existed to stop the model from proposing
+relationships the deterministic parser was responsible for, on the sound reasoning that two
+producers competing for the same relationship would create duplicate and conflicting edges. Put
+the two rules together and a novel court could not be extracted by the parser <em>and</em> was
+blocked from being rescued by the model. Two individually defensible rules combining into a dead
+end, with silence as the symptom.</p>
+
+<div class="note warn">
+<div class="note-title">The judgement that resolved it</div>
+<p>Maintaining allowlists is a cost that has to be paid forever, by somebody who knows which
+reporters and courts exist, and the failure mode of not paying it is invisible. A strong model is
+better at exactly the classification the pattern matcher got wrong. So the allowlists went, along
+with the extractor that needed them, and the prompt deliberately contains no list of known courts
+or reporters.</p>
+</div>
+
+<h3>It auto-asserted a relationship implying reliance</h3>
+<p>Covered above. This was the one that made the decision easy.</p>
+
+<h2 id="why-split">Why the split exists at all</h2>
+
+<p>An obvious objection to all of this: if the model is untrusted, why does any of its output go
+live without review? Why not review everything it says?</p>
+
+<p>Because a queue nobody can clear gets rubber-stamped, and a rubber-stamped queue destroys the
+guarantee it exists to provide.</p>
+
+<p>A 300-page bundle produces hundreds of extracted claims. If every one needed a human decision,
+the queue for a single matter would be unclearable, and the predictable human response is to
+approve in bulk without reading. At that point the review state on every fact in the system is a
+lie: it says a person checked this, and no person checked it. The system would still print
+"approved by" on every edge, and the word would mean nothing.</p>
+
+<p>So the split is on <strong>checkability</strong>, not on who proposed the claim. Claims a
+machine can confirm are confirmed by a machine. The queue holds only genuine judgement calls —
+the ones where a human actually has something to contribute — and stays small enough that reading
+it is realistic. <a href="review.html">Reviewing claims</a> follows this through.</p>
+
+<h2 id="defence-in-depth">The confidence ceiling</h2>
+
+<p>One more guard, and it is independent of everything above. A model's self-reported confidence
+is not evidence, so it is capped: an interpretive claim can carry at most
+<strong>0.79</strong>, whatever the model says about itself.</p>
+
+<p>The retrieval trust threshold is <strong>0.80</strong>.</p>
+
+<p>The gap is deliberate and it is load-bearing. An unreviewed model interpretation sits below the
+threshold <em>by construction</em>, so it cannot shape an answer even if the review gate were
+bypassed entirely — by a bug, by a misconfigured route, by a future code path nobody has written
+yet. Two independent mechanisms have to fail before an unapproved interpretation reaches a user.
+The coupling is enforced in code rather than merely documented; see
+<a href="governance.html#cap-floor">the cap/floor invariant</a>.</p>
+
+<p>A verified presence claim is set to <strong>0.95</strong> rather than 1.0, which is a small
+point worth making because it is honest. The search proved the words are there. It did not prove
+that the model normalised those words to the right entity — deciding that "Acme Corp." and the
+"Acme Corporation" already in the graph are the same company is still the model's work, and it
+can be wrong.</p>
+
+<h2 id="what-else-is-dropped">What else gets dropped, and why silently is fine</h2>
+
+<ul>
+<li><strong>A relationship name that is not in the vocabulary.</strong> Logged and discarded.
+Accepting it would let a model widen the schema.</li>
+<li><strong>A quote that is not verbatim.</strong> Logged and discarded, whether the claim was
+presence or interpretation. Storing an interpretation with an unverifiable quote would produce a
+review-queue item a reviewer cannot check.</li>
+<li><strong>A claim whose subject and object are the same entity.</strong> Discarded — a
+self-referential edge is a normalisation artefact, not a fact.</li>
+<li><strong>Any claim that violates an assertion contract invariant.</strong> Logged and
+discarded, which is how the presence-predicate constraint is actually enforced: the extractor
+does not have to remember it, because the builder refuses.</li>
+</ul>
+
+<p>A failure anywhere in a document aborts the whole extraction pass rather than staging a partial
+result. A document half-extracted must not look fully extracted, and the original bytes are still
+held, so re-running costs one re-extraction and nothing else.</p>
+
+<h2 id="searchable-before-reviewed">Text is searchable before any of this is reviewed</h2>
+
+<p>Passages are indexed for search <em>before</em> the review gate, deliberately. Verbatim text is
+a quote, not a claim: putting the words of a document into a search index does not assert anything
+about what they mean. Lawyers expect to be able to search a document the moment it lands, and
+withholding that for hours while a queue is worked would make the product unusable.</p>
+
+<p>The review gate protects the <strong>graph</strong> — the structured claims that shape answers
+— not the search index. A stricter posture is defensible and was considered; it was rejected as
+unusable rather than overlooked.</p>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

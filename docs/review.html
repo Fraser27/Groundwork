@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reviewing claims — LexGraph documentation</title>
+<meta name="description" content="The review queue, why it has to stay small, and what approving a claim actually means.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">Using it</p>
+<h1>Reviewing claims</h1>
+<p class="lede">The review queue is the most important screen in the product, and its most important
+property is that it is short. A queue nobody can clear gets rubber-stamped, and a rubber-stamped queue
+destroys the guarantee it exists to provide.</p>
+
+<p class="source-ref">src/documents/review.py · src/documents/retract.py</p>
+
+<h2 id="what-is-in-it">What is in the queue</h2>
+
+<p>Only claims where a human has something to contribute. In practice that means claims whose class is
+<span class="badge model">EXTRACTED_MODEL</span>: things a model read <em>into</em> a document rather
+than merely found in it.</p>
+
+<p>Not in the queue: facts a system of record declared, and quotes a search confirmed are on the page.
+Neither involves an unverified judgement, so there is nothing for a signature to add. Asking for one
+would produce a record saying a person checked something they did not meaningfully check.</p>
+
+<p>The distinction is drawn on <em>checkability</em>, not on who proposed a claim — which is why a
+model's output can appear on both sides of it. See <a href="extraction.html">How extraction
+works</a>.</p>
+
+<h2 id="why-small">Why it must stay small</h2>
+
+<p>This is the argument that shaped the extraction design, and it is worth following because the naive
+alternative sounds stricter and is in fact weaker.</p>
+
+<p>Suppose every model output required review. A 300-page bundle produces hundreds of extracted claims.
+A single matter's ingest would produce a queue of that size, and several matters would produce a queue
+nobody could work through in a week.</p>
+
+<p>What happens then is predictable and human: somebody selects all and approves. Not out of
+negligence — out of the reasonable judgement that the queue is an obstacle rather than a control,
+because a control you cannot exercise is an obstacle.</p>
+
+<p>And at that moment every review record in the system becomes false. Each fact says a person approved
+it and names them. No person read it. The system will now print "approved by" alongside facts nobody
+looked at, and it will do so with complete confidence, to somebody relying on it.</p>
+
+<div class="note warn">
+<div class="note-title">The load-bearing claim</div>
+<p>A review queue's value is not proportional to how much it contains. It is proportional to how much
+of it gets read. A queue holding ten genuine judgement calls, all read, is worth immeasurably more than
+a queue holding four hundred claims, bulk-approved — because the second one produces a false audit
+trail, and a false audit trail is worse than no audit trail.</p>
+</div>
+
+<p>So the queue holds judgement calls and nothing else. Everything mechanically checkable is checked
+mechanically, and the human is spent where a human is actually required.</p>
+
+<h2 id="what-a-reviewer-sees">What a reviewer sees</h2>
+
+<p>Each row carries what is needed to decide, and no more: the claim itself as subject, relationship and
+object; how it was reached and by which specific versioned producer; its confidence; the document and
+page; the quoted sentence; the matter; and when it was recorded.</p>
+
+<p>Two ordering choices are worth explaining.</p>
+
+<p><strong>Sorted by confidence ascending.</strong> The claims the model was least sure of come first,
+because that is where a reviewer's attention is worth most. Sorting the other way would spend the
+scarcest resource in the system on the easiest decisions.</p>
+
+<p><strong>Retracted claims are excluded.</strong> A retraction cascade can withdraw a claim that was
+still sitting in the queue — the premise it rested on was retracted while it waited. Asking somebody to
+adjudicate something already withdrawn wastes their time, and worse, approving it would revive a
+withdrawn fact. Both the listing and the approve path filter on whether a claim is still current.</p>
+
+<div class="note">
+<div class="note-title">A bug the tests caught</div>
+<p>Earlier, retracted assertions stayed in the queue and could be approved. The sequence: a cascade
+retracts a still-pending claim, a reviewer works through the queue, and approving it brings a withdrawn
+fact back into the live graph — with a fresh approval record attached, making it look more trustworthy
+than the facts around it. Both paths now check that a claim is current before acting.</p>
+</div>
+
+<h2 id="what-approving-means">What approving actually means</h2>
+
+<p>Approval is a <strong>named human act</strong>. The reviewer's identity is recorded, mandatory, along
+with the time and an optional note. There is deliberately no bulk-approve-everything operation in the
+system: a loop over the queue is one line of caller code, and at least it is a line somebody wrote on
+purpose.</p>
+
+<p>Several transitions are refused, and each refusal is a design statement:</p>
+
+<table>
+<thead><tr><th>Attempt</th><th>Result</th><th>Why</th></tr></thead>
+<tbody>
+<tr>
+  <td>Approve something already approved</td>
+  <td>Accepted, unchanged</td>
+  <td>Idempotent. A double-click is not an error.</td>
+</tr>
+<tr>
+  <td>Approve something rejected</td>
+  <td>Refused</td>
+  <td>Re-extract rather than reviving a rejected claim, so the audit trail stays honest about what
+  happened.</td>
+</tr>
+<tr>
+  <td>Approve something auto-asserted</td>
+  <td>Refused</td>
+  <td>It needs no approval, and approving it would imply a human checked something they did not.</td>
+</tr>
+<tr>
+  <td>Approve something retracted</td>
+  <td>Refused</td>
+  <td>Its basis was withdrawn. Approving would revive a withdrawn fact.</td>
+</tr>
+<tr>
+  <td>Reject something already live</td>
+  <td>Refused</td>
+  <td>Use retraction instead, so anything inferred from it is invalidated too.</td>
+</tr>
+</tbody>
+</table>
+
+<p>The third row is the most unusual and the most characteristic. A system that let you approve
+auto-asserted facts would let a well-meaning administrator work through the whole graph adding
+signatures, and the signatures would mean nothing. Refusing the operation keeps the word "approved"
+meaning one specific thing.</p>
+
+<h2 id="rejecting">Rejecting, and why the reason is mandatory</h2>
+
+<p>A rejection requires a reason. It is not bookkeeping: <strong>the reason is the training
+signal</strong>. It is the only place in the system where a human records why a model was wrong about a
+document, and that record is what makes it possible to improve extraction rather than merely filter
+it.</p>
+
+<p>Rejected claims are never deleted. A rejected extraction is evidence <em>about the extractor</em> —
+that a particular version of a particular model, on a particular kind of passage, produced a claim a
+lawyer disagreed with. Deleting it discards the only data anybody has about how well extraction is
+working.</p>
+
+<h2 id="staged-vs-live">Staged and live are not the same as reviewed</h2>
+
+<p>Two questions are easy to conflate, and the difference matters when something goes wrong:</p>
+
+<ol>
+<li><strong>Review state</strong> — has a person signed this off? Derived from how the fact was reached,
+and no code path can opt out.</li>
+<li><strong>Staged or live</strong> — is this fact in the part of the graph queries read? A confirmed
+quote is signed off the moment it is created, but it still has to be written.</li>
+</ol>
+
+<p>Staging is a transaction boundary. A whole document's claims land together or not at all, so a
+document that failed halfway through extraction contributes nothing rather than contributing a
+misleading subset. A half-ingested filing must never look like a complete one, because a lawyer reading
+a complete-looking filing draws conclusions from what is absent.</p>
+
+<p>Promotion moves signed-off staged claims to live. Claims still awaiting review stay staged — that is
+the gate working, not a partial failure.</p>
+
+<h2 id="retraction">Retraction, and why it cascades</h2>
+
+<p>Withdrawing a fact is not deletion. It marks the fact superseded from a moment in time, and it
+transitively withdraws every conclusion that rested on it.</p>
+
+<blockquote>Withdrawing a fact. Anything inferred from it is withdrawn at the same time, so no
+conclusion outlives the reason it was drawn.</blockquote>
+
+<p>The failure this prevents is silent, which is why it is an enforced invariant rather than a
+convention. Retract the extraction that said counsel represents a party, leave the conflict flag
+standing, and the graph now asserts a conflict whose stated basis has been withdrawn. Every "why do you
+believe this?" answer for that flag cites a retracted premise — which is exactly the question the
+system exists to answer well, answered badly, on the highest-stakes fact in the graph.</p>
+
+<p>Because nothing is deleted, a reading of the graph as of a date before the retraction still shows
+the fact <em>and</em> still shows the conflict flag it supported. That is not a quirk; it is the
+requirement. "What did the file show when we advised?" has to stay answerable after a correction, and
+that is what transaction time is for.</p>
+
+<p>An audit record of one retraction keeps the root separate from the cascade, because they are
+different events to a reader: one person decided one thing, and a number of conclusions fell as a
+consequence. Collapsing them would misreport a single decision as many decisions.</p>
+
+<h2 id="turning-off-auto-assert">Reviewing everything anyway</h2>
+
+<p>A firm that wants to review even the mechanically-confirmed claims can. A governance setting sends
+those to the queue as well, and the interface warns what will happen:</p>
+
+<blockquote>Pattern-matched facts now require review. The queue will grow considerably.</blockquote>
+
+<p>The reasonable use is onboarding — a firm building confidence in the extractors, for a period, with
+the intention of turning it off. Left on permanently it reintroduces exactly the queue-size problem the
+design exists to avoid, and the outcome is bulk approval.</p>
+
+<div class="note gap">
+<div class="note-title">Not built yet</div>
+<p>That setting is stored, validated, and warned about when changed, but nothing reads it at extraction
+time. Turning it on currently changes nothing about what enters the queue. Review state is still
+derived purely from the epistemic class.</p>
+<p>The same is true of the setting that would force review for governing relationships regardless of
+class: it is defined and documented, and no code consults it. Since the extractor already refuses to
+mark anything but a presence relationship as confirmed, every governing relationship from a document
+already goes to review by construction — so the setting is currently redundant rather than broken. It
+would matter if a system-of-record importer ever declared governing relationships directly.</p>
+</div>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

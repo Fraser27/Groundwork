@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview — LexGraph documentation</title>
+<meta name="description" content="LexGraph is a governed semantic layer over structured and unstructured data where every fact carries its own provenance.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">Overview</p>
+<h1>Why does the system believe this?</h1>
+<p class="lede">LexGraph is a governed semantic layer over both database tables and documents. Its
+single organising commitment is that every fact it holds carries a record of how it came to be
+believed — so that question always has a real answer, not a plausible one.</p>
+
+<h2 id="what-it-is">What it is</h2>
+
+<p>LexGraph sits between a firm's data and the people asking it questions. Underneath are two
+kinds of source: <strong>structured</strong> data (database tables reached through AWS Glue and
+Athena) and <strong>unstructured</strong> data (documents — filings, contracts, opinions,
+correspondence). On top is a knowledge graph of entities and the relationships between them,
+plus a set of approved metric definitions.</p>
+
+<p>What makes it different from a search box or a chatbot over the same data is that nothing
+enters the graph anonymously. Each relationship — each edge — is an
+<strong>assertion</strong>: a claim recorded alongside how it was arrived at, what it rests on,
+how confident the system is, when it was learned, who has signed it off, and which firm it
+belongs to. There is exactly one function in the codebase that can create one, and it refuses
+to create an incomplete one.</p>
+
+<p>The consequence is that a user can always ask a follow-up question that most systems cannot
+answer: <em>where did that come from?</em> For a fact read from a document, the answer is a
+file, a page, and the sentence itself. For a fact a rule worked out, the answer is a proof tree
+that unwinds to the documents and records at its base.</p>
+
+<h2 id="who-it-is-for">Who it is for</h2>
+
+<p>LexGraph is built as a whitelabel platform for legal AI products. Three audiences use it, and
+the documentation tries to serve all three:</p>
+
+<div class="cards">
+  <div class="card">
+    <h3>Lawyers and analysts</h3>
+    <p>Ask questions, read the answer, and check the citation. The pages worth reading are
+    <a href="asking-questions.html">Asking questions</a>, <a href="provenance.html">Provenance</a>
+    and the <a href="glossary.html">Glossary</a>.</p>
+  </div>
+  <div class="card">
+    <h3>Administrators and risk</h3>
+    <p>Set the trust thresholds, run the review queue, operate the ethical walls. See
+    <a href="governance.html">Governance settings</a>, <a href="review.html">Reviewing claims</a>
+    and <a href="tenancy.html">Tenancy and ethical walls</a>.</p>
+  </div>
+  <div class="card">
+    <h3>Technical evaluators</h3>
+    <p>Judge whether the guarantees are real. Start with
+    <a href="assertion-contract.html">The assertion contract</a>, then
+    <a href="extraction.html">How extraction works</a> and
+    <a href="architecture.html">Architecture</a>.</p>
+  </div>
+</div>
+
+<p>The platform is domain-agnostic by construction. It reads a vocabulary pack that names the
+entities, relationships and rules of a domain; the legal pack is simply the default. A second
+pack for healthcare ships alongside it, not because healthcare is a target market but because a
+single-pack abstraction rots quietly and a second one makes the rot visible in a test rather
+than in a customer's deployment.</p>
+
+<h2 id="the-value-proposition">The value proposition, in one paragraph</h2>
+
+<div class="note">
+<div class="note-title">In one paragraph</div>
+<p>Any competent system can find a passage in a document and put a sentence in front of a
+lawyer. What a regulated buyer needs, and what nothing on the market reliably provides, is the
+ability to say <em>which</em> of its beliefs are mechanically checkable, which rest on a model's
+judgement, which were derived by a rule from other beliefs, and which are outright guesses —
+and to keep those categories apart at the moment a question is answered rather than in a
+report afterwards. LexGraph makes that distinction the primary key of its data model. A fact
+that a string search confirmed is on page 7 is a different kind of object from a model's view
+that one holding undercuts another, and the system will not let them be mistaken for each other.
+Everything else — the review queue, the ethical walls, the trust thresholds, the four-tier read
+path — follows from that one decision.</p>
+</div>
+
+<h2 id="the-five-classes">The five classes, at a glance</h2>
+
+<p>"Epistemic" means "to do with knowledge". That is the last time this documentation uses the
+word without a plainer one alongside. The <strong>epistemic class</strong> of a fact is
+<em>how the system came to believe it</em>, and it is one of five:</p>
+
+<table class="epi-table">
+<thead><tr><th>Class</th><th>How it was reached</th><th>Does a person sign it off?</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="badge declared">DECLARED</span></td>
+  <td>A system of record said so — a case management export, a scan of the data catalogue.</td>
+  <td>No. It is true by definition of the source.</td>
+</tr>
+<tr>
+  <td><span class="badge det">EXTRACTED_DET</span></td>
+  <td>A quoted sentence was claimed to be on a named page, and a search of that page confirmed
+  the words are there.</td>
+  <td>No. The check is repeatable, so there is nothing for a person to add.</td>
+</tr>
+<tr>
+  <td><span class="badge model">EXTRACTED_MODEL</span></td>
+  <td>Something read <em>into</em> the document rather than merely found in it.</td>
+  <td>Yes. This is the only class the review queue exists for.</td>
+</tr>
+<tr>
+  <td><span class="badge inferred">INFERRED</span></td>
+  <td>A rule derived it from other facts, which it names as its premises.</td>
+  <td>Yes, and its proof tree can be opened.</td>
+</tr>
+<tr>
+  <td><span class="badge predicted">PREDICTED</span></td>
+  <td>A statistical guess from the shape of the graph. No document says it.</td>
+  <td>Never used in an answer at all unless explicitly asked for.</td>
+</tr>
+</tbody>
+</table>
+
+<p>Without this axis, a citation parsed out of a filing and a language model's opinion are both
+just edges in a graph, indistinguishable at the moment somebody asks a question.
+<a href="assertion-contract.html">The assertion contract</a> covers all five in full, along with
+the five invariants the system enforces and why review state is derived rather than chosen.</p>
+
+<h2 id="how-a-question-is-answered">How a question is answered</h2>
+
+<p>Questions are resolved by trying four routes in order, most precise first, and the route that
+succeeded is reported back as part of the answer. That is not an implementation detail leaking
+out: "this came from an approved metric" and "a model wrote this SQL" are different claims about
+how much the number can be trusted, and the person reading it is entitled to know which one they
+have.</p>
+
+<div class="tier t1">
+  <div class="n">1</div>
+  <div>
+    <h3>Governed metric</h3>
+    <p>A metric definition matched the question and compiled to SQL. No model was involved in
+    producing the query.</p>
+    <p class="trust">The same question returns the same SQL every time.</p>
+  </div>
+</div>
+<div class="tier t2">
+  <div class="n">2</div>
+  <div>
+    <h3>Graph traversal</h3>
+    <p>The answer came from walking assertions that clear the trust threshold and that this user
+    is allowed to see.</p>
+    <p class="trust">Every fact in the answer is a cited assertion you can open.</p>
+  </div>
+</div>
+<div class="tier t3">
+  <div class="n">3</div>
+  <div>
+    <h3>Hybrid</h3>
+    <p>Relevant passages were retrieved by similarity, then expanded along verified
+    relationships out from them.</p>
+    <p class="trust">Sources are cited; the expansion only follows trusted edges.</p>
+  </div>
+</div>
+<div class="tier t4">
+  <div class="n">4</div>
+  <div>
+    <h3>Generated SQL</h3>
+    <p>No approved metric matched, so a model wrote SQL against the real schema. It is checked
+    by a query firewall before running.</p>
+    <p class="trust">Not a governed answer. An administrator can switch this tier off entirely.</p>
+  </div>
+</div>
+
+<p><a href="asking-questions.html">Asking questions</a> explains what each tier means for trust,
+and the kill switch that turns the fourth one off.</p>
+
+<h2 id="what-is-not-built">What is not built yet</h2>
+
+<p>This documentation describes a system in active development, and it is more useful to be
+honest about the gaps than to describe an intention as a feature. The significant ones:</p>
+
+<div class="note gap">
+<div class="note-title">Honest gaps</div>
+<ul>
+<li><strong>There is no reasoning engine.</strong> The <span class="badge inferred">INFERRED</span>
+class, the premise structure, the proof-tree machinery and the confidence ceiling on inferences
+are all built and tested, and two rules are written out in the legal vocabulary pack. Nothing
+fires them. Until something does, no inferred facts exist in practice.</li>
+<li><strong>Graph writes are not persisted.</strong> Assertions currently live in an in-process
+store, so they do not survive a restart, and the read path reads from that store rather than
+from the graph database. The database schema, the indexes and the scoped-read mechanism all
+exist; the writer does not. This is the single largest gap.</li>
+<li><strong>Tier 4 has no SQL generator wired up</strong>, so in practice it always declines. The
+query firewall it would be checked against does exist and is tested.</li>
+<li><strong>Tier 1 returns SQL but not a result</strong>, because no query executor is connected.
+Asking for the SQL without running it is the honest local mode.</li>
+<li><strong>Vector search is in-process.</strong> The managed search service is provisioned in the
+infrastructure definitions, but no adapter has been written against it, so embeddings are held in
+memory and lost on restart.</li>
+<li><strong>Nothing has been deployed.</strong> The six infrastructure stacks synthesise cleanly
+and have never been applied to an account.</li>
+</ul>
+</div>
+
+<p>Where a page describes something in this list, it says so at that point rather than leaving
+the reader to check here.</p>
+
+<h2 id="a-note-on-these-docs">A note on these documents</h2>
+
+<p>This site explains <em>why</em> the system is shaped the way it is, not only what it does.
+Several of the most instructive entries record a decision that was reversed: the character
+offsets that were demoted, the pattern-matching extractor that was deleted outright, the
+structural tenant isolation that turned out not to exist in the database being used. In each
+case the reversal is more useful than the conclusion, because the reasoning that led into the
+mistake is easy to repeat.</p>
+
+<p>The documentation is written to agree with the code, and where the two disagreed while this
+was being written, the code won and the difference is noted. It reuses the application's own
+plain-language wording wherever the application has any, so the tooltip a user sees in the
+product and the explanation here do not drift apart.</p>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

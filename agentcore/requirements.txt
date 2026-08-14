@@ -1,0 +1,10 @@
+# Dependencies for deploy_agent.py only — the *deployer*, not the server.
+#
+# The MCP server itself ships in the API image and installs from pyproject.toml, so
+# nothing here reaches the runtime. Keep it that way: a second dependency list that the
+# container also used would be a second chance for the tools and the API to drift.
+#
+# No bedrock-agentcore-starter-toolkit. rosetta-sdl uses it to build and push an image;
+# here `cdk deploy LexGraphApp` already built and pushed the one the runtime runs, so the
+# toolkit would only add a second build of the same Dockerfile.
+boto3>=1.35.0

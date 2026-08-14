@@ -1,0 +1,110 @@
+/** Small presentational pieces used on more than one page. */
+
+import type { ReactNode } from 'react'
+import type { IngestState, ResolutionTier } from '../api'
+import { INGEST_STATES } from '../api'
+import { INGEST_STEP_HELP, INGEST_STEP_LABEL, TIERS, failureStep, ingestPhase } from '../epistemic'
+import { isMockActive } from '../mocks'
+
+export function Spinner() {
+  return (
+    <div className="loading">
+      <div className="spinner" />
+    </div>
+  )
+}
+
+export function Toast({ toast }: { toast: { msg: string; type: string } | null }) {
+  if (!toast) return null
+  return (
+    <div className={`toast toast-${toast.type}`} role="status">
+      {toast.msg}
+    </div>
+  )
+}
+
+/** Marks a page as showing fixtures rather than live data. Goes with src/mocks.ts. */
+export function MockFlag() {
+  if (!isMockActive()) return null
+  return (
+    <span
+      className="mock-flag"
+      title="The API did not respond, so this page is showing sample data. Nothing here reflects real records."
+    >
+      Sample data
+    </span>
+  )
+}
+
+export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
+  return (
+    <div className="empty-state">
+      <strong>{title}</strong>
+      {children}
+    </div>
+  )
+}
+
+export function IngestPill({ state }: { state: IngestState }) {
+  const phase = ingestPhase(state)
+  const failedAt = failureStep(state)
+  const label = failedAt
+    ? `${INGEST_STEP_LABEL[failedAt]} failed`
+    : INGEST_STEP_LABEL[state] || state
+  const help = failedAt
+    ? `The document failed while ${INGEST_STEP_LABEL[failedAt].toLowerCase()}. Nothing from it has entered the graph.`
+    : INGEST_STEP_HELP[state]
+
+  return (
+    <span className={`ingest-pill state-${phase}`} title={help}>
+      {phase === 'running' && <span className="spin-dot" aria-hidden="true" />}
+      {label}
+    </span>
+  )
+}
+
+/** The ingest state machine drawn as a track, with the current step marked. */
+export function Pipeline({ state }: { state: IngestState }) {
+  const failedAt = failureStep(state)
+  const currentIdx = failedAt
+    ? INGEST_STATES.indexOf(failedAt as (typeof INGEST_STATES)[number])
+    : INGEST_STATES.indexOf(state as (typeof INGEST_STATES)[number])
+
+  return (
+    <div className="pipeline">
+      {INGEST_STATES.map((s, i) => {
+        const done = currentIdx > i
+        const current = currentIdx === i && !failedAt
+        const failed = currentIdx === i && !!failedAt
+        const cls = failed ? 'failed' : current ? 'current' : done ? 'done' : ''
+        return (
+          <div key={s} style={{ display: 'flex', alignItems: 'center', flex: i === 0 ? '0 0 auto' : 1 }}>
+            {i > 0 && <div className={`pipeline-connector${done || current ? ' done' : ''}`} />}
+            <div className={`pipeline-step ${cls}`} title={INGEST_STEP_HELP[s]}>
+              <div className="pipeline-node">
+                {failed ? '✕' : done ? '✓' : i + 1}
+              </div>
+              <div className="pipeline-label">{INGEST_STEP_LABEL[s]}</div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+export function TierBadge({ tier }: { tier: ResolutionTier }) {
+  const meta = TIERS[tier]
+  return (
+    <span
+      className="tag"
+      style={{
+        color: meta.colour,
+        background: `color-mix(in srgb, ${meta.colour} 12%, transparent)`,
+      }}
+      title={meta.detail}
+    >
+      Tier {tier} &middot; {meta.label}
+    </span>
+  )
+}

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Governance settings — LexGraph documentation</title>
+<meta name="description" content="Every governance knob, and the cap/floor invariant with its rationale.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">Using it</p>
+<h1>Governance settings</h1>
+<p class="lede">Trust thresholds, kill switches, model choices and retrieval limits, set per firm and
+changeable without a redeployment. One relationship between two of them is enforced in code rather than
+merely documented, and it is the most important thing on this page.</p>
+
+<p class="source-ref">src/governance.py · src/api/routes_governance.py</p>
+
+<h2 id="why-not-constants">Why these are settings and not constants</h2>
+
+<p>Every value here could have been a constant in the source. Two reasons it is not.</p>
+
+<p>A firm onboarding a new practice area will want a different confidence threshold from the one that
+suits its established work — more cautious in an unfamiliar area, and the caution has to be adjustable by
+the person accountable for it rather than by a developer.</p>
+
+<p>And a model deprecation should be a settings change, not a release. When a model is retired, the
+alternative to a setting is an emergency deployment on somebody else's timetable.</p>
+
+<p>Defaults come from the environment; overrides are stored per firm and survive a restart.</p>
+
+<h2 id="cap-floor">The cap/floor invariant</h2>
+
+<p>Two settings and the relationship between them:</p>
+
+<table>
+<thead><tr><th>Setting</th><th>Default</th><th>What it does</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>min_confidence_floor</code></td>
+  <td><strong>0.80</strong></td>
+  <td>Facts scoring below this do not inform answers. They stay visible in the review queue and the
+  audit trail — this gates retrieval, not storage.</td>
+</tr>
+<tr>
+  <td><code>model_confidence_cap</code></td>
+  <td><strong>0.79</strong></td>
+  <td>The highest confidence any model-extracted interpretation may carry, regardless of what the model
+  says about its own certainty.</td>
+</tr>
+</tbody>
+</table>
+
+<p>The cap must stay <strong>strictly below</strong> the floor. That gap of 0.01 is the entire mechanism,
+and what it buys is this: <strong>an unreviewed model interpretation sits below the retrieval threshold
+by construction, so it cannot shape an answer even if the review gate were bypassed entirely.</strong></p>
+
+<p>Bypassed by what? By a bug. By a route written later that forgets to check. By a data import path
+nobody has thought of. The review gate is one mechanism; the confidence gap is a second, independent one,
+and both have to fail before an unapproved interpretation reaches a user.</p>
+
+<div class="note warn">
+<div class="note-title">The trap the invariant catches</div>
+<p>An administrator decides the system is too cautious and lowers the floor from 0.80 to 0.70, to get
+answers to more questions.</p>
+<p>The cap is still 0.79. The floor is now 0.70. Every unreviewed model interpretation in the graph —
+capped at 0.79, therefore above 0.70 — is suddenly <strong>eligible to shape answers</strong>. Nothing
+was approved. Nobody reviewed anything. One number moved, the review queue's entire purpose was
+silently voided, and no error occurred anywhere.</p>
+<p>The system refuses the change. It returns an error explaining exactly why, in words meant to be shown
+to the administrator directly:</p>
+<blockquote><code>model_confidence_cap (0.79) must stay below min_confidence_floor (0.7). The gap is what
+keeps an unreviewed model assertion out of answers even if the review gate is bypassed; closing it
+removes that guarantee.</code></blockquote>
+<p>To genuinely lower the floor, the cap has to be lowered first, deliberately, as a separate act. The
+administrator has to state that they intend the consequence.</p>
+</div>
+
+<p>This is why the coupling is enforced in code rather than written in a runbook. A documented invariant
+is a hope. And critically, a rejected change does not half-apply: validation runs on a candidate copy of
+the settings, and a refusal leaves the live settings untouched rather than in a state where the floor
+moved and the cap did not.</p>
+
+<p>The application's own explanation of the cap, shown next to the control:</p>
+
+<blockquote>The highest confidence an AI-extracted fact may claim. Kept just below the confidence floor on
+purpose, so an AI claim can never influence an answer until a person has approved it. The system will not
+let you raise this to or above the floor.</blockquote>
+
+<h2 id="trust-thresholds">Trust thresholds</h2>
+
+<h3><code>min_confidence_floor</code> — default 0.80</h3>
+<p>How certain the system must be before a fact is used in an answer. Facts below it still appear in the
+review queue; they just do not influence results. Raising it makes answers more conservative and more
+likely to leave a question unanswered — which is often the correct outcome, and is always a better one
+than a confident wrong answer.</p>
+
+<h3><code>model_confidence_cap</code> — default 0.79</h3>
+<p>Covered above. Note that a model's stated certainty is not treated as evidence at any point: the cap is
+applied to whatever it reports, and the extractor does not read the model's confidence for presence
+claims at all.</p>
+
+<h3><code>auto_assert_deterministic</code> — default on</h3>
+<p>Whether mechanically-confirmed facts go live without review. Switching it off sends them to the queue
+too — slower, but a reasonable posture during onboarding while a firm builds trust in extraction.</p>
+
+<div class="note gap">
+<div class="note-title">Not enforced yet</div>
+<p>Stored, validated, and warned about when changed. Nothing reads it at extraction time, so turning it
+off does not currently change what enters the queue.</p>
+</div>
+
+<h3><code>require_review_for_governing</code> — default on</h3>
+<p>Force review for the relationships that carry legal consequence — who represents whom, who is adverse
+to whom, privilege, deadlines — regardless of how the fact was reached. Belt and braces for the cases
+where a wrong answer is an exposure rather than an embarrassment.</p>
+
+<div class="note gap">
+<div class="note-title">Not enforced yet, and currently redundant</div>
+<p>No code consults this setting. In practice it is redundant today: the extractor refuses to mark
+anything but a presence relationship as mechanically confirmed, so every governing relationship read from
+a document already goes to review by construction. It would begin to matter if a system-of-record
+importer ever declared governing relationships directly, since those would otherwise auto-assert.</p>
+</div>
+
+<h2 id="kill-switches">Kill switches</h2>
+
+<h3><code>block_ungoverned_queries</code> — default off</h3>
+<p>Refuse tier-4 model-generated SQL entirely. Governed metrics and graph traversal keep working. Refusals
+are recorded — the firm, the user, the question, the reason, the time — so an administrator can see what
+people are trying to ask.</p>
+
+<p>Treat that log as a backlog rather than an incident report. A question people keep asking is a governed
+metric waiting to be written. See <a href="asking-questions.html#the-kill-switch">the kill switch</a>.</p>
+
+<p><strong>Fully wired.</strong> A firm that turns this on gets the refusal and the audit entry today,
+with a message written to be shown to a lawyer rather than a developer.</p>
+
+<h3><code>block_model_extraction</code> — default off</h3>
+<p>Stop calling the model extractor. Documents still upload, parse, split and index for search, so their
+text remains findable; no facts are proposed from them.</p>
+
+<p><strong>Wired</strong> — ingest checks it and reports why extraction did not run.</p>
+
+<div class="note warn">
+<div class="note-title">Stale help text</div>
+<p>The wording next to this control still says "Pattern-based extraction continues, so citations and
+docket numbers are still picked up", and the same claim appears in the setting's own code comment. That
+is left over from before the pattern-matching extractor was deleted. There is no pattern-based extraction
+any more, so switching this on stops <em>all</em> fact extraction from documents. The behaviour is
+correct; the explanation is out of date.</p>
+</div>
+
+<h2 id="models">Models</h2>
+
+<p>Four model choices, each changeable without a release.</p>
+
+<table>
+<thead><tr><th>Setting</th><th>Used for</th></tr></thead>
+<tbody>
+<tr><td><code>query_model</code></td><td>Interpreting questions and generating SQL.</td></tr>
+<tr><td><code>extraction_model</code></td><td>Reading documents and proposing facts.</td></tr>
+<tr><td><code>enrichment_model</code></td><td>Writing descriptions for database tables and columns. A
+smaller, cheaper model is usually enough.</td></tr>
+<tr><td><code>embedding_model</code></td><td>Converting document text into vectors for similarity
+search.</td></tr>
+</tbody>
+</table>
+
+<p>Changing the first three is routine, and safe because every fact records the specific versioned
+producer that created it. Old facts keep citing the model that made them; new ones cite the new model. The
+generations do not blur.</p>
+
+<div class="note warn">
+<div class="note-title">The embedding model is a data migration, not a setting</div>
+<p>Changing it is not like changing the others. Existing vectors were produced by the previous model, and
+a similarity search across two generations of embeddings <strong>is not an error — it is silently
+meaningless</strong>. Nothing fails. Search quality degrades and no signal says so.</p>
+<p>The interface warns and requires an explicit re-processing of every document. The warning is in
+capitals in the product's own help text, which is unusual for this codebase and deliberate.</p>
+<p>The vector width is part of the same problem: a similarity search across two different
+dimensionalities is not an error either, for the same reason and with the same lack of symptom.</p>
+</div>
+
+<h2 id="ontology">Vocabulary</h2>
+
+<h3><code>ontology_domain</code> — default <code>legal</code></h3>
+<p>Which vocabulary of entities, relationships and rules this firm uses. The platform is domain-agnostic;
+the legal pack is simply the default. A healthcare pack ships alongside it.</p>
+
+<h3><code>enforce_closed_vocabulary</code> — default on</h3>
+<p>Reject governing relationships the vocabulary does not define. The product's explanation is the clearest
+statement of the stakes anywhere in the interface:</p>
+
+<blockquote>Reject relationships the ontology does not define. This is what stops the same idea being
+recorded five different ways — if that happens, a conflict check can return no results and look like a
+clean report. Strongly recommended on.</blockquote>
+
+<p>Switching it off produces a warning to the same effect. See
+<a href="predicates.html#the-failure">the conflict-check failure</a> for the full worked example.</p>
+
+<div class="note gap">
+<div class="note-title">Not enforced yet</div>
+<p>The setting is stored and warned about. The closed-vocabulary check itself is unconditional in the
+assertion builder — validation happens against the vocabulary the pack supplies, and no code path consults
+this flag to decide whether to skip it. In effect the protection is always on, which is the safe direction
+for the discrepancy to run.</p>
+</div>
+
+<h2 id="retrieval">Retrieval</h2>
+
+<h3><code>vector_top_k</code> — default 20</h3>
+<p>How many document passages to retrieve before expanding into the graph. Must be at least 1.</p>
+
+<h3><code>graph_expand_depth</code> — default 2, range 1 to 5</h3>
+<p>How many relationship hops to follow out from a retrieved passage. Two is usually right; more pulls in
+weakly related matters. The range is enforced with a stated reason — deeper traversals fan out badly — and
+the number of paths grows roughly exponentially with depth, so a depth of 5 on a well-connected entity
+retrieves most of the firm.</p>
+
+<p>Both are read by the resolver and genuinely take effect.</p>
+
+<h2 id="how-changes-are-applied">How a change is applied</h2>
+
+<p>A settings update is a partial patch, and the sequence is deliberate:</p>
+
+<ol>
+<li><strong>Unknown field names are rejected outright.</strong> A typo in a setting name silently doing
+nothing is how a firm ends up believing a control is on when it is not.</li>
+<li><strong>The patch is merged onto a candidate copy</strong> and validated there. A rejected change
+cannot leave the live settings half-updated.</li>
+<li><strong>A refusal returns the validation message directly</strong> to the administrator. These messages
+are written to be read by a person accountable for the setting, not by a developer reading a log.</li>
+<li><strong>Warnings are returned alongside a successful change</strong> where the change is safe but
+consequential — an embedding model swap, disabling the closed vocabulary, disabling auto-assertion.</li>
+<li><strong>Who changed it and when are recorded</strong> on the settings themselves.</li>
+</ol>
+
+<p>Governance changes require an administrator. That is checked separately from the tenant check, since a
+firm's ordinary users may read their firm's settings without being able to change them.</p>
+
+<h2 id="jargon-test">A test that keeps the help text readable</h2>
+
+<p>Every setting has plain-language help text written for a lawyer-administrator rather than a data
+engineer — "will not be used in answers" rather than "excluded from the retrieval candidate set".</p>
+
+<p>There is a test asserting that no jargon leaks into it. That is an unusual thing to test, and it is
+there because help text decays: the person who understands a setting best is the person least able to
+notice that their explanation of it has become incomprehensible. A test is the only thing that
+holds the line.</p>
+
+<p>These documents reuse that wording deliberately, so the tooltip in the product and the explanation
+here cannot drift apart.</p>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

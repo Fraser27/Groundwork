@@ -1,0 +1,402 @@
+"""The single document extraction path: one model call per chunk.
+
+There is no regex layer any more, and its absence is the design. Allowlists of court
+names and reporter abbreviations silently missed every court nobody had enumerated, and
+the offsets they returned indexed the reconstructed text buffer rather than the PDF, so
+no viewer could seek to them. Provenance is now file, page and verbatim quote — what a
+lawyer would use by hand.
+
+What replaces it is a split by *checkability*, not by who proposed the claim:
+
+- The model says some text appears in the passage. A string search either confirms it or
+  does not. Confirmed, that is EXTRACTED_DET and auto-asserts — but only ever as
+  MENTIONS, because presence is the whole of what a quote-match establishes. The old
+  parser auto-asserted CITES, so "the court declined to follow Brown" was recorded as
+  reliance on Brown.
+- The model says one holding undercuts another. Nothing can confirm that, so it is
+  EXTRACTED_MODEL, capped below the retrieval floor, and waits for a human.
+
+The split is what keeps the review queue readable: if every model claim needed review, a
+300-page bundle would produce hundreds of pending items and a queue nobody can clear
+gets rubber-stamped.
+
+Two guards throughout, both because model output is untrusted input. Predicates are
+grounded by exact match with no LLM adjudication, so an invented predicate is dropped
+rather than quietly widening the schema. Quotes must be present in the chunk, because a
+citation nobody can search for cannot be checked.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from src.constants import DEFAULT_EXTRACTION_MODEL
+from src.documents.models import Chunk
+from src.graph.assertions import (
+    PRESENCE_PREDICATES,
+    Assertion,
+    AssertionError_,
+    EpistemicClass,
+    ReviewPolicy,
+    build_assertion,
+)
+from src.ontology.loader import Ontology
+
+logger = logging.getLogger(__name__)
+
+#: What an entity claim is emitted as. `build_assertion` refuses any other predicate for
+#: EXTRACTED_DET, so this is the only edge a verified quote can auto-assert.
+MENTIONS = "MENTIONS"
+
+#: Ceiling on interpretive confidence regardless of what the model self-reports. Its
+#: stated certainty is not evidence, and the retrieval floor is 0.80 — so an unreviewed
+#: interpretation sits below the floor by construction and cannot shape an answer.
+MAX_MODEL_CONFIDENCE = 0.79
+
+#: Confidence for a quote-verified presence claim. Not 1.0: the search proved the text
+#: is there, but the entity id it was normalised to is still the model's work.
+VERIFIED_PRESENCE_CONFIDENCE = 0.95
+
+#: Versions the *check*, not the model. If quote matching ever changes, this bumps and
+#: the previous generation is superseded rather than mixed with the new one.
+QUOTE_CHECK = "verify:quote@v1"
+
+SYSTEM_PROMPT = """\
+You read legal documents for a system where every claim must be defensible to a \
+regulator.
+
+Return two kinds of claim about the passage, and keep them separate, because they are \
+checked differently:
+
+1. `entities` — something named in the passage: a party, a court, an authority, a date, \
+a docket number. This is a claim about PRESENCE ONLY. It is verified by searching the \
+passage for your quote, so the quote must be copied exactly.
+
+2. `relationships` — something the passage supports that no search could confirm: that \
+one holding undercuts another, that a clause supersedes an earlier one, that a party is \
+positioned against another. These go to a human reviewer.
+
+Rules:
+- Use ONLY predicates from the allowed list. An unknown predicate is discarded.
+- `quote` MUST be copied verbatim from the passage. A paraphrase is discarded, because a \
+citation nobody can search for cannot be checked.
+- Use the shortest quote that carries the claim.
+- `id` is a lowercase slug prefixed by kind: `party:acme-corporation`, \
+`authority:410-us-113`, `court:united-states-district-court-southern-district-of-new-york`.
+- Do not guess. If the passage does not clearly support a claim, omit it.
+- Return ONLY a JSON object, no prose.
+
+Schema:
+{"entities": [{"id": str, "kind": str, "quote": str}],
+ "relationships": [{"subject_id": str, "predicate": str, "object_id": str, \
+"quote": str, "confidence": float, "reasoning": str}]}"""
+
+
+class BedrockLike(Protocol):
+    def invoke_model(self, **kwargs: Any) -> dict[str, Any]: ...
+
+
+class ModelExtractionFailed(RuntimeError):
+    """The model returned something unusable, or could not be reached."""
+
+
+@dataclass(frozen=True)
+class ProposedClaim:
+    """A model claim before any check.
+
+    Entity and relationship claims collapse into one shape deliberately: what decides
+    how a claim is treated is its grounded predicate, never which list it arrived in.
+    A model cannot promote its own claim to auto-assert by filing it under `entities`.
+    """
+
+    subject_id: str
+    predicate: str
+    object_id: str
+    quote: str
+    confidence: float = 0.5
+    reasoning: str = ""
+
+
+def build_prompt(
+    chunk: Chunk,
+    *,
+    allowed_predicates: Sequence[str],
+    entity_kinds: Sequence[str],
+) -> str:
+    """The user turn: one passage, the closed vocabulary, and nothing else.
+
+    No list of known courts or reporters. That was the allowlist failure — anything not
+    enumerated was absent from the graph with no error anywhere.
+    """
+    return json.dumps(
+        {
+            "page": chunk.page,
+            "passage": chunk.text,
+            "allowed_predicates": list(allowed_predicates),
+            "entity_kinds": list(entity_kinds),
+        },
+        indent=2,
+    )
+
+
+def parse_response(payload: str) -> list[ProposedClaim]:
+    """Pull claims out of the model's reply.
+
+    Tolerates prose around the JSON (models add it despite instructions) but not
+    malformed structure — a half-parsed claim is worse than none.
+    """
+    match = re.search(r"\{.*\}", payload, re.DOTALL)
+    if not match:
+        raise ModelExtractionFailed("no JSON object in model response")
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError as e:
+        raise ModelExtractionFailed(f"model response was not valid JSON: {e}") from e
+
+    claims: list[ProposedClaim] = []
+    for raw in data.get("entities") or []:
+        try:
+            claims.append(
+                ProposedClaim(
+                    # Subject is filled in from the chunk: an entity claim is always
+                    # "this document mentions X". Confidence is not read from the model
+                    # at all — `validate` sets it once the quote check has run.
+                    subject_id="",
+                    predicate=MENTIONS,
+                    object_id=str(raw["id"]),
+                    quote=str(raw.get("quote", "")),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning("discarding malformed entity %s: %s", raw, e)
+
+    for raw in data.get("relationships") or []:
+        try:
+            claims.append(
+                ProposedClaim(
+                    subject_id=str(raw.get("subject_id", "")),
+                    predicate=str(raw["predicate"]),
+                    object_id=str(raw["object_id"]),
+                    quote=str(raw.get("quote", "")),
+                    confidence=float(raw.get("confidence", 0.5)),
+                    reasoning=str(raw.get("reasoning", "")),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning("discarding malformed relationship %s: %s", raw, e)
+    return claims
+
+
+def document_entity_id(chunk: Chunk) -> str:
+    """Graph node id for the chunk's document, matching `DocumentMeta.entity_id`.
+
+    Derived rather than passed in, so the subject of an assertion and the document its
+    locator cites cannot drift apart.
+    """
+    return f"document:{chunk.document_id}"
+
+
+def locate_quote(chunk: Chunk, quote: str) -> tuple[int, int] | None:
+    """Global offsets of the verbatim span, tolerating only whitespace differences.
+
+    Whitespace is normalised because a transcription's line breaks legitimately differ
+    from how a model echoes a passage back. Anything beyond that is paraphrase and the
+    claim is dropped: a quote the reader cannot find in the document is not provenance.
+    """
+    if not quote.strip():
+        return None
+    index = chunk.text.find(quote)
+    if index >= 0:
+        return chunk.char_start + index, chunk.char_start + index + len(quote)
+
+    pattern = r"\s+".join(re.escape(tok) for tok in quote.split())
+    match = re.search(pattern, chunk.text)
+    if match is None:
+        return None
+    return chunk.char_start + match.start(), chunk.char_start + match.end()
+
+
+class ModelExtractor:
+    def __init__(
+        self,
+        ontology: Ontology,
+        *,
+        bedrock: BedrockLike | None = None,
+        bedrock_factory: Callable[[], BedrockLike] | None = None,
+        model_id: str = DEFAULT_EXTRACTION_MODEL,
+        region: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float | None = None,
+        settings: Any | None = None,
+    ) -> None:
+        self.ontology = ontology
+        # A tenant's governance settings, when supplied, replace the module defaults for
+        # the confidence cap and the review policy. Previously these were configurable in
+        # Admin and read by nothing, so a lowered cap had no effect.
+        self.settings = settings
+        self.model_id = model_id
+        self.region = region
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        """Omitted from the request by default. The newest Claude models reject the
+        parameter outright — sending 0.0 for reproducibility's sake failed every
+        extraction with a ValidationException, which is worse than not pinning it."""
+
+        self._bedrock = bedrock
+        self._bedrock_factory = bedrock_factory
+
+    @property
+    def bedrock(self) -> BedrockLike:
+        if self._bedrock is None:
+            factory = self._bedrock_factory
+            if factory is None:
+                import boto3
+
+                factory = lambda: boto3.client(
+                    "bedrock-runtime", region_name=self.region
+                )
+            self._bedrock = factory()
+        return self._bedrock
+
+    @property
+    def method(self) -> str:
+        return f"llm:{self.model_id}"
+
+    @property
+    def verified_method(self) -> str:
+        """Records both halves: the model proposed it, the quote check confirmed it."""
+        return f"{self.method}+{QUOTE_CHECK}"
+
+    def invoke(self, prompt: str) -> str:
+        body: dict[str, Any] = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": self.max_tokens,
+            "system": SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if self.temperature is not None:
+            body["temperature"] = self.temperature
+
+        response = self.bedrock.invoke_model(modelId=self.model_id, body=json.dumps(body))
+        data = json.loads(response["body"].read())
+        return "".join(part.get("text", "") for part in data.get("content", []))
+
+    def extract(self, chunk: Chunk) -> list[Assertion]:
+        """One model call over one chunk, returning validated assertions.
+
+        Per chunk rather than per document because a chunk carries a single page, and
+        the page is half of the citation.
+        """
+        prompt = build_prompt(
+            chunk,
+            allowed_predicates=sorted(
+                self.ontology.governing_predicates | self.ontology.descriptive_predicates
+            ),
+            entity_kinds=sorted(self.ontology.entities),
+        )
+        try:
+            raw = self.invoke(prompt)
+        except Exception as e:
+            raise ModelExtractionFailed(f"bedrock invoke failed: {e}") from e
+        return self.validate(parse_response(raw), chunk=chunk)
+
+    def extract_document(self, chunks: Sequence[Chunk]) -> list[Assertion]:
+        """Extract across a whole document, collapsing duplicate claims.
+
+        A failure anywhere aborts the pass. Staging is all-or-nothing, so a document
+        half-extracted must not look fully extracted — and S3 still holds the bytes, so
+        re-running costs a re-extraction and nothing else.
+        """
+        found: dict[str, Assertion] = {}
+        for chunk in chunks:
+            for assertion in self.extract(chunk):
+                found[assertion.assertion_id] = assertion
+        return list(found.values())
+
+    def _clamp(self, raw: float) -> float:
+        """Apply the tenant's model-confidence cap, or the module default."""
+        if self.settings is not None:
+            return self.settings.effective_model_confidence(raw)
+        return min(max(raw, 0.0), MAX_MODEL_CONFIDENCE)
+
+    def _policy(self) -> ReviewPolicy | None:
+        """Translate governance settings into the review policy the contract enforces.
+
+        `governing_predicates` comes from the ontology rather than the settings, so
+        `require_review_for_governing` means "the predicates this domain calls governing"
+        instead of a list an administrator has to keep in step by hand.
+        """
+        if self.settings is None:
+            return None
+        return ReviewPolicy(
+            auto_assert_verified=self.settings.auto_assert_deterministic,
+            require_review_for_governing=self.settings.require_review_for_governing,
+            governing_predicates=self.ontology.governing_predicates,
+        )
+
+    def validate(self, proposed: Sequence[ProposedClaim], *, chunk: Chunk) -> list[Assertion]:
+        """Turn claims into assertions, dropping everything that cannot be checked.
+
+        Separate from `extract` so the whole decision path is testable without Bedrock —
+        which matters, because this is the code that decides what an untrusted model may
+        put in the graph.
+        """
+        subject_default = document_entity_id(chunk)
+        assertions: dict[str, Assertion] = {}
+        for claim in proposed:
+            predicate = self.ontology.ground(claim.predicate)
+            if predicate is None:
+                logger.info("dropped ungroundable predicate %r", claim.predicate)
+                continue
+
+            span = locate_quote(chunk, claim.quote)
+            if span is None:
+                logger.info(
+                    "dropped %s: quote %r is not verbatim in %s",
+                    predicate,
+                    claim.quote[:60],
+                    chunk.chunk_id,
+                )
+                continue
+
+            subject = claim.subject_id or subject_default
+            if subject == claim.object_id:
+                continue
+
+            # The one decision that matters: a quote-match can confirm presence and
+            # nothing else, so only a presence predicate earns the deterministic class.
+            verified = predicate in PRESENCE_PREDICATES
+            # Collapse a symmetric predicate's endpoints, so "A adverse to B" and
+            # "B adverse to A" are one fact rather than two competing edges.
+            subject, object_id = self.ontology.canonical_pair(
+                predicate, subject, claim.object_id
+            )
+
+            try:
+                assertion = build_assertion(
+                    tenant_id=chunk.tenant_id,
+                    subject_id=subject,
+                    predicate=predicate,
+                    object_id=object_id,
+                    epistemic_class=(
+                        EpistemicClass.EXTRACTED_DET if verified else EpistemicClass.EXTRACTED_MODEL
+                    ),
+                    method=self.verified_method if verified else self.method,
+                    confidence=(
+                        VERIFIED_PRESENCE_CONFIDENCE if verified else self._clamp(claim.confidence)
+                    ),
+                    source_locator=chunk.to_locator(*span),
+                    matter_id=chunk.matter_id,
+                    allowed_predicates=self.ontology.allowed_for(predicate),
+                    policy=self._policy(),
+                )
+            except AssertionError_ as e:
+                logger.info("dropped %s: %s", predicate, e)
+                continue
+            assertions[assertion.assertion_id] = assertion
+        return list(assertions.values())

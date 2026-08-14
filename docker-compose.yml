@@ -1,0 +1,129 @@
+# Local development stack.
+#
+# Neo4j stands in for Neptune. This works because both speak openCypher over Bolt,
+# so `src/graph/client.py` and every Cypher string in `src/graph/scope.py` are
+# identical in both places — which is the point: the module enforcing tenant
+# isolation is exercised locally rather than only in AWS.
+#
+# Where it does NOT stand in: Neptune has no APOC, no `db.index.fulltext`, and
+# openCypher there is a subset (no `FOREACH`, no `MERGE ... ON MATCH SET` on
+# relationships). Anything relying on those passes here and fails in deployment.
+
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/${GRAPH_PASSWORD:-lexgraph-dev}  # dev-only default
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_max__size: 1G
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  # Stands in for OpenSearch Serverless. Single node, security disabled — local only.
+  #
+  # Where it does NOT stand in: Serverless has no `_cluster` settings, different index
+  # limits, and SigV4 auth instead of none. Anything that tunes the cluster works here
+  # and fails in deployment.
+  opensearch:
+    image: opensearchproject/opensearch:2.19.0
+    environment:
+      discovery.type: single-node
+      # Local-only: the deployed collection is SigV4-signed and never uses a password.
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
+    profiles: ["vectors"]
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: local
+      APP_MODULE: src.api.app:app
+      GRAPH_URI: bolt://neo4j:7687
+      GRAPH_USER: neo4j
+      GRAPH_PASSWORD: ${GRAPH_PASSWORD:-lexgraph-dev}
+      GRAPH_IAM_AUTH: "false"
+      ONTOLOGY_PACK: ${ONTOLOGY_PACK:-legal}
+      # No JWT locally, so requests are served as this tenant. src/config.py
+      # refuses to start with this set when ENVIRONMENT is not "local".
+      AUTH_DEV_BYPASS_TENANT: ${AUTH_DEV_BYPASS_TENANT:-dev-tenant}
+      # Empty disables vector retrieval rather than erroring — graph traversal still
+      # answers. Set to http://opensearch:9200 (or run `--profile vectors`) to enable.
+      VECTOR_ENDPOINT: ${VECTOR_ENDPOINT:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      # Bedrock has no local emulator, so page transcription, model extraction and
+      # embedding all need real credentials. Read-only mount.
+      AWS_PROFILE: ${AWS_PROFILE:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ~/.aws:/root/.aws:ro
+      # Bind-mounting src/ so an edit reloads rather than rebuilding the image.
+      - ./src:/app/src:ro
+      - ./ontologies:/app/ontologies:ro
+    command: ["sh", "-c", "exec uvicorn $$APP_MODULE --host 0.0.0.0 --port 8000 --reload"]
+    depends_on:
+      neo4j:
+        condition: service_healthy
+
+  # Same image, entered at the MCP module — exactly how the AgentCore deployment
+  # differs from the Fargate one. Running both locally is how we catch a tool and
+  # an endpoint answering the same question differently.
+  mcp:
+    build: .
+    ports:
+      - "8001:8000"
+    environment:
+      ENVIRONMENT: local
+      APP_MODULE: src.mcp.server:app
+      GRAPH_URI: bolt://neo4j:7687
+      GRAPH_USER: neo4j
+      GRAPH_PASSWORD: ${GRAPH_PASSWORD:-lexgraph-dev}
+      GRAPH_IAM_AUTH: "false"
+      ONTOLOGY_PACK: ${ONTOLOGY_PACK:-legal}
+      AUTH_DEV_BYPASS_TENANT: ${AUTH_DEV_BYPASS_TENANT:-dev-tenant}
+      VECTOR_ENDPOINT: ${VECTOR_ENDPOINT:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_PROFILE: ${AWS_PROFILE:-}
+    volumes:
+      - ~/.aws:/root/.aws:ro
+      - ./src:/app/src:ro
+      - ./ontologies:/app/ontologies:ro
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    profiles: ["mcp"]
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    profiles: ["ui"]
+
+volumes:
+  neo4j_data:
