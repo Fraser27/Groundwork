@@ -15,12 +15,14 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from src.admin_ops import replay, reset_derived
 from src.api.deps import ServicesDep, TenantDep, require_admin
 from src.discovery.catalog_store import CatalogTable
 from src.discovery.glue_scanner import scan_catalog
 from src.graph.assertions import EpistemicClass, ReviewState
 from src.metrics.compiler import compile_metric as compile_metric_to_sql
 from src.ontology.loader import ONTOLOGY_DIR, load_ontology
+from src.sample_data import load_sample_data
 
 logger = logging.getLogger(__name__)
 
@@ -491,3 +493,62 @@ async def scan_sources(
             "citable as DECLARED facts, and metrics can be compiled against them."
         ),
     }
+
+
+# ── Reset and replay ─────────────────────────────────────────────────────────
+#
+# These demonstrate the architecture's central claim rather than merely asserting it: if
+# S3 and Glue are authoritative and everything else is derived, then the graph can be
+# thrown away and rebuilt. If that is ever untrue, these are where it shows.
+
+
+@router.post("/tenants/{tenant}/admin/sample-data")
+async def load_sample_data_route(
+    services: ServicesDep,
+    principal: TenantDep,
+    run_model_extraction: Annotated[bool, Query()] = True,
+) -> dict[str, Any]:
+    """Load the shipped legal documents through the real ingest pipeline.
+
+    Not a graph seed. The documents are uploaded and ingested exactly as an operator's
+    upload would be, so every assertion cites a page and a verbatim span that the
+    Provenance page can resolve. A seeded graph would look identical until somebody
+    clicked a citation.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    report = load_sample_data(services, ctx, run_model_extraction=run_model_extraction)
+    if report.errors and report.documents_loaded == 0:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "; ".join(report.errors[:3]))
+    return report.to_dict()
+
+
+@router.post("/tenants/{tenant}/admin/reset")
+async def reset_derived_route(services: ServicesDep, principal: TenantDep) -> dict[str, Any]:
+    """Drop the graph, the vector index, job state and the catalog cache. S3 is untouched.
+
+    Safe in the sense that matters: nothing irreplaceable goes, because the documents remain
+    in S3 and Replay reconstructs what was removed. Scoped to the caller's own tenant, so a
+    reset in one firm cannot empty another's graph.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    return reset_derived(services, ctx).to_dict()
+
+
+@router.post("/tenants/{tenant}/admin/replay")
+async def replay_route(
+    services: ServicesDep,
+    principal: TenantDep,
+    run_model_extraction: Annotated[bool, Query()] = True,
+) -> dict[str, Any]:
+    """Rebuild the graph and the search index from S3.
+
+    Runs inline rather than in the background, because an operator pressing Replay wants the
+    report. That does bound it by the 60s origin timeout, so a large corpus should be
+    replayed by re-uploading rather than through this endpoint — noted here rather than
+    hidden behind a spinner that will eventually 504.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    return replay(services, ctx, run_model_extraction=run_model_extraction).to_dict()

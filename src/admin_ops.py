@@ -139,6 +139,89 @@ def reset_derived(services: Any, ctx: AuthContext) -> ResetReport:
     return report
 
 
+def replay(services: Any, ctx: AuthContext, *, run_model_extraction: bool = True) -> ReplayReport:
+    """Rebuild the derived tiers from S3 and the catalog.
+
+    This is the operation that proves the architecture's central claim. If S3 and Glue really
+    are authoritative, replay after a reset produces the same graph — and because document
+    ids are content-addressed, running it twice converges rather than accumulating.
+
+    Documents are enumerated from S3 directly, not from any index, because replay has to work
+    precisely when the indexes are gone.
+    """
+    from src.documents.storage import storage_from_config
+
+    report = ReplayReport()
+    storage = storage_from_config(services.config)
+    if storage is None:
+        report.errors.append("no document store configured (DOCUMENT_BUCKET unset)")
+        return report
+
+    try:
+        keys = list_processed_documents(storage, ctx.tenant_id)
+    except Exception as e:
+        report.errors.append(f"could not list documents: {e}")
+        return report
+
+    report.documents_found = len(keys)
+
+    from src.api.routes_documents import _require_runner
+    from src.documents.parse import parse_plain_text
+
+    runner = _require_runner(services)
+
+    for key in keys:
+        try:
+            obj = storage.s3.get_object(Bucket=storage.bucket, Key=key)
+            body = obj["Body"].read() if hasattr(obj["Body"], "read") else obj["Body"]
+            media_type = obj.get("ContentType") or "application/octet-stream"
+            metadata = {k.lower(): v for k, v in (obj.get("Metadata") or {}).items()}
+            filename = metadata.get("filename") or key.rsplit("/", 1)[-1]
+            matter_id = metadata.get("matter-id") or None
+
+            doc = storage.put_document(
+                ctx,
+                filename=filename,
+                body=body,
+                matter_id=matter_id,
+                media_type=media_type,
+            )
+
+            if media_type.startswith("text/"):
+                parsed = parse_plain_text(
+                    doc.document_id, body.decode("utf-8", errors="replace"), filename=filename
+                )
+            elif runner.parser is not None:
+                parsed = runner.parser.parse(doc.document_id, body, filename=filename)
+            else:
+                report.documents_failed += 1
+                report.errors.append(f"{filename}: no vision model, cannot re-parse")
+                continue
+
+            runner.pipeline(
+                ctx,
+                parsed,
+                matter_id=matter_id,
+                run_model_extraction=run_model_extraction,
+                job_id=doc.document_id,
+            )
+            report.documents_ingested += 1
+        except Exception as e:
+            report.documents_failed += 1
+            report.errors.append(f"{key}: {e}")
+            logger.warning("replay failed for %s: %s", key, e)
+
+    report.tables_rescanned = len(services.catalog.tables(ctx.tenant_id))
+
+    logger.info(
+        "replayed %s: %d of %d documents",
+        ctx.tenant_id,
+        report.documents_ingested,
+        report.documents_found,
+    )
+    return report
+
+
 def list_processed_documents(storage: Any, tenant_id: str) -> list[str]:
     """Every processed document key for a tenant, straight from S3.
 

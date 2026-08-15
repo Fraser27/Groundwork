@@ -1,0 +1,61 @@
+PRIVILEGED AND CONFIDENTIAL
+LEGAL ADVICE
+
+To:      Ms Ada Okafor, General Counsel, Northwind Trading Limited
+From:    Kavi Iyer, Senior Associate, Thorne Vaux LLP
+Date:    28 March 2026
+Matter:  NTL-2026-0114 — Northwind Trading Limited v Calder Shipping AG
+Subject: Prospects on repudiatory breach and off-hire
+
+1. EXECUTIVE SUMMARY
+
+In our view Northwind has a strong claim that Calder Shipping AG repudiated the time
+charterparty dated 4 August 2025 by withdrawing MV Aurelia on 19 January 2026. We assess
+prospects of success on liability at 70 to 75 per cent. Quantum is more uncertain and turns
+on the availability of substitute tonnage in a rising market.
+
+2. THE CHARTERPARTY
+
+The charterparty is on an amended NYPE 2015 form. Clause 11(a) entitles the owners to
+withdraw the vessel for non-payment of hire, but only after giving three banking days'
+notice. Calder gave notice on 16 January 2026 and withdrew on 19 January 2026, which on any
+reading is fewer than three banking days given the intervening weekend.
+
+3. THE OFF-HIRE DISPUTE
+
+Calder contends that hire for the period 2 to 14 January 2026 was properly due and unpaid.
+Northwind withheld that hire on the basis that the vessel was off hire under clause 17
+during main engine repairs at Algeciras. The engine logs disclosed on 22 March 2026 record
+the main engine as inoperable from 03:40 on 2 January until 18:15 on 13 January. That is
+consistent with Northwind's position and inconsistent with Calder's.
+
+We note that the surveyor's report prepared by Halvorsen Marine reaches the opposite
+conclusion, but it appears not to have had the engine logs. We consider the logs the better
+evidence.
+
+4. QUANTUM
+
+Northwind's loss is the difference between the charter rate of USD 18,500 per day and the
+market rate for substitute tonnage over the remaining 214 days of the charter. On the
+Baltic Exchange assessments the market rate averaged USD 24,200 per day over the relevant
+period, giving a prima facie loss of approximately USD 1.22 million before mitigation.
+
+Calder will argue failure to mitigate. Northwind fixed the MV Sirocco on 4 February 2026,
+sixteen days after withdrawal. We consider that period reasonable in a tight market, though
+it is the most likely point of attack.
+
+5. LIMITATION
+
+The charterparty provides for LMAA arbitration in London. The claim is not time barred; the
+six-year limitation period under section 5 of the Limitation Act 1980 runs from 19 January
+2026.
+
+6. RECOMMENDATION
+
+We recommend serving a notice of arbitration before the end of April 2026 and appointing
+Mr Justice-retired Alan Rowntree or Ms Frances Beaulieu as arbitrator. We further recommend
+obtaining a supplementary engineering report addressing the Halvorsen conclusions directly.
+
+Kavi Iyer
+Senior Associate
+Thorne Vaux LLP
