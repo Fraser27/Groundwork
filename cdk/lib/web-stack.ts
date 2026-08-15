@@ -65,9 +65,16 @@ function handler(event) {
     if (uri.charAt(uri.length - 1) === '/') event.request.uri = uri + 'index.html';
     return event.request;
   }
+  // Redirect, not an internal rewrite. Serving /docs/index.html at the URL /docs leaves the
+  // browser resolving the pages' relative asset paths against /, so assets/docs.css became
+  // /assets/docs.css and 403'd: unstyled page, no nav, no search. The trailing slash has to
+  // be in the address bar, which only a redirect achieves.
   if (uri === '/docs') {
-    event.request.uri = '/docs/index.html';
-    return event.request;
+    return {
+      statusCode: 301,
+      statusDescription: 'Moved Permanently',
+      headers: { location: { value: '/docs/' } },
+    };
   }
   // Assets live under /assets/ or are a known top-level file. Testing for "contains a dot"
   // instead sent /tables/aemo.price_demand to S3, where it 403'd: a table's full name is

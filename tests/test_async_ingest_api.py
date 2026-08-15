@@ -255,6 +255,62 @@ class TestTheDocumentListExists:
         assert isinstance(body["timeline"], list)
         assert isinstance(body["assertions"], list)
 
+    def _stage(self, tenant: str, doc_id: str):
+        """A real staged assertion, so the counting path is exercised against a real record.
+
+        This is the gap that let a 500 ship: with no assertions staged, the loop that counts
+        them never ran, so an attribute that does not exist on AssertionRecord was never
+        dereferenced by any test.
+        """
+        from src.api.deps import get_services
+        from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
+        from src.graph.scope import AuthContext
+
+        a = build_assertion(
+            tenant_id=tenant,
+            subject_id="Doc-1",
+            predicate="CONCERNS_TOPIC",
+            object_id="Topic-Antitrust",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:claude-sonnet-5",
+            confidence=0.7,
+            source_locator=SourceLocator(
+                document_id=doc_id,
+                filename="a.pdf",
+                page=1,
+                chunk_id=f"{doc_id}:c1",
+                quote="the Adverse Party",
+            ),
+        )
+        get_services().review_queue.stage(
+            AuthContext(user_id="dev@localhost", tenant_id=tenant), [a]
+        )
+        return a
+
+    def test_facts_are_counted_against_their_document(self, client):
+        from src.api.deps import get_services
+
+        get_services().job_store.put_job(self._job(TENANT, "doc-1"))
+        self._stage(TENANT, "doc-1")
+
+        row = client.get(f"/api/tenants/{TENANT}/documents").json()["documents"][0]
+        assert row["assertion_count"] == 1
+        # EXTRACTED_MODEL is interpretive, so it waits for a person. Derived from the
+        # epistemic class, never set independently.
+        assert row["pending_review_count"] == 1
+
+    def test_the_detail_lists_the_facts_read_out_of_the_document(self, client):
+        from src.api.deps import get_services
+
+        get_services().job_store.put_job(self._job(TENANT, "doc-1"))
+        staged = self._stage(TENANT, "doc-1")
+
+        body = client.get(f"/api/tenants/{TENANT}/documents/doc-1").json()
+        assert [a["assertion_id"] for a in body["assertions"]] == [staged.assertion_id]
+        # The two fields the UI dereferences without a guard.
+        assert body["assertions"][0]["source_locator"]["quote"] == "the Adverse Party"
+        assert body["assertions"][0]["premises"] == []
+
 
 class TestGovernanceIsWritable:
     def test_the_ungoverned_switch_can_be_turned_on(self, client):

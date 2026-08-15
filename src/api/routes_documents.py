@@ -61,6 +61,7 @@ from src.documents.storage import (
     DocumentStorage,
     storage_from_config,
 )
+from src.graph.assertions import ReviewState
 from src.graph.scope import AuthContext, ScopeViolation
 
 logger = logging.getLogger(__name__)
@@ -572,7 +573,10 @@ def _assertion_counts(services: Services, ctx: AuthContext) -> dict[str, tuple[i
             continue
         entry = counts.setdefault(doc_id, [0, 0])
         entry[0] += 1
-        if record.needs_review and not record.reviewed_at:
+        # `review_state` on the assertion, which is derived from the epistemic class. There is
+        # no separate needs-review flag, and there must not be: a fact that could be marked
+        # reviewed independently of how it was reached could opt out of the gate.
+        if record.assertion.review_state is ReviewState.PENDING:
             entry[1] += 1
     return {k: (v[0], v[1]) for k, v in counts.items()}
 
@@ -605,8 +609,7 @@ async def get_document(
         1
         for r in services.review_queue.visible(ctx)
         if r.assertion.source_locator.document_id == document_id
-        and r.needs_review
-        and not r.reviewed_at
+        and r.assertion.review_state is ReviewState.PENDING
     )
 
     summary = _document_summary(
