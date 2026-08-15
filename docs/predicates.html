@@ -177,16 +177,18 @@ guess would be worse than none</em>. Worse, not merely less useful — because a
 consumes senior time, may cause a firm to decline profitable work, and erodes trust in every other
 flag the system raises. The rule declines to fire rather than fire on a guess.</p>
 
-<div class="note gap">
-<div class="note-title">Not built yet</div>
-<p>Nothing executes these rules. They are parsed, exposed through the interface, and carry a
-correctly-formed method string for the facts they would produce. No engine fires them, so no derived
-facts exist. The premise structure and the confidence ceiling that would constrain them are built
-and tested.</p>
-<p>Two other fields in the pack are similarly read but not yet acted on: a relationship can be marked
-<em>symmetric</em>, and a rule declares a minimum premise class. Both are parsed and shown through
-the interface; neither is enforced anywhere, because the component that would enforce them is the
-reasoning engine.</p>
+<div class="note">
+<div class="note-title">How the rule actually declines</div>
+<p>Not by epistemic class, which is where the first attempt went wrong. A governing predicate may
+never be <span class="badge det">EXTRACTED_DET</span> — a quote match proves text is present, never
+that it is significant — so a rule demanding that class as its floor could not have fired on
+anything read from a document at all. It would have declined always, and silently.</p>
+<p>What the engine requires instead is that a premise has been <em>signed off</em>: approved by a
+person, or auto-asserted because a system of record declared it. A pack can loosen the class floor;
+no pack setting lets a rule fire on an unreviewed claim, on a rejected one, or on one since
+withdrawn.</p>
+<p>Still not enforced anywhere: a relationship can be marked <em>symmetric</em> in the pack, and that
+flag is parsed and displayed but nothing acts on it.</p>
 </div>
 
 <h2 id="mentions">The safe default</h2>

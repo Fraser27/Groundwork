@@ -97,12 +97,14 @@ read.</p>
 it rests on — so it can always be explained as a proof tree, and so that retracting a premise
 retracts the conclusion.</p>
 
-<div class="note gap">
-<div class="note-title">Not built yet</div>
-<p>No reasoning engine is wired up. The class, the premise structure, the proof-tree plumbing and
-the confidence ceiling below are all built and tested, and two rules are written out in the legal
-vocabulary pack (a conflict check and a stale-authority check). Nothing currently fires them, so
-in practice no inferred assertions exist.</p>
+<div class="note">
+<div class="note-title">Only a rule writes this class</div>
+<p>No extractor may propose an inferred fact, and the conclusions the rules draw
+(<code>POTENTIAL_CONFLICT</code>, <code>RELIES_ON_STALE_AUTHORITY</code>) are declared in the pack
+so that a rule concluding something undeclared fails when the pack is read rather than months
+later, the first time it matches.</p>
+<p>An inference is staged for review like any model-extracted claim, never published directly, and
+carries the facts it rests on so the proof tree resolves all the way down to a page and a quote.</p>
 </div>
 
 <h3><span class="badge predicted">PREDICTED</span></h3>
@@ -236,14 +238,19 @@ Storing everything on the relationship's own properties could not express a proo
 because a relationship cannot point at another relationship. The cost of the hybrid is two writes
 per fact that have to stay consistent with each other, which is a real cost, accepted knowingly.</p>
 
-<div class="note gap">
-<div class="note-title">Not built yet</div>
-<p>The writer that would perform those two writes does not exist. Assertions are currently held in
-an in-process store and are lost on restart, and the read path reads from that store rather than
-from the graph database. The schema, the indexes and the scoped-read mechanism are all in place.
-Note that the in-memory store maintains a reverse index from premise to conclusion, which the
-retraction cascade walks — whatever replaces it has to maintain the same thing, or cascading
-retraction breaks silently.</p>
+<div class="note">
+<div class="note-title">Both writes, and why the duplication is deliberate</div>
+<p>The trust fields — tenant, matter, epistemic class, confidence, review state, time — are written
+onto <em>both</em> the edge and the assertion node. That looks like redundancy and is the design: the
+edge copy is what makes a filtered traversal one hop, and the node copy is what makes the audit read
+complete without walking anything.</p>
+<p>It has one sharp consequence. A review decision has to reach the edge copy too, because that is
+what a traversal filters on — updating only the node leaves a fact approved and invisible to every
+query that matters, which is worse than one that is visibly pending. There is a test for exactly
+that.</p>
+<p>The in-memory store keeps a reverse index from premise to conclusion for the retraction cascade.
+In the graph that index is the <code>PREMISE</code> edge walked backwards, so the cascade finds the
+same conclusions either way.</p>
 </div>
 
 </main>

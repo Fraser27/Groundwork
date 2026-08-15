@@ -188,12 +188,13 @@ step.</blockquote>
 cannot be created at all. And a derived fact can never be more confident than the weakest fact it
 rests on, so a chain of uncertain steps cannot present itself as a certainty.</p>
 
-<div class="note gap">
-<div class="note-title">Not built yet</div>
-<p>No reasoning engine fires the rules, so no derived facts currently exist. The premise structure,
-the confidence ceiling, the retraction cascade that walks premises, and the interface for reading a
-proof tree are all built and tested. Two rules are written out in the legal vocabulary pack. There
-is nothing to execute them.</p>
+<div class="note">
+<div class="note-title">What a proof tree resolves to</div>
+<p>The rules fire, so derived facts exist and every one of them names its premises. Follow those
+premises down and you reach ordinary extracted facts, each with a file, a page and the sentence
+itself — which is the point: an inference is only defensible if the things underneath it are.</p>
+<p>Withdraw a premise and the retraction cascade withdraws the conclusion with it, by walking the
+premise edge backwards. No conclusion outlives the reason it was drawn.</p>
 </div>
 
 </main>

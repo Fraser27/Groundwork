@@ -139,12 +139,12 @@ attaches policy to the stack owning the role.</li>
 floor to double, so an idle collection bills nothing either way and the redundancy is free.</li>
 </ul>
 
-<div class="note gap">
-<div class="note-title">Not built yet</div>
-<p>No adapter has been written against this service. The container is defined for local use and the
-endpoint setting is read, but embeddings are currently held in process and lost on restart. Embedding
-calls still require real model-service credentials.</p>
-</div>
+<p>Embeddings are written here, one index per tenant, named so that a mistake fails closed with
+"index not found" rather than returning another firm's documents. The matter wall is applied as a
+pre-filter inside the k-NN query rather than afterwards: post-filtering returns fewer than the
+requested number of results whenever a screen bites, and a lawyer reads that shortfall as "nothing
+relevant" instead of "you cannot see it". Similarity is cosine, matching the in-process reference
+store, so a local result and a deployed one rank the same way.</p>
 
 <h3>Models — Amazon Bedrock</h3>
 <p>Provides the extraction model, the query model, the enrichment model and the embedding model. All four
@@ -285,19 +285,16 @@ reassuring answer.</p>
 <h2 id="state">State of the build</h2>
 
 <p>Around 6,000 lines of Python, six infrastructure stacks that synthesise cleanly, and twelve interface
-pages. The test suite runs 601 tests, of which <strong>595 pass and 6 fail</strong> — all six in the agent
-tool server's own tests, and two of those are a test-isolation problem (a session manager that cannot be
-started twice in one process) rather than a product defect. The rest of the suite is green.</p>
+pages. The test suite runs 1,168 tests and is green.</p>
 
 <p>The largest functional gaps, repeated here in one place:</p>
 
 <ul>
-<li>No graph writer. Facts live in an in-process store and are lost on restart.</li>
-<li>No reasoning engine, so no derived facts and no proof trees in practice.</li>
-<li>No query executor, so governed metrics return SQL rather than numbers.</li>
+<li>No query executor wired to the metric path, so governed metrics compile SQL that is never run.
+The Athena executor itself exists and is tested.</li>
 <li>No model-backed SQL generator, so tier 4 always declines.</li>
-<li>No vector store adapter, so embeddings are in process.</li>
 <li>No authorisation policies authored.</li>
+<li>Ingestion and live progress events both depend on there being a single task.</li>
 <li>Nothing deployed. The infrastructure has been synthesised and never applied.</li>
 </ul>
 

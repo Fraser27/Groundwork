@@ -309,7 +309,7 @@ defend, rather than just nearest neighbours.
 
 ## Status
 
-Deployed to a real AWS account across six stacks, with 1,051 tests passing. The
+Deployed to a real AWS account across six stacks, with 1,168 tests passing. The
 document path works end to end there: a presigned browser upload lands in S3, an S3
 notification starts ingestion, and pages are transcribed by a vision model, chunked
 with offsets kept, embedded, and read for claims that land in the review queue.
@@ -317,21 +317,27 @@ with offsets kept, embedded, and read for claims that land in the review queue.
 **What is not yet true**, because a README that overstates is worse than one that
 admits:
 
-- **Nothing fires the rules.** `INFERRED`, premises, proof trees and the confidence
-  ceiling are built and tested, and the legal pack declares two rules, but no code
-  path evaluates them. So the conflict check and the stale-authority check — the two
-  things this design exists to show — do not fire yet.
-- **Assertions are not persisted.** They live in an in-process store, so a deploy
-  loses them, and reads come from that store rather than from Neptune. This is the
-  largest gap. Metric definitions and their version history *are* in the graph, and
-  documents, ingest jobs and matter grants are genuinely durable.
 - **Tier 1 compiles SQL that nothing runs.** The Athena executor exists and is
-  tested; it is not wired to the metric path.
+  tested; it is not wired to the metric path. This is now the largest gap.
 - **Tier 4 has no SQL generator**, so it always declines. Its firewall is real.
-- **Vectors are in-process.** OpenSearch Serverless is provisioned but has no
-  adapter yet.
 - **One task only.** Live ingest events and the ingest work itself both live in a
   single container; the 30-second poll is the correctness guarantee.
+- **Nothing has been load tested.** The reasoner joins in Python over a tenant's
+  live facts, which is fine for thousands and unexamined beyond that.
+
+Recently closed, in this order deliberately — an inference over facts that do not
+survive a restart produces a proof tree pointing at premises that no longer exist:
+
+- **Assertions persist to Neptune**, so an approval survives a deploy.
+- **The rules fire.** One generic engine evaluates the `when`/`then` patterns in
+  whichever pack a tenant runs, so the legal conflict check and the healthcare
+  contraindication alert are the same code path. Conclusions are staged for review,
+  not published, and carry their premises.
+- **Vectors go to OpenSearch**, with the matter wall as a pre-filter inside the
+  k-NN query rather than applied afterwards.
+- **Governance settings persist** to DynamoDB — most important for the
+  ungoverned-query kill switch, since losing that on a deploy meant a firm believing
+  questions were refused while they were being answered.
 
 ## Development
 
