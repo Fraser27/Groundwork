@@ -84,7 +84,18 @@ async def lifespan(app: FastAPI):
             if client.verify_connectivity():
                 init_schema(client, is_neptune=cfg.graph.iam_auth)
                 services.graph = client
-                logger.info("graph connected")
+
+                # Swap the assertion store onto the graph now that one is reachable. Done
+                # here rather than in `build_services` because the client does not exist
+                # until this point, and connecting lazily is what lets /health report a
+                # graph that is down instead of the API failing to start.
+                #
+                # Until this line existed, an approval wrote to a dict and was lost on the
+                # next deploy while the UI reported success.
+                from src.graph.assertion_store import GraphAssertionStore
+
+                services.review_queue.store = GraphAssertionStore(graph=client)
+                logger.info("graph connected, assertions persisted to the graph")
             else:
                 logger.warning("graph unreachable at %s, degraded mode", cfg.graph.uri)
         except Exception as e:
