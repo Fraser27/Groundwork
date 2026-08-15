@@ -54,7 +54,7 @@ async def run_query(
 
     # Wired to whatever is actually available — a missing collaborator disables its
     # tier rather than erroring, so the answer degrades instead of failing.
-    resolver = services.build_resolver()
+    resolver = services.build_resolver(ctx.tenant_id)
 
     try:
         resolution = resolver.resolve(

@@ -120,7 +120,7 @@ async def ask(ctx: Context, question: str, execute: bool = False) -> dict[str, A
     settings = services.settings_for(auth_ctx.tenant_id)
 
     try:
-        resolution = services.build_resolver().resolve(
+        resolution = services.build_resolver(auth_ctx.tenant_id).resolve(
             auth_ctx, question, settings, execute=execute
         )
     except QueryBlocked as e:
@@ -161,12 +161,20 @@ async def list_metrics(ctx: Context) -> dict[str, Any]:
     — `non_additive` measures (ratios, averages, distinct counts) are wrong if you add them
     up yourself.
     """
-    services, _ = _principal(ctx)
-    matcher = services.metric_matcher
+    services, auth_ctx = _principal(ctx)
+    from src.api.deps import build_metric_matcher
+
+    # Same precedence as `build_resolver`: an injected matcher wins, otherwise the tenant's
+    # approved metrics come from the graph.
+    matcher = services.metric_matcher or build_metric_matcher(services, auth_ctx.tenant_id)
     if matcher is None:
         return {
             "metrics": [],
-            "note": "no metric pack is loaded, so no governed metric can answer",
+            "note": (
+                "no approved metric is defined for this tenant, so no question can be "
+                "answered deterministically yet. An administrator defines and approves "
+                "metrics in the app."
+            ),
         }
 
     return {
@@ -225,9 +233,7 @@ async def describe_ontology(ctx: Context) -> dict[str, Any]:
             for e in onto.entities.values()
         ],
         "governing_predicates": [_pred(p) for p in onto.predicates.values() if p.governing],
-        "descriptive_predicates": [
-            _pred(p) for p in onto.predicates.values() if not p.governing
-        ],
+        "descriptive_predicates": [_pred(p) for p in onto.predicates.values() if not p.governing],
         "rules": [
             {
                 "id": r.id,
@@ -432,8 +438,7 @@ def _explain(a: Any) -> str:
     cls = a.epistemic_class
     if cls is EpistemicClass.DECLARED:
         return (
-            f"Recorded directly from a system of record ({a.method}). Not inferred or "
-            "interpreted."
+            f"Recorded directly from a system of record ({a.method}). Not inferred or interpreted."
         )
     if cls is EpistemicClass.EXTRACTED_DET:
         return (
@@ -535,8 +540,7 @@ def create_app(config: LexGraphConfig | None = None):
     set_services(services)
     if services.authenticator.dev_mode:
         logger.warning(
-            "DEV AUTH BYPASS ACTIVE, unauthenticated MCP tool calls will be served as "
-            "tenant %r",
+            "DEV AUTH BYPASS ACTIVE, unauthenticated MCP tool calls will be served as tenant %r",
             services.config.auth.dev_bypass_tenant,
         )
     return build_server().streamable_http_app()

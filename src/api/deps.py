@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path as FsPath
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, Header, HTTPException, Path, Query, status
 
@@ -19,11 +19,11 @@ from src.access import AccessManager, AccessStore, InMemoryAccessStore
 from src.access_dynamo import DynamoAccessStore
 from src.auth import Authenticator, AuthError, Grants, bearer_from_header
 from src.config import LexGraphConfig, load_config
+from src.discovery.catalog_store import CatalogStore
 from src.documents.embed import Embedder, InMemoryVectorStore
 from src.documents.job_store import DynamoJobStore, InMemoryJobStore
 from src.documents.parse import VisionParser
 from src.documents.review import InMemoryAssertionStore, ReviewQueue
-from src.discovery.catalog_store import CatalogStore
 from src.documents.runner import IngestLimiter
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext, ScopeViolation
@@ -39,8 +39,9 @@ from src.user_admin import UserAdmin
 
 logger = logging.getLogger(__name__)
 
-#: Default metric pack. YAML rather than the database at this stage.
-METRICS_PATH = FsPath(__file__).resolve().parents[2] / "sample" / "metrics.yaml"
+#: Example metrics for a fictional firm, used only to seed a demo. The real store is the
+#: graph, so this is not a configuration point and there is deliberately no env var for it.
+EXAMPLE_METRICS_PATH = FsPath(__file__).resolve().parents[2] / "sample" / "metrics.yaml"
 
 
 @dataclass
@@ -64,6 +65,8 @@ class Services:
 
     graph_reader: GraphReader | None = None
     metric_matcher: MetricMatcher | None = None
+    """Injected by tests. In a running system the matcher is built per request from the
+    tenant's approved metrics in the graph, so this stays None."""
 
     embedder: Embedder | None = None
     """None disables the vector path. Retrieval then degrades to graph traversal
@@ -99,14 +102,22 @@ class Services:
             self.governance[tenant_id] = GovernanceSettings.from_env()
         return self.governance[tenant_id]
 
-    def build_resolver(self) -> Resolver:
+    def build_resolver(self, tenant_id: str = "") -> Resolver:
         """A resolver wired to whatever is actually available.
 
-        Constructed per request because a `Resolver` records blocked queries and that
-        state should not be shared, but the collaborators it wraps are long-lived.
+        Constructed per request because a `Resolver` records blocked queries and that state
+        should not be shared. The metric matcher is also per request, and per *tenant*: it
+        reads this firm's approved metrics from the graph, so a metric approved a minute ago
+        answers the next question without a restart.
         """
+        # An injected matcher wins. Tests set it directly, and honouring it keeps them
+        # testing tier-1 behaviour rather than graph plumbing. In a running system it is
+        # None, so the tenant's approved metrics are read from the graph.
+        matcher = self.metric_matcher or (
+            build_metric_matcher(self, tenant_id) if tenant_id else None
+        )
         return Resolver(
-            metric_matcher=self.metric_matcher,
+            metric_matcher=matcher,
             graph_reader=self.graph_reader,
             vector_search=VectorSearch(self.embedder) if self.embedder else None,
             sql_generator=None,
@@ -114,26 +125,57 @@ class Services:
         )
 
 
-def _load_metric_matcher(cfg: LexGraphConfig) -> MetricMatcher | None:
-    """Load the sample metric pack if it is present.
+def load_example_pack() -> list[Any]:
+    """The shipped example metrics, for seeding a demo.
 
-    Metrics live in YAML rather than the database at this stage, so a missing pack is
-    normal and disables tier 1 rather than failing startup.
+    Not the metric store. Metrics live in the graph with version history, authored through
+    the app, because that is what makes "what did this definition mean when it answered"
+    answerable. This file is examples for a fictional firm, and `POST /metrics/seed` loads
+    them as drafts for someone to look at.
     """
-    path = FsPath(cfg.metrics_file) if getattr(cfg, "metrics_file", "") else METRICS_PATH
-    if not path.exists():
+    if not EXAMPLE_METRICS_PATH.exists():
+        return []
+    try:
+        return load_metrics(EXAMPLE_METRICS_PATH).metrics
+    except Exception as e:
+        logger.warning("example metric pack failed to load: %s", e)
+        return []
+
+
+def build_metric_matcher(services: Services, tenant_id: str) -> MetricMatcher | None:
+    """What tier 1 matches a question against: this tenant's **approved** metrics.
+
+    Built per request rather than at startup, because a metric approved a minute ago has to
+    be able to answer the next question. A missing graph disables tier 1 rather than
+    falling back to the example pack: answering a firm's question with a demo metric about
+    a fictional firm's invoices would be worse than declining to answer.
+    """
+    if services.graph is None:
         return None
     try:
-        result = load_metrics(path)
+        from src.metrics.graph_store import GraphMetricStore
+
+        metrics = GraphMetricStore(services.graph).list_metrics(tenant_id, approved_only=True)
     except Exception as e:
-        logger.warning("metric pack %s failed to load: %s", path, e)
+        logger.warning("could not load metrics for %s: %s", tenant_id, e)
         return None
-    if not result.metrics:
+    if not metrics:
         return None
 
-    catalog = StaticCatalog(tables={})
-    logger.info("loaded %d governed metrics from %s", len(result.metrics), path)
-    return MetricMatcher(result.metrics, catalog)
+    tables = {}
+    try:
+        from src.metrics.models import TableSchema
+
+        for table in services.catalog.tables(tenant_id):
+            tables[table.full_name] = TableSchema(
+                full_name=table.full_name,
+                columns={c.name: c.data_type for c in table.columns},
+                primary_keys=frozenset(c.name for c in table.columns if c.is_primary_key),
+            )
+    except Exception as e:
+        logger.debug("no schema catalog available: %s", e)
+
+    return MetricMatcher(metrics, StaticCatalog(tables=tables))
 
 
 def _build_parser(cfg: LexGraphConfig) -> VisionParser | None:
@@ -226,7 +268,6 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
         review_queue=queue,
         access=access,
         graph_reader=GraphReader(queue),
-        metric_matcher=_load_metric_matcher(cfg),
         embedder=embedder,
         parser=_build_parser(cfg),
         job_store=_build_job_store(cfg),

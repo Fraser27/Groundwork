@@ -126,29 +126,36 @@ def graph_client() -> TestClient:
     return TestClient(app)
 
 
-class TestReadsWorkWithoutTheGraph:
-    def test_the_pack_answers_when_the_graph_is_down(self, client):
-        """The Metrics page should degrade to the YAML pack rather than look empty."""
+class TestReadsWithoutTheGraph:
+    """No graph and no startup pack means no metrics, and saying so is the honest answer.
+
+    Metrics live in the graph and are authored in the app. There is no repository pack loaded
+    at startup any more, so a firm with an unreachable graph genuinely has nothing to list.
+    Inventing entries from the shipped examples would show a firm metrics about a fictional
+    firm's invoices as though they were their own.
+    """
+
+    def test_listing_is_empty_rather_than_invented(self, client):
         r = client.get(BASE)
         assert r.status_code == 200
-        assert len(r.json()) > 0
-
-    def test_pack_metrics_are_flagged_as_examples_not_approved(self, client):
-        """The shipped pack is demo metrics for a fictional firm referencing tables like
-        legal_ops.invoices. Reporting them as this tenant's approved metrics would let tier 1
-        compile SQL against tables the tenant may not own, which is a confident failure
-        rather than an honest "no metric matched"."""
-        first = client.get(BASE).json()[0]
-        assert first["status"] == "draft"
-        assert first["is_example"] is True
-
-    def test_a_stored_metric_compiles_to_sql(self, client):
-        r = client.post(f"{BASE}/lm_001/compile")
-        assert r.status_code == 200
-        assert r.json()["sql"].upper().startswith("SELECT")
+        assert r.json() == []
 
     def test_an_unknown_metric_is_404(self, client):
         assert client.post(f"{BASE}/nope/compile").status_code == 404
+
+    def test_the_examples_are_reachable_but_marked_as_examples(self, client):
+        """When a matcher *is* present, its metrics are flagged rather than presented as
+        this tenant's approved definitions."""
+        from src.api.deps import get_services, load_example_pack
+        from src.metrics.models import StaticCatalog
+        from src.query.metric_matcher import MetricMatcher
+
+        pack = load_example_pack()
+        get_services().metric_matcher = MetricMatcher(pack, StaticCatalog(tables={}))
+
+        first = client.get(BASE).json()[0]
+        assert first["status"] == "draft"
+        assert first["is_example"] is True
 
 
 class TestPreview:

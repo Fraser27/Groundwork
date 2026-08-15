@@ -31,11 +31,29 @@ def _config(**over) -> LexGraphConfig:
     return cfg
 
 
+def _with_example_metrics() -> None:
+    """Give the app under test a metric matcher.
+
+    Metrics now live in the graph and the matcher is built per request from a tenant's
+    approved metrics, so nothing is loaded at startup. These tests are about tier 1
+    behaviour rather than about where a definition is stored, so the example pack is
+    injected directly. `Services.metric_matcher` exists for exactly this.
+    """
+    from src.api.deps import load_example_pack
+    from src.metrics.models import StaticCatalog
+    from src.query.metric_matcher import MetricMatcher
+
+    metrics = load_example_pack()
+    if metrics:
+        get_services().metric_matcher = MetricMatcher(metrics, StaticCatalog(tables={}))
+
+
 @pytest.fixture
 def client() -> TestClient:
     app = create_app(_config())
     # No lifespan: the graph is intentionally unreachable here, and these tests are
     # about the HTTP boundary rather than graph connectivity.
+    _with_example_metrics()
     return TestClient(app)
 
 
@@ -146,7 +164,10 @@ class TestReviewQueue:
 
     def test_reject_requires_a_reason(self, client):
         aid = _stage_model_assertion()
-        assert client.post(f"/api/tenants/{TENANT}/assertions/{aid}/reject", json={}).status_code == 422
+        assert (
+            client.post(f"/api/tenants/{TENANT}/assertions/{aid}/reject", json={}).status_code
+            == 422
+        )
 
     def test_reject_records_reason(self, client):
         aid = _stage_model_assertion()
@@ -159,9 +180,7 @@ class TestReviewQueue:
     def test_rejected_cannot_be_approved(self, client):
         """409: the claim existed and was withdrawn, which is a conflict not a 404."""
         aid = _stage_model_assertion()
-        client.post(
-            f"/api/tenants/{TENANT}/assertions/{aid}/reject", json={"reason": "wrong"}
-        )
+        client.post(f"/api/tenants/{TENANT}/assertions/{aid}/reject", json={"reason": "wrong"})
         assert client.post(f"/api/tenants/{TENANT}/assertions/{aid}/approve").status_code == 409
 
     def test_unknown_assertion_404s(self, client):
@@ -194,16 +213,12 @@ class TestGovernance:
         assert set(body["help"]) >= {"min_confidence_floor", "model_confidence_cap"}
 
     def test_valid_patch_applies(self, client):
-        r = client.patch(
-            f"/api/tenants/{TENANT}/governance", json={"min_confidence_floor": 0.9}
-        )
+        r = client.patch(f"/api/tenants/{TENANT}/governance", json={"min_confidence_floor": 0.9})
         assert r.json()["settings"]["min_confidence_floor"] == 0.9
 
     def test_closing_the_cap_floor_gap_is_refused(self, client):
         """The invariant that keeps unreviewed model output out of answers."""
-        r = client.patch(
-            f"/api/tenants/{TENANT}/governance", json={"min_confidence_floor": 0.5}
-        )
+        r = client.patch(f"/api/tenants/{TENANT}/governance", json={"min_confidence_floor": 0.5})
         assert r.status_code == 422
         assert "must stay below" in r.json()["detail"]
 
@@ -232,9 +247,7 @@ class TestQuery:
         by the switch, which is the whole point of the switch. So this uses a question
         with no metric and no matching assertions.
         """
-        client.patch(
-            f"/api/tenants/{TENANT}/governance", json={"block_ungoverned_queries": True}
-        )
+        client.patch(f"/api/tenants/{TENANT}/governance", json={"block_ungoverned_queries": True})
         r = client.post(
             f"/api/tenants/{TENANT}/query",
             json={"query": "zzzq nonexistent gibberish topic"},
@@ -244,9 +257,7 @@ class TestQuery:
 
     def test_kill_switch_does_not_block_governed_metrics(self, client):
         """A governed answer is still allowed while ungoverned queries are off."""
-        client.patch(
-            f"/api/tenants/{TENANT}/governance", json={"block_ungoverned_queries": True}
-        )
+        client.patch(f"/api/tenants/{TENANT}/governance", json={"block_ungoverned_queries": True})
         r = client.post(
             f"/api/tenants/{TENANT}/query", json={"query": "what is our realization rate"}
         )
@@ -280,9 +291,7 @@ class TestGraphNeighbourhood:
     def test_returns_edges_around_a_node(self, client):
         _stage_model_assertion()
         client.get(f"/api/tenants/{TENANT}/assertions")
-        r = client.get(
-            f"/api/tenants/{TENANT}/graph/neighbourhood", params={"node_id": "Doc-1"}
-        )
+        r = client.get(f"/api/tenants/{TENANT}/graph/neighbourhood", params={"node_id": "Doc-1"})
         assert r.status_code == 200
         assert r.json()["confidence_floor"] == 0.8
 

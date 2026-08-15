@@ -50,50 +50,6 @@ def _table_summary(table: CatalogTable) -> dict[str, Any]:
     }
 
 
-def _metric_out(metric: Any) -> dict[str, Any]:
-    """A metric as the UI shows it.
-
-    `status` and `version` are derived, not stored: metrics live in YAML at this stage, so
-    reporting a stored version would be inventing state. A metric in the loaded pack is one
-    the pack's author approved.
-    """
-    return {
-        "metric_id": metric.metric_id,
-        "name": metric.name,
-        "definition": metric.definition,
-        "expression": metric.expression,
-        "source_table": metric.source_table,
-        "grain": list(metric.grain),
-        "time_grain_column": metric.time_grain_column or None,
-        "time_grains": list(metric.time_grains),
-        "aggregation": metric.aggregation,
-        "parameters": [
-            {
-                "column": p.column,
-                "operator": p.operator,
-                "required": p.required,
-                "description": p.description,
-            }
-            for p in metric.parameters
-        ],
-        "filters": list(metric.filters),
-        "synonyms": list(metric.synonyms),
-        "status": "approved",
-        "version": 1,
-        "owner": metric.owner or None,
-    }
-
-
-def _find_metric(services: Any, metric_id: str) -> Any:
-    matcher = services.metric_matcher
-    if matcher is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no metric pack loaded")
-    for metric in matcher.metrics:
-        if metric.metric_id == metric_id:
-            return metric
-    raise HTTPException(status.HTTP_404_NOT_FOUND, f"no metric {metric_id!r}")
-
-
 @router.get("/tenants/{tenant}/dashboard")
 async def dashboard(services: ServicesDep, principal: TenantDep) -> dict[str, Any]:
     ctx, grants = principal

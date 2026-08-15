@@ -23,7 +23,7 @@ from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from src.api.deps import get_services
-from src.auth import AuthError, Grants
+from src.auth import AuthError
 from src.config import AuthConfig, GraphConfig, LexGraphConfig
 from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
 from src.graph.scope import AuthContext
@@ -44,7 +44,11 @@ TOKEN_B = "token-for-tenant-b"
 TOKEN_WALLED = "token-for-walled-user"
 
 _CLAIMS: dict[str, dict[str, Any]] = {
-    TOKEN_A: {"sub": "alice@acme.com", "custom:tenant_id": TENANT_A, "cognito:groups": ["reviewer"]},
+    TOKEN_A: {
+        "sub": "alice@acme.com",
+        "custom:tenant_id": TENANT_A,
+        "cognito:groups": ["reviewer"],
+    },
     TOKEN_B: {"sub": "bob@beta.com", "custom:tenant_id": TENANT_B, "cognito:groups": ["reviewer"]},
     TOKEN_WALLED: {"sub": "carol@acme.com", "custom:tenant_id": TENANT_A},
 }
@@ -99,9 +103,7 @@ def _stage(
     services = get_services()
     if matter_id is not None:
         for user_id in _USERS_BY_TENANT[tenant_id]:
-            services.authenticator.access.assign(
-                tenant_id, user_id, matter_id, actor="owner@firm"
-            )
+            services.authenticator.access.assign(tenant_id, user_id, matter_id, actor="owner@firm")
     ctx = AuthContext(user_id="ingest", tenant_id=tenant_id)
     a = build_assertion(
         tenant_id=tenant_id,
@@ -131,6 +133,18 @@ def _install(config: LexGraphConfig) -> None:
     """
     create_app(config)
     services = get_services()
+
+    # Metrics live in the graph now and the matcher is built per tenant from approved
+    # definitions, so nothing loads at startup. These tests are about the MCP boundary,
+    # not about where a definition is stored, so the example pack is injected directly.
+    from src.api.deps import load_example_pack
+    from src.metrics.models import StaticCatalog
+    from src.query.metric_matcher import MetricMatcher
+
+    pack = load_example_pack()
+    if pack:
+        services.metric_matcher = MetricMatcher(pack, StaticCatalog(tables={}))
+
     services.authenticator._verifier = _FakeVerifier()
     services.authenticator.access.screen(
         TENANT_A,
@@ -215,8 +229,7 @@ class TestToolListing:
 
 class TestAsk:
     def test_reports_the_tier_that_answered(self):
-        body = _call(TOKEN_A, "ask", {"question": "show me fees billed by month"}) \
-            .structuredContent
+        body = _call(TOKEN_A, "ask", {"question": "show me fees billed by month"}).structuredContent
         assert body["tier_name"] == "GOVERNED_METRIC"
         assert body["governed"] is True
         assert "SELECT" in body["sql"]
@@ -225,15 +238,17 @@ class TestAsk:
         """The audit trail an agent's answer rests on. Without these ids, a tool answer is
         less defensible than the same answer given by a human."""
         _stage(TENANT_A, matter_id="M-1")
-        body = _call(TOKEN_A, "ask", {"question": "which topics does document d1 concern"}) \
-            .structuredContent
+        body = _call(
+            TOKEN_A, "ask", {"question": "which topics does document d1 concern"}
+        ).structuredContent
         assert body["tier_name"] == "GRAPH_TRAVERSAL"
         assert body["assertions_used"]
 
     def test_every_assertion_used_resolves_to_provenance(self):
         _stage(TENANT_A, matter_id="M-1")
-        body = _call(TOKEN_A, "ask", {"question": "which topics does document d1 concern"}) \
-            .structuredContent
+        body = _call(
+            TOKEN_A, "ask", {"question": "which topics does document d1 concern"}
+        ).structuredContent
         for aid in body["assertions_used"]:
             prov = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}).structuredContent
             assert prov["assertion"]["source"]["quote"]
@@ -278,10 +293,12 @@ class TestTenantIsolation:
         _stage(TENANT_A, matter_id="M-A")
         _stage(TENANT_B, matter_id="M-B")
         a_matters = {
-            r["matter_id"] for r in _call(TOKEN_A, "search_assertions").structuredContent["assertions"]
+            r["matter_id"]
+            for r in _call(TOKEN_A, "search_assertions").structuredContent["assertions"]
         }
         b_matters = {
-            r["matter_id"] for r in _call(TOKEN_B, "search_assertions").structuredContent["assertions"]
+            r["matter_id"]
+            for r in _call(TOKEN_B, "search_assertions").structuredContent["assertions"]
         }
         assert a_matters == {"M-A"}
         assert b_matters == {"M-B"}
@@ -296,8 +313,7 @@ class TestTenantIsolation:
 
     def test_neighbourhood_does_not_cross_tenants(self):
         _stage(TENANT_B, matter_id="M-B")
-        body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}) \
-            .structuredContent
+        body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}).structuredContent
         assert body["edges"] == []
 
     def test_cross_tenant_refusal_stays_silent(self):
@@ -474,15 +490,17 @@ class TestProvenance:
     def test_returns_file_page_and_quote(self):
         """File, page, quote — what a lawyer would use to check it by hand."""
         aid = _stage(TENANT_A, matter_id="M-1")
-        source = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}) \
-            .structuredContent["assertion"]["source"]
+        source = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}).structuredContent[
+            "assertion"
+        ]["source"]
         assert (source["filename"], source["page"]) == ("skeleton.pdf", 7)
         assert source["quote"] == "the parties agree"
 
     def test_explanation_avoids_jargon(self):
         aid = _stage(TENANT_A, matter_id="M-1", klass=EpistemicClass.EXTRACTED_MODEL)
-        explanation = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}) \
-            .structuredContent["explanation"]
+        explanation = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}).structuredContent[
+            "explanation"
+        ]
         assert "AI model" in explanation
         assert "epistemic" not in explanation.lower()
 
@@ -507,8 +525,9 @@ class TestProvenance:
         )
         services.review_queue.stage(ctx, [inferred])
 
-        body = _call(TOKEN_A, "get_provenance", {"assertion_id": inferred.assertion_id}) \
-            .structuredContent
+        body = _call(
+            TOKEN_A, "get_provenance", {"assertion_id": inferred.assertion_id}
+        ).structuredContent
         assert body["rule_id"] == "conflict_check"
         assert [p["assertion_id"] for p in body["premises"]] == [premise]
         assert body["premises"][0]["visible"] is True
@@ -564,23 +583,19 @@ class TestDescribeOntology:
 class TestGraphNeighbourhood:
     def test_returns_edges_around_a_node(self):
         _stage(TENANT_A, matter_id="M-1")
-        body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}) \
-            .structuredContent
+        body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}).structuredContent
         assert body["edges"]
         assert body["confidence_floor"] == 0.8
 
     def test_depth_is_bounded(self):
-        result = _call(
-            TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1", "depth": 9}
-        )
+        result = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1", "depth": 9})
         assert result.isError
 
     def test_below_floor_edges_are_excluded(self):
         """`graph_neighbourhood` is the defensible view; `search_assertions` is the raw one.
         A weak claim appearing here would blur that distinction."""
         _stage(TENANT_A, matter_id="M-1", confidence=0.4)
-        body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}) \
-            .structuredContent
+        body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}).structuredContent
         assert body["edges"] == []
 
 
@@ -595,6 +610,5 @@ class TestKillSwitch:
 
     def test_governed_metric_is_unaffected(self):
         get_services().settings_for(TENANT_A).block_ungoverned_queries = True
-        body = _call(TOKEN_A, "ask", {"question": "show me fees billed by month"}) \
-            .structuredContent
+        body = _call(TOKEN_A, "ask", {"question": "show me fees billed by month"}).structuredContent
         assert body["tier_name"] == "GOVERNED_METRIC"
