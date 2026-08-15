@@ -3,7 +3,7 @@
 
    Every page is a complete HTML file so it can be opened directly from disk.
    The sidebar is rendered from the PAGES array below rather than copied into
-   eleven files, so adding a page means editing one list.
+   twelve files, so adding a page means editing one list.
 
    No fetch(), no modules, no build step — a browser reading file:// will not
    fetch a sibling JSON file, and it will not load an ES module from disk
@@ -25,6 +25,7 @@ var PAGES = [
     { file: 'asking-questions.html', title: 'Asking questions' },
     { file: 'review.html', title: 'Reviewing claims' },
     { file: 'governance.html', title: 'Governance settings' },
+    { file: 'demo-data.html', title: 'Loading the demo data' },
   ]},
   { group: 'Reference', items: [
     { file: 'glossary.html', title: 'Glossary' },

@@ -193,6 +193,81 @@ class UserAdmin:
         logger.info("invited %s into tenant %s (owner %s)", email, tenant_id, admin_sub)
         return entry
 
+    def sync_from_cognito(self, tenant_id: str, directory: Any) -> dict[str, int]:
+        """Reconcile the DynamoDB cache against Cognito, in both directions.
+
+        Cognito is the source of truth for *existence*; DynamoDB is a cache keyed by tenant so
+        a list does not mean paging the whole pool. Reconciling on read rather than on a
+        schedule means a user deleted straight from the Cognito console disappears on the next
+        admin page load, instead of lingering until a sweep runs.
+
+        The paging caveat that makes this necessary: `ListUsers` returns up to 60 users of the
+        *whole pool*, so filtering to one tenant afterwards can return fewer of a firm's users
+        than exist once several tenants share the pool. The cache is what makes a tenant-scoped
+        list correct rather than merely fast.
+        """
+        counts = {"added": 0, "removed": 0, "unchanged": 0}
+        live = {e.user_id: e for e in self._all_pool_users() if e.tenant_id == tenant_id}
+        cached = {e.sub for e in directory.users_for_tenant(tenant_id)}
+
+        for sub, entry in live.items():
+            if sub in cached:
+                counts["unchanged"] += 1
+                continue
+            directory.put_user(sub, tenant_id, email=entry.email)
+            counts["added"] += 1
+
+        # Deleted in Cognito, so the cache row is a ghost: it would list a user who cannot
+        # sign in and whose sub resolves to nothing.
+        for sub in cached - set(live):
+            directory.forget_user(sub)
+            counts["removed"] += 1
+
+        if counts["added"] or counts["removed"]:
+            logger.info("synced %s users for %s: %s", len(live), tenant_id, counts)
+        return counts
+
+    def _all_pool_users(self) -> list[DirectoryEntry]:
+        """Every user in the pool, paged. Used only by the sync, never on a request path."""
+        entries: list[DirectoryEntry] = []
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"UserPoolId": self.user_pool_id, "Limit": MAX_PAGE}
+            if token:
+                kwargs["PaginationToken"] = token
+            got = self.client.list_users(**kwargs)
+            entries.extend(_entry(u) for u in got.get("Users", []))
+            token = got.get("PaginationToken")
+            if not token:
+                return entries
+
+    def delete_user(self, email: str, *, tenant_id: str, directory: Any | None = None) -> None:
+        """Remove a user from Cognito and from the cache.
+
+        Cognito first. If that fails the user still exists and must stay listed, whereas
+        dropping the cache row first would hide a live account from the only screen that can
+        manage it.
+        """
+        try:
+            found = self.client.admin_get_user(UserPoolId=self.user_pool_id, Username=email)
+        except Exception as e:
+            raise UserAdminError(f"no account for {email}: {e}") from e
+
+        sub = _attr(found, "sub") or str(found.get("Username", ""))
+        if _attr(found, "custom:tenant_id") not in ("", tenant_id):
+            # Refused rather than reported as missing: an admin acting on their own tenant
+            # should never be able to delete another firm's user by guessing an address.
+            raise UserAdminError(f"no account for {email}")
+
+        try:
+            self.client.admin_delete_user(UserPoolId=self.user_pool_id, Username=email)
+        except Exception as e:
+            raise UserAdminError(f"could not delete {email}: {e}") from e
+
+        if directory is not None and sub:
+            directory.forget_user(sub)
+        logger.info("deleted user %s from tenant %s", email, tenant_id)
+
     def list_my_users(self, admin_sub: str, *, limit: int = MAX_PAGE) -> list[DirectoryEntry]:
         """Users this admin created. Empty when they have created none."""
         try:

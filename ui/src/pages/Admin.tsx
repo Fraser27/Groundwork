@@ -36,6 +36,7 @@ export default function Admin() {
   const [newEmail, setNewEmail] = useState('')
   const [newIsAdmin, setNewIsAdmin] = useState(false)
   const [inviting, setInviting] = useState(false)
+  const [removing, setRemoving] = useState<string | null>(null)
   const [scope, setScope] = useState<ResetScope>({
     graph: true,
     vectors: true,
@@ -121,6 +122,25 @@ export default function Admin() {
       showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
     } finally {
       setInviting(false)
+    }
+  }
+
+  const removeUser = async (email: string) => {
+    if (
+      !confirm(
+        `Delete ${email}?\n\nThe account is removed from the directory and they can no longer sign in. Re-inviting them creates a new account, so anything recorded against the old one keeps naming an identity that no longer exists.`,
+      )
+    )
+      return
+    setRemoving(email)
+    try {
+      await api.deleteUser(tenant, email)
+      showToast(`${email} deleted.`)
+      loadUsers()
+    } catch (e) {
+      showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
+    } finally {
+      setRemoving(null)
     }
   }
 
@@ -257,6 +277,7 @@ export default function Admin() {
                 <th>Email</th>
                 <th>Status</th>
                 <th>Invited</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -270,6 +291,15 @@ export default function Admin() {
                     </span>
                   </td>
                   <td className="muted">{fmtDateTime(u.created_at)}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      disabled={removing === u.email}
+                      onClick={() => removeUser(u.email)}
+                    >
+                      {removing === u.email ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

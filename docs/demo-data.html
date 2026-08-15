@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loading the demo data — LexGraph documentation</title>
+<meta name="description" content="Five interlocking matters that go through the real ingest pipeline, and how to wipe them again.">
+<link rel="stylesheet" href="assets/docs.css">
+<script src="assets/nav.js"></script>
+<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+</head>
+<body>
+<div class="layout">
+<aside id="sidebar" class="sidebar"></aside>
+<main>
+
+<p class="eyebrow">Using it</p>
+<h1>Loading the demo data</h1>
+<p class="lede">An empty LexGraph cannot demonstrate anything, because the whole point of the system is
+what happens when facts from different documents meet. Five matters ship with it for that reason, and
+they are deliberately entangled.</p>
+
+<h2 id="loading">Loading it</h2>
+
+<p>Sign in as an administrator and use <strong>Admin</strong>, then <strong>Load sample data</strong>.
+The documents are PDFs, committed to the repository as <code>sample/legal-demo.zip</code> so that a
+fresh checkout needs no PDF toolchain to run the demo.</p>
+
+<div class="note">
+<div class="note-title">They are not seeded facts</div>
+<p>The files are uploaded to the document bucket and then go through the same pipeline as anything a
+lawyer uploads: each page is rasterised, transcribed by a vision model, split into chunks that keep
+their character offsets, embedded, and read for claims. Nothing is written into the graph directly.</p>
+<p>That distinction is the reason to load them at all. Every assertion that appears afterwards resolves
+to a page and a verbatim sentence on the <a href="provenance.html">Provenance</a> screen, because it was
+genuinely read out of a document rather than declared by a fixture. A seeded demo would show the
+screens working and prove nothing about the system behind them.</p>
+</div>
+
+<h2 id="the-matters">What is in them</h2>
+
+<p>Three matters across five documents:</p>
+
+<table>
+<thead><tr><th>Matter</th><th>Document</th><th>What it puts in the graph</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>NTL-2026-0114</code></td>
+  <td>Engagement letter</td>
+  <td>The client, the adverse party, and a scope exclusion — an engagement that is narrower than the
+  client might assume.</td>
+</tr>
+<tr>
+  <td><code>NTL-2026-0114</code></td>
+  <td>Advice on prospects</td>
+  <td>Reliance on an authority, <code>The Aquitaine [2019]</code>.</td>
+</tr>
+<tr>
+  <td><code>NTL-2026-0114</code></td>
+  <td>Conflict memorandum</td>
+  <td>An ethical screen, with the reason recorded.</td>
+</tr>
+<tr>
+  <td><code>MBC-2024-0431</code></td>
+  <td>Facility agreement</td>
+  <td>Meridian as a client here, and a shareholder of the adverse party in the matter above.</td>
+</tr>
+<tr>
+  <td><code>HAL-2025-0092</code></td>
+  <td>Authority note</td>
+  <td><code>The Marisol [2025]</code> overruling <code>The Aquitaine</code>.</td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="what-to-look-for">What to look for once it has loaded</h2>
+
+<p>Two things become true that were not true of any single document, and neither is visible to a reader
+of one file:</p>
+
+<ol>
+<li><strong>A conflict.</strong> Meridian is a client in one matter and a shareholder of the adverse
+party in another. No document says this. It is what the graph says once both are in it, which is why
+conflict checking is cross-matter by definition and why tenants get one graph rather than one per
+matter.</li>
+<li><strong>A stale authority.</strong> Advice in the first matter rests on <code>The Aquitaine</code>,
+and a document filed under a different matter records that it has been overruled. The advice was
+correct when written. That is exactly the case bitemporal fields exist to express: the world changed,
+not the record of it.</li>
+</ol>
+
+<p>Both facts arrive as <span class="badge inferred">INFERRED</span>, so each carries the proof tree
+that produced it. Follow it and you reach the two documents and the sentences in them, which is the
+answer to <em>why does the system believe this</em> in its concrete form.</p>
+
+<div class="note example">
+<div class="note-title">A question worth asking first</div>
+<p>Ask <em>"are there any conflicts on the Northern Trade matter?"</em> before loading the fifth
+document, then again afterwards. The answer changes, and the citation shows which document changed
+it.</p>
+</div>
+
+<h2 id="starting-again">Starting again</h2>
+
+<p><strong>Admin</strong>, then <strong>Reset</strong> takes the derived layers away: the graph, the
+search index, ingest job history, and the cached catalog schemas. It ticks what to remove, so a wipe can
+be partial.</p>
+
+<p>None of that touches S3. The bucket is the source of truth, so <strong>Replay</strong> rebuilds
+every document from it and <strong>Scan catalog</strong> rebuilds the schemas from Glue. A bad
+extraction run is a re-run, not a data-loss event.</p>
+
+<div class="note warn">
+<div class="note-title">Metric definitions are the exception</div>
+<p>They are kept by default, and deleting them needs the box ticked <em>and</em> a separate
+confirmation. Everything else in a reset has an upstream source that can regenerate it; a metric was
+authored by a person in the application and has none. Nothing rebuilds it, so the warning says so in
+those words rather than asking "are you sure".</p>
+</div>
+
+<h2 id="api">Over the API</h2>
+
+<pre><code>curl -X POST -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/tenants/$TENANT/admin/sample-data"</code></pre>
+
+<p>The PDFs are generated by <code>sample/generate_demo_pdfs.py</code> and the zip is committed. Edit
+the script and re-run it to change what the demo asserts.</p>
+
+</main>
+</div>
+<script src="search-index.js"></script>
+<script src="search.js"></script>
+</body>
+</html>

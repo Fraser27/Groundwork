@@ -30,11 +30,36 @@ logger = logging.getLogger(__name__)
 
 SAMPLE_DIR = Path(__file__).resolve().parents[1] / "sample" / "documents"
 
-#: The matter every sample document belongs to. One matter, so matter-scoped reads and the
-#: ethical wall in the conflict memo are both demonstrable.
+#: Five demo matters as PDFs, committed so a fresh clone needs no PDF toolchain. Regenerate
+#: with `python sample/generate_demo_pdfs.py` when the content changes.
+SAMPLE_ZIP = Path(__file__).resolve().parents[1] / "sample" / "legal-demo.zip"
+
+#: The default matter, used for a document whose filename carries no matter reference.
 SAMPLE_MATTER_ID = "NTL-2026-0114"
 
 SAMPLE_MATTER_NAME = "Northwind Trading Ltd v Calder Shipping AG"
+
+#: What each demo matter is, for the load report. The three NTL documents share a matter on
+#: purpose: an engagement, the advice given under it, and the conflict check that preceded
+#: it, so matter-scoped reads and the ethical wall are both demonstrable.
+SAMPLE_MATTERS = {
+    "NTL-2026-0114": "Northwind Trading Ltd v Calder Shipping AG",
+    "MBC-2024-0431": "Meridian Bulk Carriers SA: secured facility",
+    "HAL-2025-0092": "Halveston Chartering Ltd: know-how",
+}
+
+
+def _matter_of(filename: str) -> str:
+    """The matter a demo document belongs to, read from its filename.
+
+    Encoding it in the name keeps the mapping visible in the zip rather than in a table
+    somebody has to find, and a document added to the zip needs no code change.
+    """
+    stem = filename.rsplit("/", 1)[-1]
+    for matter_id in SAMPLE_MATTERS:
+        if stem.startswith(matter_id):
+            return matter_id
+    return SAMPLE_MATTER_ID
 
 
 @dataclass
@@ -56,6 +81,7 @@ class SampleLoadReport:
             "assertions_pending": self.assertions_pending,
             "chunks": self.chunks,
             "matter_id": self.matter_id,
+            "matters": SAMPLE_MATTERS,
             "errors": self.errors,
             "documents": self.details,
             "note": (
@@ -67,14 +93,29 @@ class SampleLoadReport:
 
 
 def sample_documents() -> list[tuple[str, bytes]]:
-    """The shipped documents, as (filename, bytes).
+    """The shipped demo documents, as (filename, bytes).
 
-    Read from disk rather than embedded in this module so they can be opened, diffed and
-    corrected like the documents they are.
+    Prefers the PDF zip, which is the realistic demo: PDFs go through page rasterisation and
+    the vision model, which is the path a real upload takes. Falls back to the plain-text
+    documents so the demo still loads on a deployment with no Bedrock access, where a PDF
+    could be stored but never read.
     """
-    if not SAMPLE_DIR.is_dir():
-        return []
-    return [(path.name, path.read_bytes()) for path in sorted(SAMPLE_DIR.glob("*.txt"))]
+    import zipfile
+
+    if SAMPLE_ZIP.is_file():
+        try:
+            with zipfile.ZipFile(SAMPLE_ZIP) as archive:
+                return [
+                    (name, archive.read(name))
+                    for name in sorted(archive.namelist())
+                    if name.lower().endswith(".pdf")
+                ]
+        except (zipfile.BadZipFile, OSError) as e:
+            logger.warning("could not read %s: %s", SAMPLE_ZIP, e)
+
+    if SAMPLE_DIR.is_dir():
+        return [(path.name, path.read_bytes()) for path in sorted(SAMPLE_DIR.glob("*.txt"))]
+    return []
 
 
 def load_sample_data(
@@ -97,19 +138,27 @@ def load_sample_data(
     runner = _require_runner(services)
 
     for filename, body in documents:
+        matter_id = _matter_of(filename)
+        is_pdf = filename.lower().endswith(".pdf")
         try:
             doc = runner.storage.put_document(
                 ctx,
                 filename=filename,
                 body=body,
-                matter_id=SAMPLE_MATTER_ID,
-                media_type="text/plain",
+                matter_id=matter_id,
+                media_type="application/pdf" if is_pdf else "text/plain",
             )
             parsed = services_parse(services, doc, body)
+            if parsed is None:
+                report.documents_skipped += 1
+                report.errors.append(
+                    f"{filename}: stored, but no vision model is available to read it"
+                )
+                continue
             result = runner.pipeline(
                 ctx,
                 parsed,
-                matter_id=SAMPLE_MATTER_ID,
+                matter_id=matter_id,
                 run_model_extraction=run_model_extraction,
                 job_id=doc.document_id,
             )
@@ -121,6 +170,7 @@ def load_sample_data(
                 {
                     "filename": filename,
                     "document_id": doc.document_id,
+                    "matter_id": matter_id,
                     "chunks": result.get("chunks"),
                     "extraction": result.get("extraction"),
                 }

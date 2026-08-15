@@ -347,6 +347,17 @@ async def list_users(
     ctx, _ = principal
     admin = _require_user_admin(services)
 
+    # Reconcile the cache on read. Cognito owns whether a user exists, DynamoDB makes
+    # "who is in this tenant" a query rather than a scan of the whole pool, and doing this
+    # here means a user deleted straight from the Cognito console disappears on the next page
+    # load instead of lingering until a scheduled sweep runs.
+    synced: dict[str, int] = {}
+    if scope == "tenant" and services.tenant_directory is not None:
+        try:
+            synced = admin.sync_from_cognito(ctx.tenant_id, services.tenant_directory)
+        except UserAdminError as e:
+            logger.warning("could not sync the user cache: %s", e)
+
     try:
         entries = (
             admin.list_my_users(ctx.user_id)
@@ -358,6 +369,7 @@ async def list_users(
 
     return {
         "scope": scope,
+        "synced": synced,
         "users": [
             {
                 "user_id": e.user_id,
@@ -369,4 +381,34 @@ async def list_users(
             }
             for e in entries
         ],
+    }
+
+
+@router.delete("/tenants/{tenant}/users/{email}")
+async def delete_user(services: ServicesDep, principal: TenantDep, email: str) -> dict[str, Any]:
+    """Remove a user from Cognito and from the tenant cache.
+
+    Cognito first, then the cache. If Cognito fails the account still exists and must stay
+    listed, whereas dropping the cache row first would hide a live account from the only
+    screen that can manage it.
+
+    An address outside the caller's own tenant is refused the same way as one that does not
+    exist: an admin must not be able to discover another firm's users by guessing.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    admin = _require_user_admin(services)
+
+    try:
+        admin.delete_user(email, tenant_id=ctx.tenant_id, directory=services.tenant_directory)
+    except UserAdminError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
+
+    return {
+        "email": email,
+        "deleted": True,
+        "note": (
+            "Removed from Cognito and from the tenant directory. Any documents they uploaded "
+            "remain, and the audit trail of what they did is unchanged."
+        ),
     }

@@ -43,6 +43,7 @@ PAGES = [
     "asking-questions.html",
     "review.html",
     "governance.html",
+    "demo-data.html",
     "glossary.html",
     "architecture.html",
 ]

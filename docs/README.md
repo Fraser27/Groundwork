@@ -29,6 +29,7 @@ docs/
   asking-questions.html    The four resolution tiers and the kill switch
   review.html              The review queue and what approving means
   governance.html          Every setting, and the cap/floor invariant
+  demo-data.html           The five sample matters, and resetting them
   glossary.html            Every term in plain language
   architecture.html        The six stacks, the stores, local development
 
@@ -45,7 +46,7 @@ That is what makes the site work from `file://`: a shell that fetched fragments 
 hit the same cross-origin restriction described below, and deep links would break.
 
 The sidebar is rendered from the `PAGES` array in `assets/nav.js`, so it stays
-consistent across all eleven pages without being copied into each one.
+consistent across all twelve pages without being copied into each one.
 
 ## Regenerating the search index
 
@@ -58,7 +59,7 @@ python3 docs/build-index.py
 It prints what it indexed, so a page that stopped being picked up is visible:
 
 ```
-indexed 11 pages, 80 sections, 20,035 words
+indexed 12 pages, 85 sections, 20,741 words
 wrote search-index.json and search-index.js
 ```
 

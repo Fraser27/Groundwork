@@ -348,6 +348,15 @@ export class DataStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // "Who is in this tenant" has to be a query. Cognito's ListUsers pages over the whole
+    // pool, so filtering to one tenant afterwards can return fewer of a firm's users than
+    // exist once several tenants share the pool. This index is what makes the cache correct
+    // rather than merely fast. Adding a GSI is an in-place update, unlike a key change.
+    tenants.addGlobalSecondaryIndex({
+      indexName: 'TenantIndex',
+      partitionKey: { name: 'tenant', type: dynamodb.AttributeType.STRING },
+    });
+
     // Ingest job state. Keys are owned by `src/documents/job_store.py`:
     //   PK = TENANT#{t}    SK = JOB#{job_id}
     //   GSI1PK = TENANT#{t}#DOC#{document_id}

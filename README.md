@@ -205,6 +205,52 @@ Symptom to recognise: the API returns 401 for a tenant the user never chose — 
 falls back to a default tenant id when the claim is absent, and the token then does not
 match it.
 
+## Loading the demo data
+
+Five interlocking matters ship as PDFs in `sample/legal-demo.zip`. They are committed so a
+fresh clone needs no PDF toolchain, and they are regenerated with:
+
+```bash
+.venv/bin/python sample/generate_demo_pdfs.py
+```
+
+To load them, sign in as a `platform-admin` and use **Admin, then Load sample data**. That
+uploads each PDF to the document bucket and runs the real ingest pipeline over it: pages are
+rasterised, transcribed by the vision model, chunked, embedded and extracted. Nothing is
+seeded straight into the graph, so every resulting assertion cites a page and a verbatim span
+that the Provenance page can resolve.
+
+The same thing over the API:
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/tenants/$TENANT/admin/sample-data"
+```
+
+The five matters are deliberately connected, because a demo whose facts do not interlock
+cannot show what this system is for:
+
+| Matter | Document | What it demonstrates |
+|---|---|---|
+| `NTL-2026-0114` | Engagement letter | Client, adverse party, an excluded scope |
+| `NTL-2026-0114` | Advice on prospects | Cites `The Aquitaine [2019]` |
+| `NTL-2026-0114` | Conflict memorandum | Raises the ethical screen |
+| `MBC-2024-0431` | Facility agreement | Meridian is a client *and* a shareholder of the adverse party |
+| `HAL-2025-0092` | Authority note | `The Marisol [2025]` overrules `The Aquitaine` |
+
+So a conflict check fires because Meridian appears on both sides, and the stale-authority rule
+fires because one matter's advice rests on a case another matter records as overruled.
+
+### Starting again
+
+**Admin, then Reset** removes the derived tiers: the graph, the search index, job state and
+the catalog cache. S3 is untouched, so **Replay** rebuilds every document from the bucket and
+**Scan catalog** rebuilds the schemas from Glue.
+
+Metric definitions are the exception and are preserved by default. They were authored in the
+app and have no upstream source, so nothing rebuilds them. Deleting them needs the metrics box
+ticked *and* a separate confirmation.
+
 ## Storage: hybrid reification
 
 ```

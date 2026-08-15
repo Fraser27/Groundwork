@@ -30,6 +30,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,11 @@ logger = logging.getLogger(__name__)
 KEY_ATTR = "tenant_id"
 USER_PREFIX = "USER#"
 
+#: The attribute the tenant index partitions on. Named `tenant` because `tenant_id` is taken
+#: by the table's own key, which holds an entity key rather than a tenant.
+TENANT_GSI_ATTR = "tenant"
+TENANT_GSI = "TenantIndex"
+
 #: Short enough that revoking access is measured in seconds, long enough that a burst of
 #: requests from one user is a single read.
 CACHE_TTL_SECONDS = 300
@@ -55,6 +61,15 @@ class TableLike(Protocol):
     def get_item(self, **kwargs: Any) -> dict[str, Any]: ...
     def put_item(self, **kwargs: Any) -> dict[str, Any]: ...
     def query(self, **kwargs: Any) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class UserRecord:
+    """A cached user-to-tenant binding."""
+
+    sub: str
+    tenant_id: str
+    email: str = ""
 
 
 class UnknownUser(LookupError):
@@ -81,7 +96,9 @@ class TenantDirectory:
         table_factory: Callable[[], TableLike] | None = None,
         ttl_seconds: int = CACHE_TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        index_name: str = TENANT_GSI,
     ) -> None:
+        self.index_name = index_name
         self.table_name = table_name
         self.ttl_seconds = ttl_seconds
         self._table = table
@@ -139,6 +156,38 @@ class TenantDirectory:
         with self._lock:
             self._cache.pop(sub, None)
 
+    def users_for_tenant(self, tenant_id: str) -> list[UserRecord]:
+        """Everyone bound to a tenant, from the GSI.
+
+        A query, not a scan. This is the read that makes a tenant-scoped user list correct as
+        well as fast: Cognito's `ListUsers` pages over the *whole pool*, so filtering to one
+        tenant afterwards can return fewer of a firm's users than exist.
+        """
+        got = self.table.query(
+            IndexName=self.index_name,
+            KeyConditionExpression="#t = :tenant",
+            ExpressionAttributeNames={"#t": TENANT_GSI_ATTR},
+            ExpressionAttributeValues={":tenant": tenant_id},
+        )
+        return [
+            UserRecord(
+                sub=str(item.get("sub", "")),
+                tenant_id=str(item.get("tenant", "")),
+                email=str(item.get("email", "")),
+            )
+            for item in got.get("Items", [])
+        ]
+
+    def forget_user(self, sub: str) -> None:
+        """Delete a binding outright.
+
+        Called when a user no longer exists in Cognito. A stale row would list somebody who
+        cannot sign in, and would resolve a `sub` that authenticates to nothing.
+        """
+        self.table.delete_item(Key={KEY_ATTR: user_key(sub)})
+        self.forget(sub)
+        logger.info("removed tenant binding for %s", sub)
+
     def _cached(self, sub: str) -> str | None:
         with self._lock:
             hit = self._cache.get(sub)
@@ -171,4 +220,12 @@ class StaticTenantDirectory:
         self._bindings[sub] = tenant_id
 
     def forget(self, sub: str) -> None:
+        self._bindings.pop(sub, None)
+
+    def users_for_tenant(self, tenant_id: str) -> list[UserRecord]:
+        return [
+            UserRecord(sub=sub, tenant_id=t) for sub, t in self._bindings.items() if t == tenant_id
+        ]
+
+    def forget_user(self, sub: str) -> None:
         self._bindings.pop(sub, None)
