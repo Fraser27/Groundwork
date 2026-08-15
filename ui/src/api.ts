@@ -856,7 +856,12 @@ export const api = {
       as_of?: string
       limit?: number
     } = {},
-  ) => request<Assertion[]>(`/tenants/${tenant}/assertions${q(opts)}`),
+  ) =>
+    // The endpoint returns {assertions, total, confidence_floor}. Typing it as a bare array
+    // made `.filter` a runtime crash that the compiler could not see.
+    request<{ assertions: Assertion[] }>(`/tenants/${tenant}/assertions${q(opts)}`).then(
+      (r) => r.assertions ?? [],
+    ),
 
   approveAssertion: (tenant: string, id: string, note?: string) =>
     request<Assertion>(`/tenants/${tenant}/assertions/${id}/approve`, {
@@ -892,7 +897,18 @@ export const api = {
   query: (
     tenant: string,
     body: { question: string; matter_id?: string; as_of?: string; min_confidence?: number },
-  ) => request<QueryResult>(`/tenants/${tenant}/query`, { method: 'POST', body: JSON.stringify(body) }),
+  ) =>
+    request<QueryResult>(`/tenants/${tenant}/query`, {
+      method: 'POST',
+      // The API field is `query`. Sending `question` produced a 422 naming a field the UI
+      // never showed the user.
+      body: JSON.stringify({
+        query: body.question,
+        matter_id: body.matter_id,
+        as_of: body.as_of,
+        min_confidence: body.min_confidence,
+      }),
+    }),
 
   neighbourhood: (
     tenant: string,
@@ -947,7 +963,12 @@ export const api = {
       body: JSON.stringify({}),
     }),
 
-  listAccessUsers: (tenant: string) => request<DirectoryUser[]>(`/tenants/${tenant}/access/users`),
+  listAccessUsers: (tenant: string) =>
+    // /access/users/{id} is one user's grants; the directory is /users, which returns
+    // {scope, users}.
+    request<{ users: DirectoryUser[] }>(`/tenants/${tenant}/users?scope=tenant`).then(
+      (r) => r.users ?? [],
+    ),
   getUserAccess: (tenant: string, userId: string) =>
     request<UserAccess>(`/tenants/${tenant}/access/users/${encodeURIComponent(userId)}`),
   getMatterAccess: (tenant: string, matterId: string) =>

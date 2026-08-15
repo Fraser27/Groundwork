@@ -57,9 +57,12 @@ export class WebStack extends cdk.Stack {
       code: cloudfront.FunctionCode.fromInline(`
 function handler(event) {
   var uri = event.request.uri;
-  // A dot in the last segment means a real asset (.js, .css, .json, .svg).
-  var last = uri.substring(uri.lastIndexOf('/') + 1);
-  if (last.indexOf('.') === -1) event.request.uri = '/index.html';
+  // Assets live under /assets/ or are a known top-level file. Testing for "contains a dot"
+  // instead sent /tables/aemo.price_demand to S3, where it 403'd: a table's full name is
+  // database.table, so a legitimate SPA route can contain a dot.
+  var isAsset = uri.indexOf('/assets/') === 0 ||
+    /\.(js|css|map|json|svg|png|jpg|jpeg|gif|ico|webp|woff2?|ttf|eot|txt|xml)$/i.test(uri);
+  if (!isAsset) event.request.uri = '/index.html';
   return event.request;
 }
       `),
