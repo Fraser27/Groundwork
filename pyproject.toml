@@ -26,6 +26,9 @@ dependencies = [
     # AGPL-3.0, and used only to rasterise a PDF page to PNG. Must be swapped before
     # commercial release; `PyMuPDFRenderer` isolates it so that is a one-class change.
     "pymupdf>=1.24",
+    # SigV4-signed client for OpenSearch Serverless. Without it embeddings fall back to
+    # process memory and are lost on every deploy, while the provisioned collection bills.
+    "opensearch-py>=2.6",
 ]
 
 [project.optional-dependencies]

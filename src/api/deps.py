@@ -242,6 +242,33 @@ def _build_job_store(cfg: LexGraphConfig) -> InMemoryJobStore | DynamoJobStore:
     return DynamoJobStore(cfg.tables.jobs)
 
 
+def _build_vector_store(cfg: LexGraphConfig) -> object:
+    """OpenSearch when an endpoint is configured, memory otherwise.
+
+    This used to build the in-memory store unconditionally, so a deployed system with a
+    provisioned collection still held its embeddings in one task's memory and lost them on every
+    deploy. Falls back rather than raising if the client cannot be built: search degrading to
+    keyword-only is worse than vector search but far better than an API that will not start.
+    """
+    if not cfg.vector.endpoint:
+        # Reachable: `vector.enabled` is the caller's gate, but a helper that silently returns
+        # an OpenSearch client pointed at "" would fail on first search rather than here.
+        return InMemoryVectorStore()
+    try:
+        from src.documents.opensearch_store import OpenSearchVectorStore
+
+        store = OpenSearchVectorStore(
+            endpoint=cfg.vector.endpoint,
+            region=cfg.vector.region,
+            dimensions=cfg.vector.embedding_dimensions,
+        )
+        logger.info("vectors backed by OpenSearch at %s", cfg.vector.endpoint)
+        return store
+    except Exception as e:
+        logger.warning("OpenSearch unavailable (%s), vectors held in process", e)
+        return InMemoryVectorStore()
+
+
 def build_services(config: LexGraphConfig | None = None) -> Services:
     cfg = config or load_config()
     store = InMemoryAssertionStore()
@@ -256,7 +283,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
         # Only constructed when an endpoint is configured; Bedrock is reached lazily
         # so a missing credential surfaces on first use rather than at boot.
         embedder = Embedder(
-            InMemoryVectorStore(),
+            _build_vector_store(cfg),
             model_id=cfg.vector.embedding_model,
             dimensions=cfg.vector.embedding_dimensions,
         )
