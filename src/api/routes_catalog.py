@@ -20,7 +20,6 @@ from src.api.deps import ServicesDep, TenantDep, require_admin
 from src.discovery.catalog_store import CatalogTable
 from src.discovery.glue_scanner import scan_catalog
 from src.graph.assertions import EpistemicClass, ReviewState
-from src.metrics.compiler import compile_metric as compile_metric_to_sql
 from src.ontology.loader import ONTOLOGY_DIR, load_ontology
 from src.sample_data import load_sample_data
 
@@ -361,58 +360,6 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
     }
 
 
-@router.get("/tenants/{tenant}/metrics")
-async def list_metrics(services: ServicesDep, principal: TenantDep) -> list[dict[str, Any]]:
-    """Governed metrics. Empty when no pack is loaded, which disables tier 1."""
-    _ctx, _ = principal
-    matcher = services.metric_matcher
-    if matcher is None:
-        return []
-    return [_metric_out(m) for m in matcher.metrics]
-
-
-@router.get("/tenants/{tenant}/metrics/{metric_id}")
-async def get_metric(services: ServicesDep, principal: TenantDep, metric_id: str) -> dict[str, Any]:
-    _ctx, _ = principal
-    metric = _find_metric(services, metric_id)
-    return _metric_out(metric)
-
-
-@router.post("/tenants/{tenant}/metrics/{metric_id}/compile")
-async def compile_metric(
-    services: ServicesDep, principal: TenantDep, metric_id: str
-) -> dict[str, Any]:
-    """Compile a metric to SQL without running it.
-
-    The point of a governed metric is that a human can read exactly what it will do
-    before it touches the warehouse, so this is a first-class endpoint rather than a
-    debug affordance.
-    """
-    _ctx, _ = principal
-    metric = _find_metric(services, metric_id)
-    matcher = services.metric_matcher
-    if matcher is None:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no metric pack loaded")
-    try:
-        result = compile_metric_to_sql(metric, matcher.catalog)
-    except Exception as e:
-        # A metric that cannot compile is a definition problem an author can fix, so the
-        # compiler's own message is the useful part of the response.
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
-    return {
-        "metric_id": metric.metric_id,
-        "sql": result.sql,
-        "source_table": result.source_table,
-        "is_valid": result.is_valid,
-        "errors": result.errors,
-        "warnings": result.warnings,
-        "note": (
-            "Compiled from the metric definition with no model involved, so this SQL is "
-            "the same every time for the same definition."
-        ),
-    }
-
-
 class ScanRequest(BaseModel):
     source_id: str = Field(default="glue-main", min_length=1, max_length=128)
     databases: list[str] = Field(default_factory=list)
@@ -428,7 +375,7 @@ async def scan_sources(
 ) -> dict[str, Any]:
     """Scan Glue and declare what it finds into the graph.
 
-    Schemas only. No rows are read, so this is cheap and safe to re-run — the graph learns
+    Schemas only. No rows are read, so this is cheap and safe to re-run: the graph learns
     that a table exists and what shape it is, while the rows stay in the warehouse and are
     queried in place at answer time.
 

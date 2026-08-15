@@ -77,7 +77,7 @@ def _to_params(
         "joins_json": json.dumps([j.model_dump() for j in metric.joins]),
         "parameters_json": json.dumps([p.model_dump() for p in metric.parameters]),
         "base_metrics": list(metric.base_metrics),
-        "entity_columns_json": json.dumps(getattr(metric, "entity_columns", {}) or {}),
+        "entity_columns_json": json.dumps(metric.entity_columns or {}),
         "source": source,
     }
 
@@ -108,6 +108,7 @@ def _from_row(row: dict[str, Any]) -> MetricDefinition:
         joins=joins,
         parameters=parameters,
         base_metrics=list(row.get("base_metrics") or []),
+        entity_columns=json.loads(row.get("entity_columns_json") or "{}"),
     )
 
 
@@ -250,9 +251,18 @@ class GraphMetricStore:
     # ── Seeding ──────────────────────────────────────────────────────────────
 
     def seed_from_pack(
-        self, tenant_id: str, metrics: list[MetricDefinition], *, updated_by: str = "system"
+        self,
+        tenant_id: str,
+        metrics: list[MetricDefinition],
+        *,
+        updated_by: str = "system",
+        status: str = STATUS_DRAFT,
     ) -> dict[str, int]:
         """Load a YAML pack into the graph, without clobbering authored work.
+
+        Seeds as drafts by default. The shipped pack is example metrics for a fictional
+        firm, so putting them straight into service would have tier 1 answering questions
+        about tables a tenant may not own.
 
         A metric already marked `authored` is skipped: a deploy must not silently replace a
         definition someone wrote in the UI. Re-seeding an unchanged pack is otherwise a no-op
@@ -270,10 +280,13 @@ class GraphMetricStore:
                 tenant_id,
                 metric,
                 updated_by=updated_by,
-                # Seeded metrics arrive approved: they are the reviewed pack from the
-                # repository, and shipping them as drafts would leave tier 1 dead on a
-                # fresh deployment.
-                status=STATUS_APPROVED,
+                # Drafts, not approved. The shipped pack is a set of *examples* about a
+                # fictional firm, and it references tables like `legal_ops.invoices` that a
+                # real tenant may not have. Approving them on seed would let tier 1 match a
+                # question and compile SQL against a table that does not exist, which is a
+                # confident failure rather than an honest "no metric matched". An admin
+                # approves each one after checking it against their own catalog.
+                status=status,
                 source=SOURCE_YAML,
             )
             counts["created"] += 1

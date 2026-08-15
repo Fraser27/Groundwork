@@ -259,11 +259,23 @@ class TestStatus:
 
 
 class TestSeeding:
-    def test_a_pack_seeds_as_approved(self, store):
-        """A reviewed pack from the repository arriving as drafts would leave tier 1 dead on a
-        fresh deployment."""
+    def test_a_pack_seeds_as_drafts(self, store):
+        """The shipped pack is examples for a fictional firm, so seeding must not put them
+        into service. An admin approves each one after checking it against their catalog."""
         store.seed_from_pack(TENANT, [a_metric("m_1"), a_metric("m_2")])
-        assert len(store.list_metrics(TENANT, approved_only=True)) == 2
+        assert store.list_metrics(TENANT, approved_only=True) == []
+        assert len(store.list_metrics(TENANT)) == 2
+
+    def test_a_pack_can_be_seeded_approved_deliberately(self, store):
+        """An operator who has checked the pack may opt in, so the default is safe rather
+        than the behaviour impossible."""
+        store.seed_from_pack(TENANT, [a_metric("m_1")], status=STATUS_APPROVED)
+        assert len(store.list_metrics(TENANT, approved_only=True)) == 1
+
+    def test_seeded_metrics_are_visible_to_an_author(self, store):
+        """Drafts must still be listable, or an admin cannot find them to approve."""
+        store.seed_from_pack(TENANT, [a_metric("m_1")])
+        assert [m.metric_id for m in store.list_metrics(TENANT)] == ["m_1"]
 
     def test_seeding_does_not_clobber_authored_work(self, store):
         """A deploy must not silently replace a definition somebody wrote in the UI."""

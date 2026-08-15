@@ -142,6 +142,19 @@ class MetricDefinition(BaseModel):
     format: str = ""
     owner: str = ""
 
+    entity_columns: dict[str, str] = Field(default_factory=dict)
+    """Which result columns resolve to graph entities, as column -> node label.
+
+    The declared join between a warehouse row and a graph fact, and it has to be declared
+    rather than guessed. Matching a column's values to node names by string similarity
+    would silently mis-join "Northwind Ltd" and "Northwind Limited", or two clients with
+    the same trading name, and produce a confident, cited, wrong answer. A column absent
+    from here simply does not participate in composition, so a bad join is impossible by
+    omission rather than merely unlikely.
+
+    In practice the useful key is `matter_id`, which already exists on every chunk and
+    every assertion, so no normalisation is needed at all."""
+
     @field_validator("name")
     @classmethod
     def _name_is_identifier(cls, v: str) -> str:
