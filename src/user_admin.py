@@ -235,7 +235,10 @@ class UserAdmin:
             kwargs: dict[str, Any] = {"UserPoolId": self.user_pool_id, "Limit": MAX_PAGE}
             if token:
                 kwargs["PaginationToken"] = token
-            got = self.client.list_users(**kwargs)
+            try:
+                got = self.client.list_users(**kwargs)
+            except Exception as e:
+                raise UserAdminError(f"could not page the user pool: {e}") from e
             entries.extend(_entry(u) for u in got.get("Users", []))
             token = got.get("PaginationToken")
             if not token:

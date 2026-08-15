@@ -702,9 +702,10 @@ export const api = {
 
   /** Removes the Cognito account and the cached tenant binding. Not reversible. */
   deleteUser: (tenant: string, email: string) =>
-    request<{ deleted: string }>(`/tenants/${tenant}/users/${encodeURIComponent(email)}`, {
-      method: 'DELETE',
-    }),
+    request<{ email: string; deleted: boolean; note: string }>(
+      `/tenants/${tenant}/users/${encodeURIComponent(email)}`,
+      { method: 'DELETE' },
+    ),
   createSource: (tenant: string, s: Partial<Source>) =>
     request<Source>(`/tenants/${tenant}/sources`, { method: 'POST', body: JSON.stringify(s) }),
   listTables: (tenant: string) => request<TableSummary[]>(`/tenants/${tenant}/tables`),

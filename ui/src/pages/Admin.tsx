@@ -134,8 +134,8 @@ export default function Admin() {
       return
     setRemoving(email)
     try {
-      await api.deleteUser(tenant, email)
-      showToast(`${email} deleted.`)
+      const r = await api.deleteUser(tenant, email)
+      showToast(`${email} deleted. ${r.note}`)
       loadUsers()
     } catch (e) {
       showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')

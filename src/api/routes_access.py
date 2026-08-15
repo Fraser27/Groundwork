@@ -347,12 +347,18 @@ async def list_users(
     ctx, _ = principal
     admin = _require_user_admin(services)
 
-    # Reconcile the cache on read. Cognito owns whether a user exists, DynamoDB makes
-    # "who is in this tenant" a query rather than a scan of the whole pool, and doing this
-    # here means a user deleted straight from the Cognito console disappears on the next page
-    # load instead of lingering until a scheduled sweep runs.
+    # Reconcile the cache on read, for either scope. Cognito owns whether a user exists and
+    # DynamoDB makes "who is in this tenant" a query rather than a page of the whole pool.
+    # Doing it here means a user deleted straight from the Cognito console disappears on the
+    # next page load instead of lingering until a scheduled sweep runs. Not gated on
+    # `scope=tenant`: the admin screen lists `mine`, so gating it there would mean the common
+    # path never reconciles.
+    #
+    # Swallowed on failure, deliberately. The cache is an optimisation over a source of truth
+    # this request is about to read anyway, so a sync error must not turn a working user list
+    # into an error page.
     synced: dict[str, int] = {}
-    if scope == "tenant" and services.tenant_directory is not None:
+    if services.tenant_directory is not None:
         try:
             synced = admin.sync_from_cognito(ctx.tenant_id, services.tenant_directory)
         except UserAdminError as e:

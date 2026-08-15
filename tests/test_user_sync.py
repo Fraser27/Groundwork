@@ -153,6 +153,18 @@ class TestPagination:
         assert counts["added"] == 150
         assert cognito.list_calls == 3
 
+    def test_a_paging_failure_is_reported_as_a_user_admin_error(self, directory):
+        """So the caller can swallow it. The user list route treats a sync failure as
+        non-fatal, which it can only do if the failure arrives as a known type rather than
+        whatever boto raised."""
+
+        class Broken(FakeCognito):
+            def list_users(self, **kw: Any) -> dict[str, Any]:
+                raise RuntimeError("throttled")
+
+        with pytest.raises(UserAdminError, match="could not page the user pool"):
+            UserAdmin("pool", client=Broken()).sync_from_cognito(TENANT, directory)
+
 
 class TestDeleteRemovesFromBoth:
     def test_delete_removes_the_cognito_account_and_the_cache_row(self, directory):
@@ -244,3 +256,59 @@ class TestDirectoryReads:
         assert d.tenant_for("s1") == TENANT
         d.forget_user("s1")
         assert deleted == [{"tenant_id": "USER#s1"}]
+
+
+class TestTheListRouteReconciles:
+    """The sync is wired into the user list, and the wiring is where it can go wrong.
+
+    Two mistakes are easy here and neither shows up in a unit test of the sync itself: gating
+    reconciliation on `scope=tenant` when the admin screen requests `mine`, so the common path
+    never reconciles; and letting a sync failure fail the request, so a cache problem takes out
+    a user list that Cognito could have answered on its own.
+    """
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+
+        from src.api.app import create_app
+        from src.api.deps import get_services
+        from src.config import AuthConfig, GraphConfig, LexGraphConfig
+
+        cfg = LexGraphConfig(
+            environment="local",
+            auth=AuthConfig(dev_bypass_tenant=TENANT),
+            graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
+        )
+        cfg.validate()
+        c = TestClient(create_app(cfg))
+        services = get_services()
+        services.tenant_directory = StaticTenantDirectory()
+        return c, services
+
+    def test_the_default_scope_still_reconciles(self, client):
+        c, services = client
+        cognito = FakeCognito([cognito_user("s1", "a@firm.example")])
+        services.user_admin = UserAdmin("pool", client=cognito)
+
+        body = c.get(f"/api/tenants/{TENANT}/users").json()
+        assert body["scope"] == "mine"
+        assert body["synced"]["added"] == 1
+        assert services.tenant_directory.tenant_for("s1") == TENANT
+
+    def test_a_sync_failure_does_not_fail_the_list(self, client):
+        """Cognito is the source of truth and the route reads it anyway, so a cache error must
+        degrade to a stale cache rather than an error page."""
+        c, services = client
+
+        class Broken(FakeCognito):
+            def list_users(self, **kw: Any) -> dict[str, Any]:
+                raise RuntimeError("throttled")
+
+        # `list_users_in_group` still works, so Cognito can answer the list even though the
+        # sync cannot run. That asymmetry is the whole point of the test.
+        services.user_admin = UserAdmin("pool", client=Broken())
+
+        r = c.get(f"/api/tenants/{TENANT}/users")
+        assert r.status_code == 200
+        assert r.json()["synced"] == {}
