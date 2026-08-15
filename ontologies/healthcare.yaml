@@ -75,6 +75,14 @@ governing_predicates:
     domain: [Document, Diagnosis, Procedure]
     range: [Encounter]
     description: Belongs to this episode of care.
+  # Written only by a rule. The legal pack declares its conclusions the same way, which is
+  # the point: the reasoner is generic, and each pack says what its rules may conclude.
+  - id: CONTRAINDICATION_ALERT
+    label: contraindication alert
+    domain: [Patient]
+    range: [Medication]
+    description: This medication conflicts with a recorded allergy for this patient.
+    help: Inferred from a prescription plus an allergy, and carries both as premises. Retract either and the alert is withdrawn with it.
 
 descriptive_predicates:
   - id: CONCERNS_TOPIC
@@ -95,4 +103,4 @@ rules:
       - "(c:Clinician)-[:PRESCRIBED]->(m:Medication)"
       - "(p:Patient)-[:ALLERGIC_TO]->(m:Medication)"
     then: "(p)-[:CONTRAINDICATION_ALERT]->(m)"
-    min_premise_class: EXTRACTED_DET
+    min_premise_class: EXTRACTED_MODEL

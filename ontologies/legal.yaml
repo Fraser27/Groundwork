@@ -131,6 +131,24 @@ governing_predicates:
     domain: [Party]
     range: [Counsel]
     description: Retains this counsel.
+  # ── Conclusions. Only a rule writes these; no extractor may propose one. ────
+  #
+  # Governing, not descriptive, by the same test as everything else here: would a wrong
+  # answer embarrass you or expose you? A missed conflict is the second. Declaring them
+  # also means a rule whose `then` names an undeclared predicate fails at pack load, so a
+  # typo in a rule cannot mint a predicate that nothing queries.
+  - id: POTENTIAL_CONFLICT
+    label: potential conflict
+    domain: [Matter]
+    range: [Party]
+    description: The firm may be acting both for and against this party.
+    help: Inferred, never extracted. It carries the premises that produced it, so the answer to "why do you believe this" is the two documents it rests on. Always read as *potential* - the judgement about whether it is a real conflict is a lawyer's.
+  - id: RELIES_ON_STALE_AUTHORITY
+    label: relies on overruled authority
+    domain: [Document]
+    range: [Authority]
+    description: This document rests on an authority that has since been overruled.
+    help: Inferred from a citation plus an overruling recorded elsewhere. The advice was very likely correct when written, which is exactly why this is worth surfacing rather than treating as an error.
 
 # ── Open, with exact-name grounding. No LLM adjudication. ─────────────────────
 descriptive_predicates:
@@ -154,12 +172,12 @@ rules:
   - id: conflict_check
     version: v1
     description: Flag a potential conflict where the firm both represents and opposes a party.
-    help: Fires on DECLARED/EXTRACTED_DET only — a conflict flag resting on an LLM guess would be worse than none.
+    help: Fires only on facts a person signed off, or a system of record declared. A conflict flag resting on an unreviewed model guess would be worse than none, because someone would rely on it.
     when:
       - "(c:Counsel)-[:REPRESENTS]->(p:Party)"
       - "(m:Matter)-[:ADVERSE_TO]->(p:Party)"
     then: "(m)-[:POTENTIAL_CONFLICT]->(p)"
-    min_premise_class: EXTRACTED_DET
+    min_premise_class: EXTRACTED_MODEL
   - id: authority_stale
     version: v1
     description: Mark reliance on authority that has since been overruled.
@@ -167,4 +185,4 @@ rules:
       - "(d:Document)-[:CITES]->(a:Authority)"
       - "(x:Authority)-[:OVERRULES]->(a:Authority)"
     then: "(d)-[:RELIES_ON_STALE_AUTHORITY]->(a)"
-    min_premise_class: EXTRACTED_DET
+    min_premise_class: EXTRACTED_MODEL

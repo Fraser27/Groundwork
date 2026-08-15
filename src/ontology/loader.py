@@ -177,13 +177,45 @@ def _parse(raw: dict[str, Any]) -> Ontology:
         for r in raw.get("rules", [])
     )
 
-    return Ontology(
+    ontology = Ontology(
         domain=raw["domain"],
         version=int(raw.get("version", 1)),
         entities=entities,
         predicates=predicates,
         rules=rules,
     )
+    _validate_rules(ontology)
+    return ontology
+
+
+def _validate_rules(ontology: Ontology) -> None:
+    """Refuse a pack whose rules cannot fire, at load rather than at inference time.
+
+    Both failures are silent otherwise, and silence is the problem: a rule that never fires and
+    a rule that finds nothing look identical from the outside, and "no conflicts found" is
+    exactly the answer nobody double-checks.
+
+    Conclusions must be declared predicates because `build_assertion` validates against the
+    closed vocabulary at write time. Catching it here means a typo in a rule's `then` fails the
+    pack instead of throwing once, months later, the first time the rule matches something.
+    """
+    from src.ontology.patterns import PatternError, parse_rule
+
+    known = ontology.governing_predicates | ontology.descriptive_predicates
+    for rule in ontology.rules:
+        parsed = parse_rule(rule)
+        if parsed.conclusion.predicate not in known:
+            raise PatternError(
+                f"rule {rule.id!r} concludes {parsed.conclusion.predicate!r}, which the "
+                f"{ontology.domain} pack does not declare; add it to governing_predicates or "
+                "the write will be rejected at inference time"
+            )
+        for premise in parsed.premises:
+            if premise.predicate not in known:
+                raise PatternError(
+                    f"rule {rule.id!r} matches on {premise.predicate!r}, which the "
+                    f"{ontology.domain} pack does not declare, so it can never match"
+                )
 
 
 @functools.lru_cache(maxsize=8)

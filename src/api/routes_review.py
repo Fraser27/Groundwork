@@ -20,7 +20,13 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from src.api.deps import ServicesDep, TenantDep, require_reviewer, scope_violation_to_http
+from src.api.deps import (
+    ServicesDep,
+    TenantDep,
+    require_admin,
+    require_reviewer,
+    scope_violation_to_http,
+)
 from src.documents.review import AssertionNotFound, ReviewError
 from src.documents.storage import (
     DEFAULT_EXPIRY_SECONDS,
@@ -336,3 +342,45 @@ def _explain(a: Any) -> str:
         "A statistical suggestion based on the shape of the graph, not on any document. "
         "Never used to answer questions."
     )
+
+
+@router.post("/tenants/{tenant}/reason")
+async def run_reasoner(services: ServicesDep, principal: TenantDep) -> dict[str, Any]:
+    """Fire the pack's rules over this tenant's approved facts.
+
+    Conclusions are **staged, not written live**, so an inference passes through the same
+    review gate as an extraction. A reasoner that wrote straight to the graph would be a code
+    path that opts out of review, which is the one thing no code path may do.
+
+    Rules come from whichever ontology pack the tenant runs, so this endpoint contains no
+    domain knowledge: a legal tenant gets conflict and stale-authority checks, a healthcare
+    tenant gets contraindication alerts, from the same engine.
+
+    Premises are the tenant's *live* assertions rather than everything visible, because a
+    conclusion may only rest on facts somebody stands behind. Idempotent: assertion ids are
+    content-addressed, so re-running converges instead of duplicating.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+
+    from src.reasoning.engine import Reasoner
+
+    live = [r.assertion for r in services.review_queue.live_assertions(ctx)]
+    report = Reasoner(services.ontology).run(ctx, live)
+
+    staged: list[str] = []
+    if report.inferences:
+        try:
+            staged = services.review_queue.stage(
+                ctx, [i.assertion for i in report.inferences], job_id="reasoner"
+            )
+        except ScopeViolation as e:
+            raise scope_violation_to_http(e) from e
+
+    out = report.to_dict()
+    out["staged"] = len(staged)
+    out["note"] = (
+        "Inferred facts are staged for review, not published. Each carries the facts it "
+        "rests on, so a reviewer can follow it back to the documents underneath."
+    )
+    return out

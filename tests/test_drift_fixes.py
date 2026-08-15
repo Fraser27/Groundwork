@@ -20,9 +20,7 @@ from src.graph.assertions import (
 )
 from src.ontology.loader import load_ontology
 
-DOC = SourceLocator(
-    document_id="doc-1", filename="memo.pdf", page=2, quote="Acme Corporation"
-)
+DOC = SourceLocator(document_id="doc-1", filename="memo.pdf", page=2, quote="Acme Corporation")
 TBL = SourceLocator(source_id="cms-1", table="matters")
 
 
@@ -89,9 +87,7 @@ class TestReviewPolicyIsActuallyRead:
 
     def test_policy_can_never_make_a_model_claim_live(self):
         """One-directional by design: a setting may add review, never remove it."""
-        permissive = ReviewPolicy(
-            auto_assert_verified=True, require_review_for_governing=False
-        )
+        permissive = ReviewPolicy(auto_assert_verified=True, require_review_for_governing=False)
         a = _verified(
             epistemic_class=EpistemicClass.EXTRACTED_MODEL,
             method="llm:opus-5",
@@ -159,7 +155,24 @@ class TestSymmetricPredicatesCollapse:
 class TestRulePremiseFloorIsReadable:
     @pytest.mark.parametrize("rule_id", ["conflict_check", "authority_stale"])
     def test_every_rule_declares_a_floor(self, rule_id):
-        assert load_ontology("legal").rule_premise_floor(rule_id) == "EXTRACTED_DET"
+        assert load_ontology("legal").rule_premise_floor(rule_id) is not None
+
+    @pytest.mark.parametrize("rule_id", ["conflict_check", "authority_stale"])
+    def test_the_declared_floor_is_satisfiable(self, rule_id):
+        """A floor no real fact can meet is a rule that silently never fires.
+
+        Both rules declared EXTRACTED_DET, which no governing predicate may ever carry:
+        `build_assertion` restricts that class to presence predicates, because a quote match
+        proves text is present and never that it is significant. So the floor was unsatisfiable
+        for anything read from a document, and neither rule could have fired on the unstructured
+        half of the product. What actually keeps a conflict flag honest is the reasoner's review
+        gate, not the epistemic class.
+        """
+        from src.graph.assertions import EpistemicClass
+        from src.reasoning.engine import _STRENGTH
+
+        floor = load_ontology("legal").rule_premise_floor(rule_id)
+        assert _STRENGTH[EpistemicClass.EXTRACTED_MODEL] <= _STRENGTH[EpistemicClass(floor)]
 
     def test_unknown_rule_has_no_floor(self):
         assert load_ontology("legal").rule_premise_floor("nope") is None
