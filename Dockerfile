@@ -19,6 +19,11 @@ COPY src/ src/
 # so the packs must sit beside src/ rather than inside it.
 COPY ontologies/ ontologies/
 
+# The example metric pack and the sample legal documents. Both are read from disk at
+# runtime by the seed and sample-data endpoints, so leaving them out of the image makes
+# those endpoints fail with "could not be read" on a deployment that otherwise looks fine.
+COPY sample/ sample/
+
 RUN pip install --no-cache-dir .
 
 # 8000 for both the API and the MCP server: AgentCore's MCP protocol contract
