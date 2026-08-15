@@ -34,7 +34,7 @@ interface Term {
 /** Terms whose names are opaque enough to need translating before defining. */
 const JARGON_NOTE: Record<string, string> = {
   epistemicClass:
-    '“Epistemic” means “about knowledge” — so this is simply: how do we know this? You will see it in the interface as the coloured class badge, never as this word.',
+    '“Epistemic” means “about knowledge”, so this is simply: how do we know this? You will see it in the interface as the coloured class badge, never as this word.',
   bitemporal:
     '“Bi-temporal” just means two clocks: when something was true in the world, and when we found out about it.',
   premise: 'A premise is a fact that another fact was worked out from.',
@@ -49,7 +49,7 @@ const JARGON_NOTE: Record<string, string> = {
 const CLASS_CODE_NOTE: Record<EpistemicClass, string> = {
   DECLARED: 'Shown as “Declared”.',
   EXTRACTED_DET:
-    'Shown as “Extracted (verified)”. “DET” is short for deterministic — meaning the claim was not taken on trust: the quoted words were searched for on the stated page and found. The check settles that the words are there, and nothing about what they mean.',
+    'Shown as “Extracted (verified)”. “DET” is short for deterministic, meaning the claim was not taken on trust: the quoted words were searched for on the stated page and found. The check settles that the words are there, and nothing about what they mean.',
   EXTRACTED_MODEL:
     'Shown as “Extracted (model)”. A language model read the passage and drew this conclusion from it.',
   INFERRED: 'Shown as “Inferred”. A rule worked it out from other facts.',
@@ -292,7 +292,7 @@ export default function Glossary() {
                     )}
                   </td>
                   <td className="text-dim">
-                    {p.domain.join(', ') || '—'} → {p.range.join(', ') || '—'}
+                    {p.domain.join(', ') || '-'} → {p.range.join(', ') || '-'}
                   </td>
                   <td>
                     {p.description}

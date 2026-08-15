@@ -253,7 +253,7 @@ def _check_time_axis_bypass(
         )
         return (
             f"Dimension '{d}' groups by time but is not this metric's governed time axis "
-            f"— that would bypass the declared time_grains {sorted(declared)}; {hint}."
+            f"- that would bypass the declared time_grains {sorted(declared)}; {hint}."
         )
     return None
 
@@ -281,7 +281,7 @@ def _apply_time_grain(
         )
     if not time_axis:
         return dimensions, dimensions, (
-            "No time axis available to apply time_grain — set the metric's "
+            "No time axis available to apply time_grain, set the metric's "
             "time_grain_column, or include a date/timestamp column in its grain"
         )
     if time_axis not in dimensions:
@@ -296,7 +296,7 @@ def _apply_time_grain(
 
 
 def _is_sum(expression: str) -> bool:
-    """True if the top-level aggregate is a SUM — the semi-additive trap."""
+    """True if the top-level aggregate is a SUM, the semi-additive trap."""
     try:
         node = sqlglot.parse_one(expression, dialect=DIALECT)
     except sqlglot.errors.ParseError:
@@ -381,7 +381,7 @@ def _validate_filters(
         for f in filters:
             if f.column not in allowed:
                 return (
-                    f"Filter on '{f.column}' not allowed — metric '{metric.name}' declares "
+                    f"Filter on '{f.column}' not allowed, metric '{metric.name}' declares "
                     f"parameters {sorted(allowed)}"
                 )
         provided = {f.column for f in filters}
@@ -479,7 +479,7 @@ def compile_metric(
     if effective_grain and semi_additive_sum:
         return _fail(
             f"Metric '{name}' is semi_additive (a point-in-time snapshot) and cannot be "
-            f"summed across a time grain — bucketing daily values up to "
+            f"summed across a time grain, bucketing daily values up to "
             f"'{effective_grain}' double-counts. Use a last-value or average over the "
             f"period, or query at base grain with no time_grain.",
             table=table,
@@ -580,7 +580,7 @@ def _compile_cte_body(
         if not time_axis:
             raise MetricCompilationError(
                 f"Metric '{metric.name}' has no time axis, so it cannot be composed at "
-                f"'{time_grain}' grain — set its time_grain_column"
+                f"'{time_grain}' grain, set its time_grain_column"
             )
         if metric.aggregation == "semi_additive" and _is_sum(metric.expression):
             raise MetricCompilationError(
@@ -727,7 +727,7 @@ def _compile_derived(
         if f.column not in keys:
             return _fail(
                 f"Filter on '{f.column}' is not available on derived metric "
-                f"'{metric.name}' — filterable dimensions are {sorted(keys)}",
+                f"'{metric.name}', filterable dimensions are {sorted(keys)}",
                 table=source_table,
                 name=metric.name,
             )

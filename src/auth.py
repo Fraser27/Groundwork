@@ -184,7 +184,7 @@ class Authenticator:
     def _tenant_from_directory(self, user_id: str) -> str:
         if self.tenants is None:
             raise AuthError(
-                "no tenant directory configured — an access token carries no tenant_id "
+                "no tenant directory configured, an access token carries no tenant_id "
                 "claim, so there is nothing to scope this request by"
             )
         try:

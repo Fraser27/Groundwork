@@ -146,7 +146,7 @@ def _build_parser(cfg: LexGraphConfig) -> VisionParser | None:
     try:
         import boto3
     except ImportError:
-        logger.warning("boto3 unavailable — uploads will be stored but not transcribed")
+        logger.warning("boto3 unavailable, uploads will be stored but not transcribed")
         return None
 
     region = cfg.models.region
@@ -250,7 +250,7 @@ def set_services(services: Services) -> None:
 
 def get_services() -> Services:
     if _services is None:
-        raise RuntimeError("services not initialised — call set_services() first")
+        raise RuntimeError("services not initialised, call set_services() first")
     return _services
 
 

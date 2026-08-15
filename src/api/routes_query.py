@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.api.deps import ServicesDep, TenantDep
 from src.query.resolver import QueryBlocked, Tier
@@ -23,7 +23,24 @@ class QueryRequest(BaseModel):
     """False returns the SQL without running it — the reviewability that makes a
     governed metric governed."""
     tier_override: int | None = Field(default=None, ge=1, le=4)
+    """Pin exactly one tier. Kept for callers that want a single tier."""
+
+    tiers: list[int] | None = Field(default=None)
+    """Which tiers may answer, as a subset. Honoured only within the tenant's
+    `allowed_tiers` cap: asking for a forbidden tier is refused rather than answered a
+    different way, so the caller can tell the two apart."""
+
     max_results: int | None = Field(default=None, ge=1, le=500)
+
+    @field_validator("tiers")
+    @classmethod
+    def _valid_tiers(cls, v: list[int] | None) -> list[int] | None:
+        if v is None:
+            return v
+        bad = [t for t in v if t not in (1, 2, 3, 4)]
+        if bad:
+            raise ValueError(f"tiers must be in 1-4, got {bad}")
+        return sorted(set(v))
 
 
 @router.post("/tenants/{tenant}/query")
@@ -45,6 +62,7 @@ async def run_query(
             body.query,
             settings,
             tier_override=Tier(body.tier_override) if body.tier_override else None,
+            tiers_requested=[Tier(t) for t in body.tiers] if body.tiers else None,
             execute=body.execute,
         )
     except QueryBlocked as e:

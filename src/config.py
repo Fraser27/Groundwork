@@ -213,7 +213,7 @@ class LexGraphConfig:
 
         if not is_local and not self.auth.issuer_url:
             raise ValueError(
-                "COGNITO_ISSUER_URL is required outside local development — tenant_id "
+                "COGNITO_ISSUER_URL is required outside local development, tenant_id "
                 "comes from a verified token and there is no other source for it."
             )
 

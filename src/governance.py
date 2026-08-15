@@ -19,6 +19,7 @@ combination that closes it.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
@@ -74,6 +75,16 @@ class GovernanceSettings:
     block_ungoverned_queries: bool = False
     """Refuse tier-4 LLM-generated SQL entirely. Refusals are recorded so an admin
     can see what users are trying to ask."""
+
+    allowed_tiers: frozenset[int] = frozenset({1, 2, 3, 4})
+    """Which resolution tiers may ever run for this tenant. A hard cap, not a default:
+    a caller asking for a tier that is not in here is refused rather than silently
+    served a different one, because "answered at a tier you disallowed" and "answered
+    at the tier you asked for" must not look the same.
+
+    Distinct from `block_ungoverned_queries`, which is specifically about tier 4 and
+    logs its refusals for an admin to read. This is the general form, so a firm can
+    also forbid, say, the hybrid tier while keeping metrics and graph traversal."""
 
     block_model_extraction: bool = False
     """Stop reading documents with a model. Since extraction is now model-only, this
@@ -145,12 +156,23 @@ class GovernanceSettings:
             raw = os.getenv(name)
             return raw.lower() in {"1", "true", "yes"} if raw else default
 
+        def _tiers(name: str, default: frozenset[int]) -> frozenset[int]:
+            """A comma-separated tier list, e.g. "1,2". Ignores anything unparseable
+            rather than failing: a typo in a cap must not stop the API starting, and an
+            empty result falls back to the default rather than silently allowing none."""
+            raw = os.getenv(name)
+            if not raw:
+                return default
+            parsed = {int(p) for p in re.findall(r"[1-4]", raw)}
+            return frozenset(parsed) if parsed else default
+
         return cls(
             min_confidence_floor=_f("LEXGRAPH_MIN_CONFIDENCE", 0.8),
             model_confidence_cap=_f("LEXGRAPH_MODEL_CONFIDENCE_CAP", 0.79),
             auto_assert_deterministic=_b("LEXGRAPH_AUTO_ASSERT_DET", True),
             require_review_for_governing=_b("LEXGRAPH_REVIEW_GOVERNING", True),
             block_ungoverned_queries=_b("LEXGRAPH_BLOCK_UNGOVERNED", False),
+            allowed_tiers=_tiers("LEXGRAPH_ALLOWED_TIERS", frozenset({1, 2, 3, 4})),
             block_model_extraction=_b("LEXGRAPH_BLOCK_MODEL_EXTRACTION", False),
             query_model=os.getenv("LEXGRAPH_QUERY_MODEL", DEFAULT_QUERY_MODEL),
             ocr_model=os.getenv("LEXGRAPH_OCR_MODEL", DEFAULT_OCR_MODEL),
@@ -203,7 +225,7 @@ FIELD_HELP: dict[str, str] = {
     "auto_assert_deterministic": (
         "Whether a fact goes straight into the knowledge graph when its quoted words were "
         "found on the page. The system checks the quote is really there, so nothing is "
-        "taken on the AI's word — but the check only settles that the words appear, never "
+        "taken on the AI's word, but the check only settles that the words appear, never "
         "what they mean. Switch off to have a person confirm even those."
     ),
     "require_review_for_governing": (
@@ -216,16 +238,22 @@ FIELD_HELP: dict[str, str] = {
         "knowledge graph, instead of letting the AI write its own SQL. Blocked attempts "
         "are recorded so you can see what people are asking for."
     ),
+    "allowed_tiers": (
+        "Which ways of answering a question are permitted at all. Users choose freely "
+        "within this list; anything outside it is refused rather than quietly answered "
+        "a different way. 1 is an approved metric, 2 is the knowledge graph, 3 combines "
+        "passages with graph relationships, 4 lets the AI write SQL."
+    ),
     "block_model_extraction": (
         "Stop using AI to read documents for facts. Uploading, page transcription and "
-        "search keep working, so documents stay findable — but no new relationships are "
+        "search keep working, so documents stay findable, but no new relationships are "
         "proposed from them."
     ),
     "query_model": "The AI model used to interpret questions and generate SQL.",
     "ocr_model": (
         "The AI model that reads document pages and turns them into text. It also "
         "describes charts, diagrams, signature blocks and handwriting, which plain OCR "
-        "cannot. A cheaper, faster model is the right choice here — reading words off a "
+        "cannot. A cheaper, faster model is the right choice here, reading words off a "
         "page is mechanical work. Changing it does not affect documents already "
         "processed; each one records which model read it."
     ),
@@ -236,7 +264,7 @@ FIELD_HELP: dict[str, str] = {
     ),
     "embedding_model": (
         "The model that converts document text into vectors for similarity search. "
-        "CHANGING THIS REQUIRES RE-PROCESSING EVERY DOCUMENT — existing vectors came "
+        "CHANGING THIS REQUIRES RE-PROCESSING EVERY DOCUMENT, existing vectors came "
         "from the old model and mixing them degrades search quality without any visible "
         "error."
     ),
@@ -246,7 +274,7 @@ FIELD_HELP: dict[str, str] = {
     ),
     "enforce_closed_vocabulary": (
         "Reject relationships the ontology does not define. This is what stops the same "
-        "idea being recorded five different ways — if that happens, a conflict check can "
+        "idea being recorded five different ways, if that happens, a conflict check can "
         "return no results and look like a clean report. Strongly recommended on."
     ),
     "vector_top_k": "How many document passages to retrieve before expanding into the graph.",

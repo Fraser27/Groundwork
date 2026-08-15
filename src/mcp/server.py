@@ -535,7 +535,7 @@ def create_app(config: LexGraphConfig | None = None):
     set_services(services)
     if services.authenticator.dev_mode:
         logger.warning(
-            "DEV AUTH BYPASS ACTIVE — unauthenticated MCP tool calls will be served as "
+            "DEV AUTH BYPASS ACTIVE, unauthenticated MCP tool calls will be served as "
             "tenant %r",
             services.config.auth.dev_bypass_tenant,
         )

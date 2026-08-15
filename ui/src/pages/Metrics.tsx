@@ -84,7 +84,7 @@ const fromForm = (f: Form): Partial<Metric> => ({
 const AGGREGATION_HELP: Record<Metric['aggregation'], string> = {
   additive: 'Safe to sum across any period and any dimension. Fees billed behave this way.',
   semi_additive:
-    'A balance. It may be summed across dimensions but not across time — adding month-end work in progress across twelve months produces a meaningless number.',
+    'A balance. It may be summed across dimensions but not across time, adding month-end work in progress across twelve months produces a meaningless number.',
   non_additive:
     'Never summable. A distinct count of open matters cannot be added across periods, because the same matter appears in several of them.',
 }
@@ -141,7 +141,7 @@ export default function Metrics() {
       const body = fromForm(form)
       if (editing) {
         await api.updateMetric(tenant, editing.metric_id, body)
-        showToast(`Updated ${form.name}. Saved as a draft — approve it to make it answerable.`)
+        showToast(`Updated ${form.name}. Saved as a draft, approve it to make it answerable.`)
       } else {
         await api.createMetric(tenant, body)
         showToast(`Created ${form.name} as a draft.`)
@@ -159,7 +159,7 @@ export default function Metrics() {
     if (status === 'approved') {
       if (
         !confirm(
-          `Approve ${m.name}?\n\nOnce approved, questions that match it are answered by compiling this definition to SQL — with no model involved. That makes the definition itself the governance surface.`,
+          `Approve ${m.name}?\n\nOnce approved, questions that match it are answered by compiling this definition to SQL, with no model involved. That makes the definition itself the governance surface.`,
         )
       )
         return
@@ -355,7 +355,7 @@ export default function Metrics() {
                       className={`btn btn-sm ${sql[m.metric_id] ? 'btn-primary' : 'btn-ghost'}`}
                       onClick={() => toggleSql(m)}
                       style={{ marginRight: 5 }}
-                      title="Compile this definition to SQL. Deterministic — no model is invoked."
+                      title="Compile this definition to SQL. Deterministic, no model is invoked."
                     >
                       SQL
                     </button>
@@ -542,7 +542,7 @@ export default function Metrics() {
             <div className="form-group">
               <label>
                 Fixed filters
-                <FieldHelp text="Conditions always applied, one per line. These are part of the definition — a caller cannot remove them, so the figure cannot be quietly widened." />
+                <FieldHelp text="Conditions always applied, one per line. These are part of the definition, a caller cannot remove them, so the figure cannot be quietly widened." />
               </label>
               <textarea
                 className="input-mono"

@@ -279,7 +279,7 @@ class ReviewQueue:
         if state is ReviewState.AUTO_ASSERTED:
             raise ReviewError(
                 f"{assertion_id} is {record.assertion.epistemic_class.value} and needs no "
-                "approval — approving it would imply a human checked something they did not"
+                "approval, approving it would imply a human checked something they did not"
             )
         record.assertion.review_state = ReviewState.APPROVED
         record.assertion.reviewed_by = ctx.user_id

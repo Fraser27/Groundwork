@@ -348,7 +348,7 @@ export default function ProvenancePanel({
                   <span className="prov-actor">{e.actor}</span>
                   <span>
                     <strong>{e.action.toLowerCase()}</strong>
-                    {e.note ? ` — ${e.note}` : ''}
+                    {e.note ? `, ${e.note}` : ''}
                   </span>
                 </div>
               ))}

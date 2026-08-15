@@ -180,7 +180,7 @@ class Chunk(BaseModel):
         if self.char_end - self.char_start != len(self.text):
             raise ValueError(
                 f"offsets {self.char_start}..{self.char_end} do not match text of "
-                f"length {len(self.text)} — chunking lost or trimmed a span"
+                f"length {len(self.text)}, chunking lost or trimmed a span"
             )
         if self.page < 1:
             raise ValueError(f"page is 1-based, got {self.page}")

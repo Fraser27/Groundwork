@@ -10,7 +10,7 @@ export function epiStyle(c: EpistemicClass): CSSProperties {
 }
 
 export function fmtBytes(n?: number | null): string {
-  if (n == null) return '—'
+  if (n == null) return '-'
   const units = ['B', 'KB', 'MB', 'GB']
   let v = n
   let u = 0
@@ -22,12 +22,12 @@ export function fmtBytes(n?: number | null): string {
 }
 
 export function fmtNum(n?: number | null): string {
-  if (n == null) return '—'
+  if (n == null) return '-'
   return n.toLocaleString()
 }
 
 export function fmtDate(s?: string | null): string {
-  if (!s) return '—'
+  if (!s) return '-'
   return new Date(s).toLocaleDateString(undefined, {
     day: '2-digit',
     month: 'short',
@@ -36,7 +36,7 @@ export function fmtDate(s?: string | null): string {
 }
 
 export function fmtDateTime(s?: string | null): string {
-  if (!s) return '—'
+  if (!s) return '-'
   return new Date(s).toLocaleString(undefined, {
     day: '2-digit',
     month: 'short',

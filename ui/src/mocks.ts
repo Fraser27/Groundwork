@@ -85,7 +85,7 @@ function assertion(o: Partial<Assertion> & Pick<Assertion, 'assertion_id'>): Ass
 export const MOCK_MATTERS: Matter[] = [
   {
     matter_id: 'MAT-2041',
-    name: 'Halveston Group — Series C',
+    name: 'Halveston Group, Series C',
     client: 'Halveston Group Ltd',
     status: 'open',
     opened_at: iso(112),
@@ -101,7 +101,7 @@ export const MOCK_MATTERS: Matter[] = [
   },
   {
     matter_id: 'MAT-1977',
-    name: 'Northmoor Estate — Trust restructure',
+    name: 'Northmoor Estate, Trust restructure',
     client: 'Northmoor Trustees',
     status: 'open',
     opened_at: iso(203),
@@ -109,7 +109,7 @@ export const MOCK_MATTERS: Matter[] = [
   },
   {
     matter_id: 'MAT-1590',
-    name: 'Ashcombe Holdings — Disposal',
+    name: 'Ashcombe Holdings, Disposal',
     client: 'Ashcombe Holdings plc',
     status: 'closed',
     opened_at: iso(521),
@@ -141,7 +141,7 @@ export const MOCK_MATTERS_RESPONSE: MattersResponse = {
 /** Names of matters the signed-in user cannot read but a risk officer administering
  *  access can. Kept here so the access page can label the screen it is managing. */
 const WITHHELD_MATTER_NAMES: Record<string, string> = {
-  'MAT-2103': 'Brannigan Aggregates — Supply dispute',
+  'MAT-2103': 'Brannigan Aggregates, Supply dispute',
 }
 
 export const MOCK_ACCESS_USERS: DirectoryUser[] = [
@@ -469,7 +469,7 @@ export const MOCK_TABLE_DETAIL: TableDetail = {
 export const MOCK_DOCUMENTS: DocumentSummary[] = [
   {
     document_id: 'doc_8f21a0',
-    filename: 'Halveston — Subscription Agreement (executed).pdf',
+    filename: 'Halveston, Subscription Agreement (executed).pdf',
     matter_id: 'MAT-2041',
     state: 'PENDING_REVIEW',
     uploaded_at: iso(0, 8),
@@ -480,7 +480,7 @@ export const MOCK_DOCUMENTS: DocumentSummary[] = [
   },
   {
     document_id: 'doc_44c9de',
-    filename: 'Rowe — Particulars of Claim.pdf',
+    filename: 'Rowe, Particulars of Claim.pdf',
     matter_id: 'MAT-2088',
     state: 'LIVE',
     uploaded_at: iso(3, 11),
@@ -491,7 +491,7 @@ export const MOCK_DOCUMENTS: DocumentSummary[] = [
   },
   {
     document_id: 'doc_1b7702',
-    filename: 'Castleton — Expert report (Kearns).pdf',
+    filename: 'Castleton, Expert report (Kearns).pdf',
     matter_id: 'MAT-2088',
     state: 'EXTRACTING',
     uploaded_at: iso(0, 12),
@@ -502,7 +502,7 @@ export const MOCK_DOCUMENTS: DocumentSummary[] = [
   },
   {
     document_id: 'doc_9aa311',
-    filename: 'Northmoor — Trust Deed 1994 (scanned).pdf',
+    filename: 'Northmoor, Trust Deed 1994 (scanned).pdf',
     matter_id: 'MAT-1977',
     state: 'PARSE_FAILED',
     uploaded_at: iso(1, 15),
@@ -514,7 +514,7 @@ export const MOCK_DOCUMENTS: DocumentSummary[] = [
   },
   {
     document_id: 'doc_5c0f8e',
-    filename: 'Halveston — Board minutes 12 Mar.docx',
+    filename: 'Halveston, Board minutes 12 Mar.docx',
     matter_id: 'MAT-2041',
     state: 'EMBEDDING',
     uploaded_at: iso(0, 13),
@@ -525,7 +525,7 @@ export const MOCK_DOCUMENTS: DocumentSummary[] = [
   },
   {
     document_id: 'doc_2d5b41',
-    filename: 'Ashcombe — SPA (final).pdf',
+    filename: 'Ashcombe, SPA (final).pdf',
     matter_id: 'MAT-1590',
     state: 'LIVE',
     uploaded_at: iso(41, 10),
@@ -550,7 +550,7 @@ export const MOCK_PENDING: Assertion[] = [
     confidence: 0.71,
     source_locator: loc({
       document_id: 'doc_8f21a0',
-      filename: 'Halveston — Subscription Agreement (executed).pdf',
+      filename: 'Halveston, Subscription Agreement (executed).pdf',
       page: 41,
       chunk_id: 'doc_8f21a0#p41#c3',
       quote:
@@ -568,18 +568,18 @@ export const MOCK_PENDING: Assertion[] = [
     subject_type: 'Document',
     predicate: 'SUBJECT_TO_PRIVILEGE',
     object_id: 'MAT-2041',
-    object_label: 'Halveston Group — Series C',
+    object_label: 'Halveston Group, Series C',
     object_type: 'Matter',
     confidence: 0.64,
     source_locator: loc({
       document_id: 'doc_8f21a0',
-      filename: 'Halveston — Subscription Agreement (executed).pdf',
+      filename: 'Halveston, Subscription Agreement (executed).pdf',
       page: 1,
       chunk_id: 'doc_8f21a0#p1#c1',
-      quote: 'PRIVILEGED AND CONFIDENTIAL — PREPARED IN CONTEMPLATION OF LITIGATION',
+      quote: 'PRIVILEGED AND CONFIDENTIAL, PREPARED IN CONTEMPLATION OF LITIGATION',
     }),
     source_context:
-      'PRIVILEGED AND CONFIDENTIAL — PREPARED IN CONTEMPLATION OF LITIGATION. This draft is circulated to the board for comment only and should not be forwarded outside the group.',
+      'PRIVILEGED AND CONFIDENTIAL, PREPARED IN CONTEMPLATION OF LITIGATION. This draft is circulated to the board for comment only and should not be forwarded outside the group.',
     recorded_at: iso(0, 8),
   }),
   assertion({
@@ -595,7 +595,7 @@ export const MOCK_PENDING: Assertion[] = [
     confidence: 0.58,
     source_locator: loc({
       document_id: 'doc_44c9de',
-      filename: 'Rowe — Particulars of Claim.pdf',
+      filename: 'Rowe, Particulars of Claim.pdf',
       page: 2,
       chunk_id: 'doc_44c9de#p2#c1',
       quote: 'Dalgleish & Rowe LLP, solicitors for the Second Defendant',
@@ -617,7 +617,7 @@ export const MOCK_PENDING: Assertion[] = [
     confidence: 0.79,
     source_locator: loc({
       document_id: 'doc_44c9de',
-      filename: 'Rowe — Particulars of Claim.pdf',
+      filename: 'Rowe, Particulars of Claim.pdf',
       page: 14,
       chunk_id: 'doc_44c9de#p14#c2',
       quote:
@@ -635,12 +635,12 @@ export const MOCK_PENDING: Assertion[] = [
     subject_type: 'Deadline',
     predicate: 'DEADLINE_FOR',
     object_id: 'MAT-1977',
-    object_label: 'Northmoor Estate — Trust restructure',
+    object_label: 'Northmoor Estate, Trust restructure',
     object_type: 'Matter',
     confidence: 0.45,
     source_locator: loc({
       document_id: 'doc_9aa311',
-      filename: 'Northmoor — Trust Deed 1994 (scanned).pdf',
+      filename: 'Northmoor, Trust Deed 1994 (scanned).pdf',
       page: 7,
       chunk_id: 'doc_9aa311#p7#c4',
       quote: 'within two years of the death of the Settlor',
@@ -655,7 +655,7 @@ const INFERRED_CONFLICT = assertion({
   assertion_id: 'a_inf_conflict_0091',
   matter_id: 'MAT-2041',
   subject_id: 'MAT-2041',
-  subject_label: 'Halveston Group — Series C',
+  subject_label: 'Halveston Group, Series C',
   subject_type: 'Matter',
   predicate: 'POTENTIAL_CONFLICT',
   object_id: 'p_meridian',
@@ -693,7 +693,7 @@ export const MOCK_ASSERTIONS: Assertion[] = [
     review_state: 'AUTO_ASSERTED',
     source_locator: loc({
       document_id: 'doc_5c0f8e',
-      filename: 'Halveston — Board minutes 12 Mar.docx',
+      filename: 'Halveston, Board minutes 12 Mar.docx',
       page: 3,
       chunk_id: 'doc_5c0f8e#p3#c2',
       quote: 'a possible approach from Ashcombe Holdings plc was noted',
@@ -725,7 +725,7 @@ export const MOCK_ASSERTIONS: Assertion[] = [
     assertion_id: 'a_prem_adverse_01',
     matter_id: 'MAT-2041',
     subject_id: 'MAT-2041',
-    subject_label: 'Halveston Group — Series C',
+    subject_label: 'Halveston Group, Series C',
     subject_type: 'Matter',
     predicate: 'ADVERSE_TO',
     object_id: 'p_meridian',
@@ -756,7 +756,7 @@ export const MOCK_ASSERTIONS: Assertion[] = [
     review_state: 'AUTO_ASSERTED',
     source_locator: loc({
       document_id: 'doc_8f21a0',
-      filename: 'Halveston — Subscription Agreement (executed).pdf',
+      filename: 'Halveston, Subscription Agreement (executed).pdf',
       page: 3,
       chunk_id: 'doc_8f21a0#p3#c1',
       quote: 'Meridian Capital Partners LLP (the "Adverse Party")',
@@ -784,7 +784,7 @@ export const MOCK_ASSERTIONS: Assertion[] = [
     reviewed_at: iso(3, 13),
     source_locator: loc({
       document_id: 'doc_44c9de',
-      filename: 'Rowe — Particulars of Claim.pdf',
+      filename: 'Rowe, Particulars of Claim.pdf',
       page: 14,
       chunk_id: 'doc_44c9de#p14#c1',
       quote: 'Wilkes v Argonaut Shipping [2019] EWCA Civ 884',
@@ -807,7 +807,7 @@ export const MOCK_ASSERTIONS: Assertion[] = [
     review_state: 'AUTO_ASSERTED',
     source_locator: loc({
       document_id: 'doc_44c9de',
-      filename: 'Rowe — Particulars of Claim.pdf',
+      filename: 'Rowe, Particulars of Claim.pdf',
       page: 14,
       chunk_id: 'doc_44c9de#p14#c1',
       quote: 'Wilkes v Argonaut Shipping [2019] EWCA Civ 884',
@@ -847,7 +847,7 @@ export const MOCK_ASSERTIONS: Assertion[] = [
     reviewed_at: iso(5, 14),
     source_locator: loc({
       document_id: 'doc_44c9de',
-      filename: 'Rowe — Particulars of Claim.pdf',
+      filename: 'Rowe, Particulars of Claim.pdf',
       page: 2,
       chunk_id: 'doc_44c9de#p2#c1',
       quote: 'Dalgleish & Rowe LLP, solicitors for the Second Defendant',
@@ -1091,7 +1091,7 @@ export const MOCK_QUERY_RESULTS: Record<string, QueryResult> = {
     tier_reason:
       'No governed metric applies. The answer came from walking assertions along governing predicates only, above the 0.80 trust floor.',
     answer:
-      'Yes — a potential conflict is flagged. The firm is recorded as representing Meridian Capital Partners LLP on MAT-1590, and Meridian is recorded as adverse to the Halveston matter.[1][2]',
+      'Yes, a potential conflict is flagged. The firm is recorded as representing Meridian Capital Partners LLP on MAT-1590, and Meridian is recorded as adverse to the Halveston matter.[1][2]',
     path: [
       {
         subject_label: 'Thorne Vaux LLP',
@@ -1102,7 +1102,7 @@ export const MOCK_QUERY_RESULTS: Record<string, QueryResult> = {
         confidence: 1.0,
       },
       {
-        subject_label: 'Halveston Group — Series C',
+        subject_label: 'Halveston Group, Series C',
         predicate: 'ADVERSE_TO',
         object_label: 'Meridian Capital Partners LLP',
         assertion_id: 'a_prem_adverse_01',
@@ -1110,7 +1110,7 @@ export const MOCK_QUERY_RESULTS: Record<string, QueryResult> = {
         confidence: 1.0,
       },
       {
-        subject_label: 'Halveston Group — Series C',
+        subject_label: 'Halveston Group, Series C',
         predicate: 'POTENTIAL_CONFLICT',
         object_label: 'Meridian Capital Partners LLP',
         assertion_id: 'a_inf_conflict_0091',
@@ -1131,7 +1131,7 @@ export const MOCK_QUERY_RESULTS: Record<string, QueryResult> = {
         epistemic_class: 'EXTRACTED_DET',
         confidence: 0.99,
         document_id: 'doc_8f21a0',
-        filename: 'Halveston — Subscription Agreement (executed).pdf',
+        filename: 'Halveston, Subscription Agreement (executed).pdf',
         page: 3,
         quote: 'Meridian Capital Partners LLP (the "Adverse Party")',
       },
@@ -1143,12 +1143,12 @@ export const MOCK_QUERY_RESULTS: Record<string, QueryResult> = {
     tier_reason:
       'The entities and relationships came from a graph traversal; the unbilled figures came from the governed metric work_in_progress.',
     answer:
-      'One matter meets both tests: Halveston Group — Series C, with 214,800 unbilled, adverse to Meridian Capital Partners LLP, which the firm acts for on MAT-1590.[1]',
+      'One matter meets both tests: Halveston Group, Series C, with 214,800 unbilled, adverse to Meridian Capital Partners LLP, which the firm acts for on MAT-1590.[1]',
     metric_id: 'm_003',
     sql: mockCompiledSql(MOCK_METRICS[2]),
     path: [
       {
-        subject_label: 'Halveston Group — Series C',
+        subject_label: 'Halveston Group, Series C',
         predicate: 'ADVERSE_TO',
         object_label: 'Meridian Capital Partners LLP',
         assertion_id: 'a_prem_adverse_01',
@@ -1166,7 +1166,7 @@ export const MOCK_QUERY_RESULTS: Record<string, QueryResult> = {
     ],
     rows: {
       columns: ['matter_id', 'matter_name', 'wip_value'],
-      rows: [['MAT-2041', 'Halveston Group — Series C', 214800]],
+      rows: [['MAT-2041', 'Halveston Group, Series C', 214800]],
     },
   },
   tier4: {
@@ -1198,7 +1198,7 @@ JOIN first_invoice f ON f.matter_id = m.matter_id`,
 
 export const MOCK_NEIGHBOURHOOD: Neighbourhood = {
   nodes: [
-    { id: 'MAT-2041', label: 'Halveston — Series C', type: 'Matter', matter_id: 'MAT-2041' },
+    { id: 'MAT-2041', label: 'Halveston, Series C', type: 'Matter', matter_id: 'MAT-2041' },
     { id: 'p_halveston', label: 'Halveston Group Ltd', type: 'Party' },
     { id: 'p_meridian', label: 'Meridian Capital Partners LLP', type: 'Party' },
     { id: 'c_firm', label: 'Thorne Vaux LLP', type: 'Counsel' },
@@ -1214,7 +1214,7 @@ export const MOCK_NEIGHBOURHOOD: Neighbourhood = {
     { id: 'court_qb', label: 'King’s Bench Division', type: 'Court' },
     { id: 'dl_northmoor_1', label: 'Appointment deadline', type: 'Deadline', matter_id: 'MAT-1977' },
     { id: 'MAT-1977', label: 'Northmoor Estate', type: 'Matter', matter_id: 'MAT-1977' },
-    { id: 'MAT-1590', label: 'Ashcombe — Disposal', type: 'Matter', matter_id: 'MAT-1590' },
+    { id: 'MAT-1590', label: 'Ashcombe, Disposal', type: 'Matter', matter_id: 'MAT-1590' },
     { id: 'cl_indemnity', label: 'Clause 12.4 (indemnity)', type: 'Clause', matter_id: 'MAT-2041' },
     { id: 't_carriage', label: 'Carriage of goods by sea', type: 'Topic' },
     { id: 'p_ashcombe', label: 'Ashcombe Holdings plc', type: 'Party' },
@@ -1253,12 +1253,12 @@ export const MOCK_NEIGHBOURHOOD: Neighbourhood = {
 
 const MOCK_ACTIVITY: ActivityEvent[] = [
   { event_id: 'ev1', timestamp: iso(0, 14), actor: 'a.mensah@thornevaux.example', action: 'Approved', detail: 'Particulars of Claim DISTINGUISHES Wilkes v Argonaut Shipping', epistemic_class: 'EXTRACTED_MODEL' },
-  { event_id: 'ev2', timestamp: iso(0, 13), actor: 'llm:claude-sonnet-5', action: 'Staged 9 claims', detail: 'Halveston — Subscription Agreement (executed).pdf', epistemic_class: 'EXTRACTED_MODEL' },
+  { event_id: 'ev2', timestamp: iso(0, 13), actor: 'llm:claude-sonnet-5', action: 'Staged 9 claims', detail: 'Halveston, Subscription Agreement (executed).pdf', epistemic_class: 'EXTRACTED_MODEL' },
   { event_id: 'ev3', timestamp: iso(0, 12), actor: 'rule:conflict_check@v1', action: 'Inferred', detail: 'Potential conflict: MAT-2041 and Meridian Capital Partners LLP', epistemic_class: 'INFERRED' },
-  { event_id: 'ev4', timestamp: iso(0, 11), actor: VERIFIED, action: 'Asserted 14 verified quotes', detail: 'Rowe — Particulars of Claim.pdf', epistemic_class: 'EXTRACTED_DET' },
-  { event_id: 'ev5', timestamp: iso(1, 16), actor: 'k.iyer@thornevaux.example', action: 'Rejected', detail: 'Dalgleish & Rowe LLP REPRESENTS Rowe — parties inverted', epistemic_class: 'EXTRACTED_MODEL' },
+  { event_id: 'ev4', timestamp: iso(0, 11), actor: VERIFIED, action: 'Asserted 14 verified quotes', detail: 'Rowe, Particulars of Claim.pdf', epistemic_class: 'EXTRACTED_DET' },
+  { event_id: 'ev5', timestamp: iso(1, 16), actor: 'k.iyer@thornevaux.example', action: 'Rejected', detail: 'Dalgleish & Rowe LLP REPRESENTS Rowe, parties inverted', epistemic_class: 'EXTRACTED_MODEL' },
   { event_id: 'ev6', timestamp: iso(1, 9), actor: 'glue:catalog_scan@v2', action: 'Declared 18 tables', detail: 'firm_matters, firm_billing', epistemic_class: 'DECLARED' },
-  { event_id: 'ev7', timestamp: iso(2, 15), actor: 'system', action: 'Ingest failed', detail: 'Northmoor — Trust Deed 1994 (scanned).pdf — no text layer', epistemic_class: null },
+  { event_id: 'ev7', timestamp: iso(2, 15), actor: 'system', action: 'Ingest failed', detail: 'Northmoor, Trust Deed 1994 (scanned).pdf, no text layer', epistemic_class: null },
   { event_id: 'ev8', timestamp: iso(2, 10), actor: 'r.okonjo@thornevaux.example', action: 'Approved metric', detail: 'fees_billed v4', epistemic_class: null },
 ]
 
@@ -1306,8 +1306,8 @@ export const MOCK_ONTOLOGY: Ontology = {
   domain: 'legal',
   version: 1,
   entity_types: [
-    { id: 'Matter', label: 'Matter', description: 'An engagement — a case, transaction, or advisory instruction.', help: 'The organising unit of legal work. Most other entities hang off a Matter.' },
-    { id: 'Party', label: 'Party', description: 'A person or organisation with an interest in a matter.', help: 'Clients, counterparties, and third parties are all Parties. The role is on the edge, not the node — the same company can be a client on one matter and adverse on another.' },
+    { id: 'Matter', label: 'Matter', description: 'An engagement, a case, transaction, or advisory instruction.', help: 'The organising unit of legal work. Most other entities hang off a Matter.' },
+    { id: 'Party', label: 'Party', description: 'A person or organisation with an interest in a matter.', help: 'Clients, counterparties, and third parties are all Parties. The role is on the edge, not the node, the same company can be a client on one matter and adverse on another.' },
     { id: 'Counsel', label: 'Counsel', description: 'A lawyer or firm acting on a matter.', help: 'Includes internal fee earners and external firms.' },
     { id: 'Document', label: 'Document', description: 'A filing, contract, opinion, or correspondence item.', help: 'Documents are immutable in S3. What you see here is derived metadata plus extracted assertions.' },
     { id: 'Authority', label: 'Authority', description: 'A cited case, statute, or regulation.', help: 'The words of a citation are quoted from the document and checked; whether the document relies on the authority is a judgement, so it is reviewed.' },
@@ -1319,7 +1319,7 @@ export const MOCK_ONTOLOGY: Ontology = {
     { id: 'REPRESENTS', label: 'represents', description: 'Counsel acts for this party.', governing: true, domain: ['Counsel'], range: ['Party'], help: 'Half of every conflict check. Kept closed so `acts_for` and `is_counsel_to` can never fragment it.' },
     { id: 'ADVERSE_TO', label: 'adverse to', description: 'Positioned against this party.', governing: true, domain: ['Party', 'Matter'], range: ['Party'], help: 'The other half of a conflict check. If this predicate fragments, conflict checks silently under-report.', symmetric: true },
     { id: 'PARTY_TO', label: 'party to', description: 'Has an interest in this matter.', governing: true, domain: ['Party'], range: ['Matter'], help: null },
-    { id: 'CITES', label: 'cites', description: 'Refers to this authority.', governing: true, domain: ['Document', 'Authority'], range: ['Authority'], help: 'Implies reliance, which finding the words on the page does not establish — "the court declined to follow Brown" names Brown without relying on it. So this is always reviewed.' },
+    { id: 'CITES', label: 'cites', description: 'Refers to this authority.', governing: true, domain: ['Document', 'Authority'], range: ['Authority'], help: 'Implies reliance, which finding the words on the page does not establish, "the court declined to follow Brown" names Brown without relying on it. So this is always reviewed.' },
     { id: 'OVERRULES', label: 'overrules', description: 'Displaces the cited authority.', governing: true, domain: ['Authority'], range: ['Authority'], help: 'Governing because relying on overruled authority is a substantive error.' },
     { id: 'DISTINGUISHES', label: 'distinguishes', description: 'Argues the cited authority does not apply.', governing: true, domain: ['Authority', 'Document'], range: ['Authority'], help: null },
     { id: 'FILED_IN', label: 'filed in', description: 'Lodged with this forum.', governing: true, domain: ['Document', 'Matter'], range: ['Court'], help: null },
@@ -1345,7 +1345,7 @@ export const MOCK_ONTOLOGY: Ontology = {
       when: ['(c:Counsel)-[:REPRESENTS]->(p:Party)', '(m:Matter)-[:ADVERSE_TO]->(p:Party)'],
       then: '(m)-[:POTENTIAL_CONFLICT]->(p)',
       min_premise_class: 'EXTRACTED_DET',
-      help: 'Fires only on facts declared by a system of record or confirmed by a check — a conflict flag resting on an unreviewed guess would be worse than none.',
+      help: 'Fires only on facts declared by a system of record or confirmed by a check, a conflict flag resting on an unreviewed guess would be worse than none.',
     },
     {
       id: 'authority_stale',

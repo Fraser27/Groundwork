@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
     )
     if services.authenticator.dev_mode:
         logger.warning(
-            "DEV AUTH BYPASS ACTIVE — all requests served as tenant %r",
+            "DEV AUTH BYPASS ACTIVE, all requests served as tenant %r",
             cfg.auth.dev_bypass_tenant,
         )
 
@@ -85,9 +85,9 @@ async def lifespan(app: FastAPI):
                 services.graph = client
                 logger.info("graph connected")
             else:
-                logger.warning("graph unreachable at %s — degraded mode", cfg.graph.uri)
+                logger.warning("graph unreachable at %s, degraded mode", cfg.graph.uri)
         except Exception as e:
-            logger.warning("graph init failed (%s) — degraded mode", e)
+            logger.warning("graph init failed (%s), degraded mode", e)
 
     yield
 

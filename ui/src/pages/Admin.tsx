@@ -87,7 +87,7 @@ export default function Admin() {
   const changeDomain = async (domain: string) => {
     if (
       !confirm(
-        `Switch the ontology to "${domain}"?\n\nThe closed list of governing relationships changes with it. Existing facts are not rewritten — any that use a relationship the new pack does not recognise stay in the graph but stop being writable.`,
+        `Switch the ontology to "${domain}"?\n\nThe closed list of governing relationships changes with it. Existing facts are not rewritten, any that use a relationship the new pack does not recognise stay in the graph but stop being writable.`,
       )
     )
       return
@@ -369,7 +369,7 @@ export default function Admin() {
           <div className="form-group">
             <label>
               Synthesis
-              <FieldHelp text="Phrases the final answer from facts already retrieved. It does not decide what is true — it only writes up what the graph and the metrics returned." />
+              <FieldHelp text="Phrases the final answer from facts already retrieved. It does not decide what is true, it only writes up what the graph and the metrics returned." />
             </label>
             <select
               value={settings.synthesis_model}

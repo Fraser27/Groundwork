@@ -75,7 +75,7 @@ class AccessDecision(str, Enum):
     """An ethical wall. Named to the user, with a route to the risk team."""
 
     NOT_ASSIGNED = "NOT_ASSIGNED"
-    """No assignment exists. Not a wall — nobody decided anything about this user."""
+    """No assignment exists. Not a wall, nobody decided anything about this user."""
 
     PLATFORM_ADMIN = "PLATFORM_ADMIN"
     """Allowed by role rather than assignment. Recorded distinctly so an audit can see
@@ -373,7 +373,7 @@ class AccessManager:
         """Raise an ethical wall. The reason is mandatory."""
         if not reason.strip():
             raise ValueError(
-                "a screen requires a reason — an unexplained wall cannot be defended "
+                "a screen requires a reason, an unexplained wall cannot be defended "
                 "when someone asks why it exists"
             )
         screen = MatterScreen(

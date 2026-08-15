@@ -217,7 +217,7 @@ class Embedder:
         return self._read_embedding(payload)
 
     def embed_query(self, text: str) -> list[float]:
-        """Same model as ingestion — a query embedded by a different model is noise."""
+        """Same model as ingestion, a query embedded by a different model is noise."""
         return self.embed_text(text)
 
     def embed_chunks(self, ctx: AuthContext, chunks: Sequence[Chunk]) -> list[VectorRecord]:

@@ -366,7 +366,7 @@ def build_assertion(
     inspect a single candidate.
     """
     if not tenant_id:
-        raise AssertionError_("tenant_id is required — untenanted edges leak across firms")
+        raise AssertionError_("tenant_id is required, untenanted edges leak across firms")
     if not method:
         raise AssertionError_("method is required, and must be versioned (e.g. regex:citation@v3)")
     if not 0.0 <= confidence <= 1.0:
@@ -394,14 +394,14 @@ def build_assertion(
             )
         if not source_locator.quote:
             raise AssertionError_(
-                "EXTRACTED_DET requires the quote that was verified — without it the "
+                "EXTRACTED_DET requires the quote that was verified, without it the "
                 "confirmation cannot be repeated"
             )
 
     if epistemic_class is EpistemicClass.INFERRED:
         if not premises:
             raise AssertionError_(
-                "INFERRED assertions require premises — an inference with no stated "
+                "INFERRED assertions require premises, an inference with no stated "
                 "basis cannot be explained or retracted correctly"
             )
         if premise_confidences:

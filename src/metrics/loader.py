@@ -60,7 +60,7 @@ def load_metrics(path: str | Path) -> LoadResult:
         label = f"metric_id={entry_id!r}" if entry_id else f"metric #{idx}"
 
         if entry_id and entry_id in seen:
-            result.errors.append(f"{label}: duplicate metric_id — keeping the first occurrence")
+            result.errors.append(f"{label}: duplicate metric_id, keeping the first occurrence")
             continue
 
         try:

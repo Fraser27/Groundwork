@@ -489,7 +489,7 @@ async def scan_sources(
         "status": record.status,
         "last_scanned_at": record.last_scanned_at,
         "note": (
-            "Schemas only — no rows were read. Column types and descriptions are now "
+            "Schemas only, no rows were read. Column types and descriptions are now "
             "citable as DECLARED facts, and metrics can be compiled against them."
         ),
     }

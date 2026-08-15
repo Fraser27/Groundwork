@@ -277,7 +277,7 @@ export default function QueryBuilder() {
                           <tr key={i}>
                             {r.map((v, j) => (
                               <td key={j} className={typeof v === 'number' ? 'num' : ''}>
-                                {typeof v === 'number' ? v.toLocaleString() : (v ?? '—')}
+                                {typeof v === 'number' ? v.toLocaleString() : (v ?? '-')}
                               </td>
                             ))}
                           </tr>

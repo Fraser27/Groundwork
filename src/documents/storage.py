@@ -373,7 +373,7 @@ class DocumentStorage:
         """
         if not 0 < expires_in <= MAX_EXPIRY_SECONDS:
             raise ValueError(
-                f"expires_in must be in 1..{MAX_EXPIRY_SECONDS}s, got {expires_in} — a "
+                f"expires_in must be in 1..{MAX_EXPIRY_SECONDS}s, got {expires_in}, a "
                 "longer-lived URL is an unrevocable copy of the document"
             )
 

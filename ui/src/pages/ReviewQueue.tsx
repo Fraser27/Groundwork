@@ -361,7 +361,7 @@ export default function ReviewQueue() {
                       Scored {a.confidence.toFixed(2)}, below the {floor.toFixed(2)} trust floor.{' '}
                       {meta.label === 'Inferred'
                         ? 'Check the premises before approving.'
-                        : 'The model was not confident — read the quoted words closely.'}
+                        : 'The model was not confident, read the quoted words closely.'}
                     </span>
                   </div>
                 )}

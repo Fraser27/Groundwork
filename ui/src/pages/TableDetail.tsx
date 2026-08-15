@@ -117,7 +117,7 @@ export default function TableDetail() {
                 <td>
                   <code style={{ fontSize: 11.5 }}>{c.data_type}</code>
                 </td>
-                <td className="dim">{c.description || '—'}</td>
+                <td className="dim">{c.description || '-'}</td>
                 <td className="nowrap">
                   {c.is_primary_key && <span className="tag tag-green">primary</span>}{' '}
                   {c.is_partition && (

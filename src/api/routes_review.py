@@ -204,7 +204,7 @@ def _document_provenance(
     if storage is None:
         out.link_unavailable = (
             "no document store configured (DOCUMENT_BUCKET unset), so the file cannot be "
-            "linked — the page and quote above still identify the passage"
+            "linked, the page and quote above still identify the passage"
         )
         return out
 
@@ -300,7 +300,7 @@ def _explain(a: Any) -> str:
         )
     if cls is EpistemicClass.EXTRACTED_DET:
         return (
-            f"Found by exact pattern matching ({a.method}). Reproducible — the same "
+            f"Found by exact pattern matching ({a.method}). Reproducible, the same "
             "document always produces the same result, with no AI involved."
         )
     if cls is EpistemicClass.EXTRACTED_MODEL:

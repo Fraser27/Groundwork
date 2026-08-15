@@ -237,7 +237,7 @@ def _build_prompt(
 
 
 def _converse(bedrock_client, model_id: str, prompt: str, max_tokens: int = 1024) -> str:
-    """Bedrock Converse — provider-agnostic, so the model stays configurable."""
+    """Bedrock Converse, provider-agnostic, so the model stays configurable."""
     last: Exception | None = None
     for attempt in range(_BEDROCK_RETRIES):
         try:

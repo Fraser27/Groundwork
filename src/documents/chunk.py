@@ -110,7 +110,7 @@ def chunk_document(
     if overlap_chars > ceiling:
         raise ValueError(
             f"overlap_chars {overlap_chars} exceeds {MAX_OVERLAP_RATIO:.0%} of "
-            f"target_chars ({ceiling}) — see MAX_OVERLAP_RATIO"
+            f"target_chars ({ceiling}), see MAX_OVERLAP_RATIO"
         )
 
     chunks: list[Chunk] = []

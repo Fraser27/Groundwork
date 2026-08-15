@@ -99,7 +99,7 @@ class ScopeViolation(PermissionError):
 
     @property
     def is_screen(self) -> bool:
-        """True only for a documented in-tenant ethical wall — the disclosable case."""
+        """True only for a documented in-tenant ethical wall, the disclosable case."""
         return self.decision is AccessDecision.SCREENED
 
 
@@ -226,7 +226,7 @@ class ScopedQuery:
     params: dict[str, object]
 
     def and_(self, clause: str) -> ScopedQuery:
-        """Add a caller predicate. Cannot widen scope — only narrow it."""
+        """Add a caller predicate. Cannot widen scope, only narrow it."""
         return ScopedQuery(where=f"({self.where}) AND ({clause})", params=self.params)
 
 

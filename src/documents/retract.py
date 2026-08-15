@@ -109,7 +109,7 @@ def retract(
     reviewer needs *before* deciding, not after.
     """
     if not reason:
-        raise RetractionError("a retraction must carry a reason — this is the audit record")
+        raise RetractionError("a retraction must carry a reason, this is the audit record")
 
     record = queue.fetch(ctx, assertion_id)
     if not record.is_current:

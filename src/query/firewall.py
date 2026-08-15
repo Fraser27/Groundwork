@@ -39,7 +39,7 @@ class ValidationResult:
     denied_tables: list[str] = field(default_factory=list)
     reason: str = ""
     tables: list[str] = field(default_factory=list)
-    """Every table the query touches — useful for audit even when allowed."""
+    """Every table the query touches, useful for audit even when allowed."""
 
 
 class SQLFirewall:
@@ -76,7 +76,7 @@ class SQLFirewall:
                     self._cache = {t.lower() for t in self._provider() if t}
                     self._cache_ts = now
                 except Exception as e:
-                    logger.warning("firewall: allowlist provider failed — %s", e)
+                    logger.warning("firewall: allowlist provider failed, %s", e)
                     if self._cache is None:
                         self._cache = set()
             allowed |= self._cache

@@ -110,7 +110,7 @@ export default function Matters() {
           <div className="stat-card">
             <div className="label">
               Potential conflicts
-              <FieldHelp text="Inferred where the firm both acts for and opposes the same party. Fires only on facts declared by a system of record or confirmed by a check — a conflict flag resting on a model's guess would be worse than none." />
+              <FieldHelp text="Inferred where the firm both acts for and opposes the same party. Fires only on facts declared by a system of record or confirmed by a check, a conflict flag resting on a model's guess would be worse than none." />
             </div>
             <div className={`value ${(selected.counts?.conflicts ?? 0) > 0 ? 'red' : 'green'}`}>
               {fmtNum(selected.counts?.conflicts ?? 0)}
@@ -150,7 +150,7 @@ export default function Matters() {
                     {d.pending_review_count > 0 ? (
                       <span className="tag tag-orange">{d.pending_review_count}</span>
                     ) : (
-                      '—'
+                      '-'
                     )}
                   </td>
                   <td className="nowrap dim">{fmtDate(d.uploaded_at)}</td>
@@ -317,7 +317,7 @@ export default function Matters() {
                     <code>{m.matter_id}</code>
                   </div>
                 </td>
-                <td className="dim">{m.client || '—'}</td>
+                <td className="dim">{m.client || '-'}</td>
                 <td>
                   <span className={`tag ${m.status === 'open' ? 'tag-green' : 'tag-neutral'}`}>
                     {m.status}
@@ -329,14 +329,14 @@ export default function Matters() {
                   {m.counts?.pending_review ? (
                     <span className="tag tag-orange">{m.counts.pending_review}</span>
                   ) : (
-                    '—'
+                    '-'
                   )}
                 </td>
                 <td className="num">
                   {m.counts?.conflicts ? (
                     <span className="tag tag-red">{m.counts.conflicts}</span>
                   ) : (
-                    '—'
+                    '-'
                   )}
                 </td>
                 <td className="nowrap dim">{fmtDate(m.opened_at)}</td>

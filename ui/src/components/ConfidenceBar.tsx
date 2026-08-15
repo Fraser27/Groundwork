@@ -28,12 +28,12 @@ export default function ConfidenceBar({
     `Confidence ${value.toFixed(2)}`,
     floor !== undefined
       ? below
-        ? `below the ${floor.toFixed(2)} trust floor — visible for review, but excluded from answers`
+        ? `below the ${floor.toFixed(2)} trust floor, visible for review, but excluded from answers`
         : `at or above the ${floor.toFixed(2)} trust floor`
       : null,
   ]
     .filter(Boolean)
-    .join(' — ')
+    .join(', ')
 
   return (
     <span className="conf" title={title}>

@@ -212,7 +212,7 @@ export default function Provenance() {
                 <td>
                   <code style={{ fontSize: 11 }}>{a.method}</code>
                 </td>
-                <td className="nowrap dim">{a.matter_id || '—'}</td>
+                <td className="nowrap dim">{a.matter_id || '-'}</td>
                 <td className="nowrap">
                   <span
                     className={`tag ${

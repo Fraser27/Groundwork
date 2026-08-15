@@ -18,6 +18,7 @@ the system is guessing at intent rather than executing something a human approve
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC
 from enum import IntEnum
@@ -51,7 +52,7 @@ TIER_EXPLANATION = {
     ),
     Tier.LLM_SQL: (
         "No approved metric matched, so an AI model wrote the SQL. It was checked against "
-        "the query firewall before running, but it is not a governed answer — treat it as "
+        "the query firewall before running, but it is not a governed answer, treat it as "
         "a starting point."
     ),
 }
@@ -135,10 +136,48 @@ class Resolver:
         settings: GovernanceSettings,
         *,
         tier_override: Tier | None = None,
+        tiers_requested: Sequence[Tier] | None = None,
         execute: bool = True,
     ) -> Resolution:
+        """Try tiers most-precise-first and return the first that answers.
+
+        Three things narrow which tiers run, and they are not interchangeable:
+
+        `settings.allowed_tiers` is the tenant's hard cap. A tier outside it never runs,
+        and asking for one explicitly is refused rather than silently answered at another
+        tier, because "answered the way you asked" and "answered some other way" must not
+        look identical to the caller.
+
+        `tiers_requested` is the caller's chosen subset, honoured only within the cap.
+
+        `tier_override` pins exactly one tier. Kept for callers that want a single tier
+        and for the existing API shape.
+        """
+        allowed = {int(t) for t in settings.allowed_tiers}
+
+        if tier_override is not None:
+            requested = [tier_override]
+        elif tiers_requested:
+            requested = sorted(set(tiers_requested))
+        else:
+            requested = list(Tier)
+
+        refused = [t for t in requested if int(t) not in allowed]
+        if refused and (tier_override is not None or tiers_requested):
+            names = ", ".join(str(int(t)) for t in refused)
+            raise QueryBlocked(
+                f"tier {names} is not permitted for this tenant. Permitted tiers: "
+                f"{', '.join(str(t) for t in sorted(allowed))}."
+            )
+
+        tiers = [t for t in requested if int(t) in allowed]
+        if not tiers:
+            raise QueryBlocked(
+                "no resolution tier is permitted for this tenant, so no question can be "
+                "answered. An administrator controls this in governance settings."
+            )
+
         attempted: list[Tier] = []
-        tiers = [tier_override] if tier_override else list(Tier)
 
         for tier in tiers:
             attempted.append(tier)
@@ -152,8 +191,10 @@ class Resolver:
             answer=None,
             tiers_attempted=attempted,
             warnings=[
-                ("No approved metric matched and nothing relevant was found in the graph. "
-                "Rephrasing may help, or this may need a new metric definition.")
+                (
+                    "No approved metric matched and nothing relevant was found in the graph. "
+                    "Rephrasing may help, or this may need a new metric definition."
+                )
             ],
         )
 
@@ -174,9 +215,7 @@ class Resolver:
             return self._try_hybrid(ctx, question, settings)
         return self._try_llm_sql(ctx, question, settings, execute=execute)
 
-    def _try_metric(
-        self, ctx: AuthContext, question: str, *, execute: bool
-    ) -> Resolution | None:
+    def _try_metric(self, ctx: AuthContext, question: str, *, execute: bool) -> Resolution | None:
         if self._metrics is None:
             return None
         match = self._metrics.match(question)
@@ -193,9 +232,7 @@ class Resolver:
     ) -> Resolution | None:
         if self._graph is None:
             return None
-        hits = self._graph.search(
-            ctx, question, min_confidence=settings.min_confidence_floor
-        )
+        hits = self._graph.search(ctx, question, min_confidence=settings.min_confidence_floor)
         if not hits:
             return None
         return Resolution(
@@ -274,7 +311,9 @@ class Resolver:
             answer=answer,
             sql=sql,
             warnings=[
-                ("This SQL was written by an AI model, not compiled from an approved "
-                "metric. Check it before relying on the result.")
+                (
+                    "This SQL was written by an AI model, not compiled from an approved "
+                    "metric. Check it before relying on the result."
+                )
             ],
         )

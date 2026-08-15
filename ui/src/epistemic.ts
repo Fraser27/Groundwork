@@ -32,7 +32,7 @@ export const EPISTEMIC: Record<EpistemicClass, EpistemicMeta> = {
     label: 'Declared',
     colour: 'var(--epi-declared)',
     meaning:
-      'A system of record said so — a case management export, or a scan of the data catalogue.',
+      'A system of record said so, a case management export, or a scan of the data catalogue.',
     trust:
       'Treat as given. It is true by definition of the source; if it is wrong, the source is wrong. Enters the graph without review.',
     autoAsserted: true,
@@ -43,14 +43,14 @@ export const EPISTEMIC: Record<EpistemicClass, EpistemicMeta> = {
     meaning:
       'A quoted sentence was found on a named page of the document, and the system checked the words are there.',
     trust:
-      'The check is repeatable and says only that the words appear — nothing about what they imply. Anything read into them is a separate claim that waits for review. Enters the graph without review.',
+      'The check is repeatable and says only that the words appear, nothing about what they imply. Anything read into them is a separate claim that waits for review. Enters the graph without review.',
     autoAsserted: true,
   },
   EXTRACTED_MODEL: {
     label: 'Extracted (model)',
     colour: 'var(--epi-extracted-model)',
     meaning:
-      'Something read into the document rather than merely found in it — that one holding undercuts another, that a clause replaces an earlier one.',
+      'Something read into the document rather than merely found in it, that one holding undercuts another, that a clause replaces an earlier one.',
     trust:
       'A judgement, not a check, so it is not yet trusted. This is the only class that waits for a person to approve or reject it, which is what the review queue is for.',
     autoAsserted: false,
@@ -60,7 +60,7 @@ export const EPISTEMIC: Record<EpistemicClass, EpistemicMeta> = {
     colour: 'var(--epi-inferred)',
     meaning: 'A rule derived this from other assertions rather than reading it anywhere.',
     trust:
-      'As trustworthy as its weakest premise, and never more — the system refuses to record an inference more confident than what it rests on. Open the proof tree to see exactly what it rests on.',
+      'As trustworthy as its weakest premise, and never more, the system refuses to record an inference more confident than what it rests on. Open the proof tree to see exactly what it rests on.',
     autoAsserted: false,
   },
   PREDICTED: {
@@ -107,27 +107,27 @@ export const HELP = {
   sourceLocator:
     'Exactly where a fact came from, precise enough to check by hand: for a document, the file, the page and the sentence quoted from it; for a database, the source, table and column.',
   pageCitation:
-    'The citation for a fact read from a document: the file, the page, and the words themselves. It is deliberately what you would use to check it by hand — open the file at that page and search for the sentence. Any viewer can do that, and it still works after the document is re-processed.',
+    'The citation for a fact read from a document: the file, the page, and the words themselves. It is deliberately what you would use to check it by hand, open the file at that page and search for the sentence. Any viewer can do that, and it still works after the document is re-processed.',
   quote:
     'The words from the document, copied exactly. Not a summary: a paraphrase could not be searched for in the original, so a claim whose quote cannot be found on the stated page is refused rather than recorded.',
   textOffsets:
-    'An internal position within the extracted text, kept only for diagnosis. It does not correspond to a position in the file you would open, so it is not the citation — the file, page and quote are. Safe to ignore.',
+    'An internal position within the extracted text, kept only for diagnosis. It does not correspond to a position in the file you would open, so it is not the citation, the file, page and quote are. Safe to ignore.',
   spanHash:
     'A fingerprint of the quoted words taken when the fact was recorded. If the underlying document is ever replaced, the fingerprint stops matching and the fact is flagged rather than silently drifting.',
   method:
-    'The specific, versioned thing that produced this fact — for example a named model, a catalogue scan, or a rule with its version. Versioned so that improving it supersedes its old output instead of quietly mixing generations.',
+    'The specific, versioned thing that produced this fact, for example a named model, a catalogue scan, or a rule with its version. Versioned so that improving it supersedes its old output instead of quietly mixing generations.',
   governingPredicate:
-    'A relationship that drives a decision with legal consequence: conflicts, privilege, deadlines, citation authority. The list is closed, and a proposed fact using anything outside it is rejected when it is written — because a conflict check that misses a synonym looks exactly like a clean conflict check.',
+    'A relationship that drives a decision with legal consequence: conflicts, privilege, deadlines, citation authority. The list is closed, and a proposed fact using anything outside it is rejected when it is written, because a conflict check that misses a synonym looks exactly like a clean conflict check.',
   descriptivePredicate:
     'A subject-matter tag. The list is open. Sprawl here costs search precision, not a negligence claim.',
   matterWall:
     'An ethical wall. Matters you are walled off from are invisible to you: they do not appear in results, counts, or the graph. A denial always beats a permission, so a broad role cannot defeat a wall.',
   matterAssignment:
-    'Being on a matter’s team. You can read a matter only if someone put you on it, so the starting position for everyone is no access at all. Taking someone off does not erase the record that they were on it — the file has to show who could read what, and when.',
+    'Being on a matter’s team. You can read a matter only if someone put you on it, so the starting position for everyone is no access at all. Taking someone off does not erase the record that they were on it, the file has to show who could read what, and when.',
   ethicalScreen:
     'A recorded instruction that one person must not see one matter, whatever else they hold. It overrides being on the team, and it overrides holding the administrator role, because a wall a senior person can read through is not a wall. Lifting one is also recorded rather than tidied away.',
   accessDecision:
-    'The reason a matter is or is not open to someone, in four possibilities: they are on the team; they are screened from it; nobody has put them on it; or they hold the administrator role and can reach it without being on the team. Naming the reason matters — “screened” calls for a conversation with the risk team, while “not on the team” is usually just someone forgetting to staff them.',
+    'The reason a matter is or is not open to someone, in four possibilities: they are on the team; they are screened from it; nobody has put them on it; or they hold the administrator role and can reach it without being on the team. Naming the reason matters, “screened” calls for a conversation with the risk team, while “not on the team” is usually just someone forgetting to staff them.',
   accessAudit:
     'The record of every change to who may read what: who made the change, who it was about, which matter, the reason given, and when. Entries are only ever added, never edited or removed, which is what makes it usable as evidence.',
   platformAdminAccess:
@@ -137,11 +137,11 @@ export const HELP = {
   bitemporal:
     'Two clocks. World time is when a fact was true; transaction time is when the system learned it. Keeping both is what makes "what did we know then" answerable.',
   tenant:
-    'One firm. Each tenant has its own graph and every read is filtered to it. Matters are subgraphs inside a tenant — not separate graphs, because conflict checking is by definition cross-matter.',
+    'One firm. Each tenant has its own graph and every read is filtered to it. Matters are subgraphs inside a tenant, not separate graphs, because conflict checking is by definition cross-matter.',
   timeGrain:
-    'The coarsest time buckets this metric may be reported in — monthly, quarterly, and so on. Fixed per metric so the same number cannot be quietly re-cut into a period it is not valid for.',
+    'The coarsest time buckets this metric may be reported in, monthly, quarterly, and so on. Fixed per metric so the same number cannot be quietly re-cut into a period it is not valid for.',
   additivity:
-    'Whether a measure may be summed across periods. Fees billed are additive; matter headcount is not — adding it across months produces a number that means nothing.',
+    'Whether a measure may be summed across periods. Fees billed are additive; matter headcount is not, adding it across months produces a number that means nothing.',
   governedMetric:
     'A metric definition that compiles to SQL deterministically. The same question always produces the same SQL, and no language model is involved in generating it.',
   resolutionTier:
@@ -189,7 +189,7 @@ export const ACCESS_DECISIONS: Record<AccessDecision, AccessDecisionMeta> = {
     label: 'Not on the team',
     colour: 'var(--text-dim)',
     meaning: 'Nobody has put this person on the matter, so it is closed to them.',
-    action: 'Not a wall — nobody decided anything. Add them if they should be working on it.',
+    action: 'Not a wall, nobody decided anything. Add them if they should be working on it.',
   },
   PLATFORM_ADMIN: {
     label: 'By role',

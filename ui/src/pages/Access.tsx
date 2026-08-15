@@ -391,7 +391,7 @@ export default function Access() {
                                 <span className="access-reason-contact">
                                   {s.contact
                                     ? `They are told to contact ${s.contact}.`
-                                    : 'No contact given — they are told to ask their risk team.'}
+                                    : 'No contact given, they are told to ask their risk team.'}
                                 </span>
                               </div>
                             </td>
@@ -549,7 +549,7 @@ export default function Access() {
                           <td>
                             <DecisionBadge decision={d.decision} />
                           </td>
-                          <td className="dim">{d.role ?? '—'}</td>
+                          <td className="dim">{d.role ?? '-'}</td>
                           <td>
                             <div className="access-reason">
                               {d.decision === 'SCREENED' ? (
@@ -908,7 +908,7 @@ function ReasonModal({
         <div className="form-group">
           <label>
             {reasonLabel}
-            {reasonRequired ? ' — required' : ' — recommended'}
+            {reasonRequired ? ', required' : ', recommended'}
             <FieldHelp text={reasonHelp} />
           </label>
           <textarea

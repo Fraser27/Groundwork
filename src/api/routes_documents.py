@@ -108,7 +108,7 @@ def _require_storage(services: Services) -> DocumentStorage:
     if storage is None:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "no document store configured (DOCUMENT_BUCKET unset) — an upload with "
+            "no document store configured (DOCUMENT_BUCKET unset), an upload with "
             "nowhere immutable to land would produce citations that cannot be checked",
         )
     return storage
@@ -255,7 +255,7 @@ def _run_pipeline(
         "pending_review": services.review_queue.pending_count(ctx),
         "note": (
             "Claims whose quote was found verbatim in the document went live "
-            "immediately — a search confirmed the text is there. Anything the model "
+            "immediately, a search confirmed the text is there. Anything the model "
             "interpreted is waiting in the review queue."
         ),
     }
@@ -543,7 +543,7 @@ async def upload_document(
             "assertion_count": 0,
             "pending_review_count": services.review_queue.pending_count(ctx),
             "note": (
-                "The file is stored and its hash recorded, so nothing is lost — but no "
+                "The file is stored and its hash recorded, so nothing is lost, but no "
                 "text was read from it, so it is not yet searchable or citable."
             ),
         }

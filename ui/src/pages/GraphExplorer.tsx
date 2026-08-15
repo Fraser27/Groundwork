@@ -821,7 +821,7 @@ export default function GraphExplorer() {
                       <span style={{ flex: 1, minWidth: 0 }}>
                         {outbound ? '' : '← '}
                         <span className="prov-pred">{e.predicate}</span>{' '}
-                        {other?.label ?? '—'}
+                        {other?.label ?? '-'}
                       </span>
                       <ConfidenceBar value={e.confidence} floor={floor} width={44} />
                     </button>

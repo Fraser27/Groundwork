@@ -158,7 +158,7 @@ export default function Tables() {
                 <td>
                   <EpistemicBadge epistemicClass={t.epistemic_class} size="sm" />
                 </td>
-                <td className="dim">{t.description || '—'}</td>
+                <td className="dim">{t.description || '-'}</td>
               </tr>
             ))}
             {filtered.length === 0 && (

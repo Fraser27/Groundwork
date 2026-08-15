@@ -78,7 +78,7 @@ class ScanResult:
         return StaticCatalog({t.full_name: t for t in self.tables})
 
     def allowed_tables(self) -> set[str]:
-        """Everything catalogued — the firewall's allowlist for this source."""
+        """Everything catalogued, the firewall's allowlist for this source."""
         return {t.full_name for t in self.tables}
 
 

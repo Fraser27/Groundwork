@@ -142,7 +142,7 @@ class GraphClient:
         self._driver.close()
 
     def query(self, cypher: str, params: dict | None = None) -> list[dict]:
-        """Unscoped read. Admin/catalog use only — never for tenant graph data."""
+        """Unscoped read. Admin/catalog use only, never for tenant graph data."""
         with self._driver.session() as session:
             return [r.data() for r in session.run(cypher, params or {})]
 
@@ -157,7 +157,7 @@ class GraphClient:
         """
         if "{scope}" not in cypher_template:
             raise ValueError(
-                "scoped reads must contain a {scope} placeholder — see src/graph/scope.py"
+                "scoped reads must contain a {scope} placeholder, see src/graph/scope.py"
             )
         cypher = cypher_template.replace("{scope}", scope.where)
         merged = {**scope.params, **(params or {})}

@@ -263,7 +263,7 @@ class SchemaCatalog(Protocol):
 
 @dataclass(frozen=True)
 class StaticCatalog:
-    """In-memory `SchemaCatalog` — used by tests and by a graph-backed adapter."""
+    """In-memory `SchemaCatalog`, used by tests and by a graph-backed adapter."""
 
     tables: Mapping[str, TableSchema]
 

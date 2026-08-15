@@ -260,7 +260,7 @@ async def audit(
     if bool(matter_id) == bool(user_id):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "pass exactly one of matter_id or user_id — the trail is read per matter or per person",
+            "pass exactly one of matter_id or user_id, the trail is read per matter or per person",
         )
 
     store = services.access.store

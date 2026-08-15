@@ -169,7 +169,7 @@ export default function Documents() {
         setActive((prev) => [...prev, { filename: f.name, state: 'REGISTERED', at: Date.now() }])
       }
       showToast(
-        `${list.length} file${list.length === 1 ? '' : 's'} uploaded. Reading the pages happens in the background — progress appears below.`,
+        `${list.length} file${list.length === 1 ? '' : 's'} uploaded. Reading the pages happens in the background, progress appears below.`,
       )
       load()
     } catch (e) {
@@ -394,7 +394,7 @@ export default function Documents() {
                     <code>{d.document_id}</code>
                   </div>
                 </td>
-                <td className="nowrap dim">{d.matter_id || '—'}</td>
+                <td className="nowrap dim">{d.matter_id || '-'}</td>
                 <td>
                   <IngestPill state={d.state} />
                   {d.error && (
@@ -410,7 +410,7 @@ export default function Documents() {
                   {d.pending_review_count > 0 ? (
                     <span className="tag tag-orange">{d.pending_review_count}</span>
                   ) : (
-                    '—'
+                    '-'
                   )}
                 </td>
                 <td className="nowrap dim">{fmtDateTime(d.uploaded_at)}</td>
@@ -499,7 +499,7 @@ export default function Documents() {
                       <span>
                         <IngestPill state={t.state} />
                       </span>
-                      <span className="timeline-detail">{t.detail || '—'}</span>
+                      <span className="timeline-detail">{t.detail || '-'}</span>
                     </div>
                   ))}
                 </div>
