@@ -90,7 +90,12 @@ def _client(endpoint: str, region: str) -> Any:
     """
     try:
         import boto3
-        from opensearchpy import AWSV4SignerAuth, OpenSearch, RequestsHttpConnection
+
+        # `RequestsAWSV4SignerAuth`, not the bare `AWSV4SignerAuth`. In opensearch-py 3.x the
+        # unqualified name is the *urllib3* signer, and pairing it with RequestsHttpConnection
+        # silently sends the request unsigned -- which OpenSearch answers with 401, not the 403
+        # that would point at a policy. The signer and the connection class have to match.
+        from opensearchpy import OpenSearch, RequestsAWSV4SignerAuth, RequestsHttpConnection
     except ImportError as e:  # pragma: no cover - dependency presence, not logic
         raise VectorStoreError(
             "opensearch-py is required for the OpenSearch vector store; "
@@ -101,7 +106,7 @@ def _client(endpoint: str, region: str) -> Any:
     credentials = boto3.Session().get_credentials()
     # `aoss`, not `es`: OpenSearch Serverless is a distinct signing service name, and using
     # `es` produces a 403 whose message does not mention the service name at all.
-    auth = AWSV4SignerAuth(credentials, region, "aoss")
+    auth = RequestsAWSV4SignerAuth(credentials, region, "aoss")
     return OpenSearch(
         hosts=[{"host": host, "port": 443}],
         http_auth=auth,

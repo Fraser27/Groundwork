@@ -226,6 +226,17 @@ def _run_pipeline(
         try:
             assertions = extractor.extract_document(chunks)
             extraction = "ran"
+            # Logged because "ran and found nothing" and "never ran" were indistinguishable in
+            # production: the result goes to a background task nobody reads, and a zero-yield
+            # extraction produces no warning. The model id is included because a wrong or
+            # unavailable model is the likeliest cause of a silent zero.
+            logger.info(
+                "extraction on %s: %d chunks -> %d claims (model %s)",
+                parsed.document_id,
+                len(chunks),
+                len(assertions),
+                extractor.model_id,
+            )
         except Exception as e:
             # Broad on purpose: a missing credential surfaces from botocore rather than
             # as ModelExtractionFailed. Chunks are already embedded and searchable, so

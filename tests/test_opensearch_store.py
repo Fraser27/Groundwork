@@ -380,3 +380,71 @@ class TestWiring:
 
         cfg = LexGraphConfig(vector=VectorConfig(endpoint=""))
         assert isinstance(_build_vector_store(cfg), InMemoryVectorStore)
+
+
+class TestTheSignerMatchesTheConnection:
+    """A mismatched signer sends the request unsigned, and the failure does not say so.
+
+    In opensearch-py 3.x the unqualified `AWSV4SignerAuth` is the *urllib3* signer. Paired with
+    `RequestsHttpConnection` it silently signs nothing, and OpenSearch answers 401 -- not the 403
+    that would send you to look at the data access policy. Both halves of the policy were
+    correct; the client was the problem.
+
+    Asserted on what the client is built with rather than by making a request, because the whole
+    failure mode is that an unsigned request looks like an authorisation problem.
+    """
+
+    def test_the_requests_signer_is_used(self, monkeypatch):
+        from opensearchpy import RequestsAWSV4SignerAuth
+
+        import src.documents.opensearch_store as mod
+
+        captured: dict[str, Any] = {}
+
+        class FakeSession:
+            def get_credentials(self):
+                return object()
+
+        monkeypatch.setattr("boto3.Session", FakeSession)
+
+        def fake_opensearch(**kwargs: Any) -> str:
+            captured.update(kwargs)
+            return "client"
+
+        monkeypatch.setattr("opensearchpy.OpenSearch", fake_opensearch)
+        mod._client("https://x.aoss.us-east-1.on.aws", "us-east-1")
+
+        assert isinstance(captured["http_auth"], RequestsAWSV4SignerAuth)
+
+    def test_the_service_name_is_aoss(self, monkeypatch):
+        """`es` produces a 403 whose message never mentions the service name."""
+        import src.documents.opensearch_store as mod
+
+        captured: dict[str, Any] = {}
+
+        class FakeSession:
+            def get_credentials(self):
+                return object()
+
+        monkeypatch.setattr("boto3.Session", FakeSession)
+        monkeypatch.setattr("opensearchpy.OpenSearch", lambda **kw: captured.update(kw))
+        mod._client("https://x.aoss.us-east-1.on.aws", "us-east-1")
+
+        assert captured["http_auth"].service == "aoss"
+
+    def test_the_scheme_is_stripped_from_the_host(self):
+        """The endpoint arrives as a URL and the client wants a bare host, the same trap as the
+        Cognito domain in the UI."""
+        import src.documents.opensearch_store as mod
+
+        captured: dict[str, Any] = {}
+        import opensearchpy
+
+        original = opensearchpy.OpenSearch
+        try:
+            opensearchpy.OpenSearch = lambda **kw: captured.update(kw)
+            mod._client("https://x.aoss.us-east-1.on.aws/", "us-east-1")
+        finally:
+            opensearchpy.OpenSearch = original
+
+        assert captured["hosts"][0]["host"] == "x.aoss.us-east-1.on.aws"
