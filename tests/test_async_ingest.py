@@ -302,8 +302,12 @@ class TestIngestFromNotification:
         assert any(p["Key"].startswith(PROCESSED_PREFIX) for p in s3.puts)
 
     def test_review_needed_stops_at_pending_review(self, storage, s3):
+        """Staged but not promoted is what "needs review" means. This test used to pass a bare
+        `pending_review`, which is a tenant-wide count, and so asserted the bug where one
+        pending assertion anywhere held every later document open."""
+
         def needs_review(ctx, parsed, *, matter_id, run_model_extraction, job_id):
-            return {"chunks": 2, "pending_review": 4}
+            return {"chunks": 2, "assertions_staged": 4, "assertions_live": 0, "pending_review": 4}
 
         runner = make_runner(storage, pipeline=needs_review)
         job = runner.ingest_raw_key(self._land(s3))
@@ -394,3 +398,48 @@ class TestConcurrencyCap:
         limiter = IngestLimiter(1)
         make_runner(storage, limiter=limiter, pipeline=boom).ingest_raw_key(key)
         assert limiter.try_acquire()
+
+
+class TestTerminalStateReflectsThisDocument:
+    """A job's final state must describe the document it ingested, not the tenant.
+
+    `pending_review` in the pipeline result is a tenant-wide count, so keying the terminal
+    state off it parked every subsequent document at PENDING_REVIEW as soon as one assertion
+    was pending anywhere -- including a document that produced no assertions at all, which
+    then read as "awaiting review" while nothing was queued for it.
+    """
+
+    def _land(self, s3: FakeS3) -> str:
+        key = raw_key(TENANT, "u1", "brief.txt")
+        s3.land(
+            key,
+            TEXT,
+            metadata={"tenant-id": TENANT, "uploaded-by": "alice", "filename": "brief.txt"},
+            content_type="text/plain",
+        )
+        return key
+
+    def test_a_document_that_staged_nothing_reaches_live(self, storage, s3):
+        """Seven assertions pending elsewhere in the tenant must not hold this one open."""
+
+        def pipeline(ctx, parsed, *, matter_id, run_model_extraction, job_id):
+            return {"chunks": 1, "assertions_staged": 0, "assertions_live": 0, "pending_review": 7}
+
+        runner = make_runner(storage, pipeline=pipeline)
+        assert runner.ingest_raw_key(self._land(s3)).state is JobState.LIVE
+
+    def test_a_document_awaiting_a_person_stops_at_pending_review(self, storage, s3):
+        def pipeline(ctx, parsed, *, matter_id, run_model_extraction, job_id):
+            return {"chunks": 1, "assertions_staged": 3, "assertions_live": 1, "pending_review": 0}
+
+        runner = make_runner(storage, pipeline=pipeline)
+        assert runner.ingest_raw_key(self._land(s3)).state is JobState.PENDING_REVIEW
+
+    def test_everything_auto_asserted_reaches_live(self, storage, s3):
+        """All staged claims promoted immediately, so no reviewer is involved."""
+
+        def pipeline(ctx, parsed, *, matter_id, run_model_extraction, job_id):
+            return {"chunks": 1, "assertions_staged": 4, "assertions_live": 4, "pending_review": 2}
+
+        runner = make_runner(storage, pipeline=pipeline)
+        assert runner.ingest_raw_key(self._land(s3)).state is JobState.LIVE

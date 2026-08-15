@@ -193,7 +193,13 @@ class IngestRunner:
             self.tracker.advance(job, state)
         self._emit(job, {"result": result})
 
-        if result.get("pending_review"):
+        # This job's own staged-but-unpromoted count, not the tenant's. `pending_review` is
+        # tenant-wide, so using it parked every later document at PENDING_REVIEW as soon as
+        # one assertion was pending anywhere -- including documents that produced nothing,
+        # which then showed "awaiting review" against an empty queue.
+        staged = int(result.get("assertions_staged") or 0)
+        promoted = int(result.get("assertions_live") or 0)
+        if staged > promoted:
             self.tracker.advance(job, JobState.PENDING_REVIEW)
         else:
             # Nothing needs a human, so the job is done. APPROVED is passed through

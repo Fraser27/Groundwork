@@ -192,22 +192,41 @@ honest about the gaps than to describe an intention as a feature. The significan
 <li><strong>There is no reasoning engine.</strong> The <span class="badge inferred">INFERRED</span>
 class, the premise structure, the proof-tree machinery and the confidence ceiling on inferences
 are all built and tested, and two rules are written out in the legal vocabulary pack. Nothing
-fires them. Until something does, no inferred facts exist in practice.</li>
-<li><strong>Graph writes are not persisted.</strong> Assertions currently live in an in-process
-store, so they do not survive a restart, and the read path reads from that store rather than
-from the graph database. The database schema, the indexes and the scoped-read mechanism all
-exist; the writer does not. This is the single largest gap.</li>
+fires them: no code path passes <code>INFERRED</code> to <code>build_assertion</code>, so the
+rules are listed to callers and never evaluated. Until something fires them, no inferred facts
+exist in practice — which means the conflict check and the stale-authority check are the two
+things this system most wants to demonstrate and cannot yet.</li>
+<li><strong>Assertions are not persisted. This remains the single largest gap.</strong> They live
+in an in-process store, so they do not survive a restart or a deploy, and the read path reads
+from that store rather than from the graph. Neptune is connected and its schema, indexes and
+scoped reads all work — governed metrics and their version history really are written to and read
+from the graph — but no writer puts assertions there. Everything else durable is genuinely
+durable: documents in S3, ingest jobs and matter grants in DynamoDB, metric definitions in
+Neptune.</li>
 <li><strong>Tier 4 has no SQL generator wired up</strong>, so in practice it always declines. The
 query firewall it would be checked against does exist and is tested.</li>
-<li><strong>Tier 1 returns SQL but not a result</strong>, because no query executor is connected.
-Asking for the SQL without running it is the honest local mode.</li>
-<li><strong>Vector search is in-process.</strong> The managed search service is provisioned in the
-infrastructure definitions, but no adapter has been written against it, so embeddings are held in
-memory and lost on restart.</li>
-<li><strong>Nothing has been deployed.</strong> The six infrastructure stacks synthesise cleanly
-and have never been applied to an account.</li>
+<li><strong>Tier 1 returns SQL but not a result.</strong> The Athena executor is written and
+tested, including the firewall check inside it, but nothing connects it to the metric path, so a
+governed metric compiles to SQL that is never run.</li>
+<li><strong>Vector search is in-process.</strong> The managed search service is provisioned and
+its endpoint is passed to the application, but no adapter has been written against it, so
+embeddings are held in the task's memory and lost on restart.</li>
+<li><strong>Per-tenant governance settings are in-process too</strong>, so a change made in Admin
+is lost on the next deploy. Relatedly, the blocked-questions list an administrator reads is
+always empty: refusals are recorded per request and never accumulated, so the kill switch
+refuses correctly but cannot show you what it refused.</li>
+<li><strong>One task only.</strong> Live ingest progress arrives over a WebSocket served by a
+single process, and ingestion itself runs as a background task inside the API container, so it
+dies with the container. The durable job store makes a failed run retryable, not resumable. The
+30-second poll, not the socket, is the correctness guarantee.</li>
 </ul>
 </div>
+
+<p>Deployment is no longer among them: all six stacks — <code>LexGraphNetwork</code>,
+<code>LexGraphData</code>, <code>LexGraphAuth</code>, <code>LexGraphApp</code>,
+<code>LexGraphMcp</code> and <code>LexGraphWeb</code> — are applied to a real account, and the
+document pipeline runs there end to end: a presigned browser upload lands in S3, a notification
+starts ingestion, and pages are transcribed, chunked, embedded and read by a model.</p>
 
 <p>Where a page describes something in this list, it says so at that point rather than leaving
 the reader to check here.</p>

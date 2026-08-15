@@ -200,8 +200,10 @@ approving it.</p>
 
 <div class="note gap">
 <div class="note-title">Not built yet</div>
-<p>No query executor is connected, so tier 1 currently returns the compiled SQL with no result
-attached. Requesting the SQL without running it is the honest mode locally.</p>
+<p>Tier 1 returns the compiled SQL with no result attached. The Athena executor is written and
+tested, with the firewall check inside it, but nothing connects it to the metric path — so the SQL
+a governed metric compiles to is never run. Requesting the SQL without running it is the honest
+mode until that wire exists.</p>
 </div>
 
 <h2 id="composition-bug">A composition bug worth recording</h2>

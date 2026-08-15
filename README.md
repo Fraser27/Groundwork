@@ -309,17 +309,29 @@ defend, rather than just nearest neighbours.
 
 ## Status
 
-Built and tested:
+Deployed to a real AWS account across six stacks, with 1,051 tests passing. The
+document path works end to end there: a presigned browser upload lands in S3, an S3
+notification starts ingestion, and pages are transcribed by a vision model, chunked
+with offsets kept, embedded, and read for claims that land in the review queue.
 
-- `src/graph/assertions.py` — the contract, 5 invariants
-- `src/graph/scope.py` — tenant/matter scoping, bitemporal reads
-- `src/ontology/loader.py` — domain packs, two-tier predicate gate
-- `ontologies/legal.yaml`, `ontologies/healthcare.yaml`
-- 70 tests passing
+**What is not yet true**, because a README that overstates is worse than one that
+admits:
 
-Next: graph client + schema, structured pipeline (Glue scan → enrich → approve →
-metrics), unstructured pipeline (transcribe → extract → review), tiered resolver,
-FastAPI + Cognito, MCP on AgentCore, React UI with light/dark themes.
+- **Nothing fires the rules.** `INFERRED`, premises, proof trees and the confidence
+  ceiling are built and tested, and the legal pack declares two rules, but no code
+  path evaluates them. So the conflict check and the stale-authority check — the two
+  things this design exists to show — do not fire yet.
+- **Assertions are not persisted.** They live in an in-process store, so a deploy
+  loses them, and reads come from that store rather than from Neptune. This is the
+  largest gap. Metric definitions and their version history *are* in the graph, and
+  documents, ingest jobs and matter grants are genuinely durable.
+- **Tier 1 compiles SQL that nothing runs.** The Athena executor exists and is
+  tested; it is not wired to the metric path.
+- **Tier 4 has no SQL generator**, so it always declines. Its firewall is real.
+- **Vectors are in-process.** OpenSearch Serverless is provisioned but has no
+  adapter yet.
+- **One task only.** Live ingest events and the ingest work itself both live in a
+  single container; the 30-second poll is the correctness guarantee.
 
 ## Development
 

@@ -385,7 +385,17 @@ def _run_ingest(runner: IngestRunner, key: str, *, run_model_extraction: bool) -
     """Background entry point. Swallows nothing silently: a failed ingest is recorded on
     the job, and a refusal is logged so the retry is explicable."""
     try:
-        runner.ingest_raw_key(key, run_model_extraction=run_model_extraction)
+        job = runner.ingest_raw_key(key, run_model_extraction=run_model_extraction)
+        # Logged because this is the only place the outcome is observable. The result goes to
+        # a background task nobody reads, so an extraction that quietly found nothing looked
+        # identical to one that was never attempted.
+        logger.info(
+            "ingest finished for %s: state=%s chunks=%d staged=%d",
+            key,
+            job.state.value,
+            job.chunk_count,
+            len(job.staged_assertion_ids),
+        )
     except IngestBusy as e:
         # The object stays in S3 under a 7-day lifecycle, so a refusal costs a retry
         # rather than the document.
