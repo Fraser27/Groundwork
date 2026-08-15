@@ -226,17 +226,17 @@ export class AppStack extends cdk.Stack {
               // operation an operator performs deliberately, not something the
               // request-serving role should be able to do by accident.
               //
-              // DeleteDocument *is* needed: re-ingesting a document clears its old
-              // chunks first, and a tenant reset deletes by query rather than
-              // dropping the index so the mapping survives. Without it both 403 at
-              // the moment somebody rebuilds, which is the worst time to find out.
+              // There is deliberately no delete permission beyond this: Serverless
+              // has no `aoss:DeleteDocument`, and `aoss:WriteDocument` already
+              // covers `DELETE <index>/_doc/<id>` and `_bulk`. Adding the invented
+              // one failed the deploy with an unhelpful InvalidRequest naming the
+              // whole policy rather than the bad value.
               Permission: [
                 'aoss:CreateIndex',
                 'aoss:DescribeIndex',
                 'aoss:UpdateIndex',
                 'aoss:ReadDocument',
                 'aoss:WriteDocument',
-                'aoss:DeleteDocument',
               ],
             },
           ],

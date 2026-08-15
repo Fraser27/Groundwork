@@ -55,7 +55,7 @@ class FakeOpenSearch:
         self.hits = hits or []
         self.searches: list[dict[str, Any]] = []
         self.bulks: list[list[dict[str, Any]]] = []
-        self.deletes: list[dict[str, Any]] = []
+        self.delete_hits: list[dict[str, Any]] = []
         self.bulk_errors = False
 
     def bulk(self, body: list[dict[str, Any]], **kw: Any) -> dict[str, Any]:
@@ -69,11 +69,11 @@ class FakeOpenSearch:
 
     def search(self, index: str, body: dict[str, Any], **kw: Any) -> dict[str, Any]:
         self.searches.append({"index": index, "body": body})
+        # A delete searches for ids first. Served once, then empty, so the paging loop ends.
+        if "_source" in body and body["_source"] is False:
+            page, self.delete_hits = self.delete_hits, []
+            return {"hits": {"hits": page}}
         return {"hits": {"hits": self.hits}}
-
-    def delete_by_query(self, index: str, body: dict[str, Any], **kw: Any) -> dict[str, Any]:
-        self.deletes.append({"index": index, "body": body})
-        return {"deleted": 2}
 
     def count(self, index: str, **kw: Any) -> dict[str, Any]:
         if index not in self.indices.existing:
@@ -276,21 +276,64 @@ class TestReading:
 
 
 class TestDeleting:
-    def test_a_document_is_deleted_by_query(self):
-        client = FakeOpenSearch()
-        assert store(client).delete_document(INDEX, "doc-1") == 2
-        assert client.deletes[0]["body"]["query"] == {"term": {"document_id": "doc-1"}}
+    """Serverless has no `_delete_by_query`.
 
-    def test_a_tenant_reset_keeps_the_mapping(self):
-        """Deletes by query rather than dropping the index, so the next upload does not race
-        to recreate it."""
-        client = FakeOpenSearch()
+    It is absent from the supported-operations table and 404s, so a delete-by-predicate has to
+    be assembled from a search for ids and a bulk delete -- both of which live under
+    `aoss:WriteDocument`. Discovered when a deploy failed on an invented `aoss:DeleteDocument`
+    permission, which sent me to the actual operations table.
+    """
+
+    def _with_hits(self, ids: list[str]) -> FakeOpenSearch:
+        client = FakeOpenSearch(existing={INDEX})
+        client.delete_hits = [{"_id": i} for i in ids]
+        return client
+
+    def test_a_document_is_deleted_by_searching_then_bulk_deleting(self):
+        client = self._with_hits(["c1", "c2"])
+        assert store(client).delete_document(INDEX, "doc-1") == 2
+
+        assert client.searches[-1]["body"]["query"] == {"term": {"document_id": "doc-1"}}
+        assert client.bulks[-1] == [
+            {"delete": {"_index": INDEX, "_id": "c1"}},
+            {"delete": {"_index": INDEX, "_id": "c2"}},
+        ]
+
+    def test_the_id_search_does_not_fetch_the_documents(self):
+        """`_source: False` keeps a reset from pulling every embedding back over the wire."""
+        client = self._with_hits(["c1"])
+        store(client).delete_document(INDEX, "doc-1")
+        assert client.searches[-1]["body"]["_source"] is False
+
+    def test_a_tenant_reset_targets_the_tenant_and_keeps_the_mapping(self):
+        """Deletes documents, not the index, so the next upload does not race to recreate it."""
+        client = self._with_hits(["c1"])
         store(client).delete_tenant(INDEX, "demo-firm")
-        assert client.deletes[0]["body"]["query"] == {"term": {"tenant_id": "demo-firm"}}
+
+        assert client.searches[-1]["body"]["query"] == {"term": {"tenant_id": "demo-firm"}}
+        assert client.indices.created == []
+
+    def test_nothing_matching_deletes_nothing(self):
+        client = FakeOpenSearch(existing={INDEX})
+        assert store(client).delete_document(INDEX, "doc-1") == 0
+        assert client.bulks == []
+
+    def test_a_full_page_is_followed_by_another_round(self):
+        """A reset on a large tenant spans pages. Stopping after the first would leave vectors
+        behind for documents the graph no longer knows about."""
+        from src.documents.opensearch_store import DELETE_PAGE_SIZE
+
+        client = FakeOpenSearch(existing={INDEX})
+        client.delete_hits = [{"_id": f"c{i}"} for i in range(DELETE_PAGE_SIZE)]
+        deleted = store(client).delete_tenant(INDEX, "demo-firm")
+
+        assert deleted == DELETE_PAGE_SIZE
+        # Two searches: the full page, then the empty one that ends the loop.
+        assert len(client.searches) == 2
 
     def test_deleting_from_a_missing_index_is_zero(self):
         class NoIndex(FakeOpenSearch):
-            def delete_by_query(self, index: str, body: dict[str, Any], **kw: Any):
+            def search(self, index: str, body: dict[str, Any], **kw: Any):
                 raise RuntimeError("index_not_found_exception")
 
         assert store(NoIndex()).delete_document(INDEX, "doc-1") == 0

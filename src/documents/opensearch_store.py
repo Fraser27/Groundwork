@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 #: The vector field. `knn_vector` is the OpenSearch type; the name is ours.
 VECTOR_FIELD = "embedding"
 
+#: How many ids to delete per round. Deletes are a search plus a bulk rather than one call,
+#: because Serverless has no `_delete_by_query`, so a reset is inherently paged.
+DELETE_PAGE_SIZE = 500
+
 #: HNSW with cosine similarity, matching `_cosine` in the in-memory store so a local result and
 #: a deployed one rank the same way. `l2` would rank differently for identical embeddings, which
 #: would make a local reproduction of a retrieval bug impossible.
@@ -67,7 +71,6 @@ class OpenSearchLike(Protocol):
 
     def index(self, **kwargs: Any) -> dict[str, Any]: ...
     def search(self, **kwargs: Any) -> dict[str, Any]: ...
-    def delete_by_query(self, **kwargs: Any) -> dict[str, Any]: ...
     def bulk(self, **kwargs: Any) -> dict[str, Any]: ...
     def count(self, **kwargs: Any) -> dict[str, Any]: ...
 
@@ -295,16 +298,48 @@ class OpenSearchVectorStore:
     def delete_tenant(self, index: str, tenant_id: str) -> int:
         """Drop a tenant's vectors. Used by the reset surface.
 
-        Deletes by query rather than dropping the index, so the mapping survives and the next
-        upload does not race to recreate it.
+        Deletes the documents rather than the index, so the mapping survives and the next upload
+        does not race to recreate it.
         """
         return self._delete_by(index, {"term": {"tenant_id": tenant_id}})
 
     def _delete_by(self, index: str, query: dict[str, Any]) -> int:
-        try:
-            response = self._os().delete_by_query(index=index, body={"query": query}, refresh=True)
-        except Exception as e:
-            if "index_not_found" in str(e):
-                return 0
-            raise VectorStoreError(f"could not delete from {index}: {e}") from e
-        return int(response.get("deleted") or 0)
+        """Search for matching ids, then bulk-delete them.
+
+        Not `_delete_by_query`, which OpenSearch *Serverless* does not support -- it is absent
+        from the supported-operations table and 404s. Only `DELETE <index>/_doc/<id>` and
+        `_bulk` are available, both under `aoss:WriteDocument`, so a delete-by-predicate has to
+        be assembled from a search and a bulk.
+
+        Paged, because a reset on a large tenant deletes more than one page of hits and a single
+        search would silently leave the remainder behind -- vectors for documents the graph no
+        longer knows about, which is worse than a slow reset.
+        """
+        client = self._os()
+        deleted = 0
+        while True:
+            try:
+                found = client.search(
+                    index=index,
+                    body={"query": query, "size": DELETE_PAGE_SIZE, "_source": False},
+                )
+            except Exception as e:
+                if "index_not_found" in str(e):
+                    return deleted
+                raise VectorStoreError(f"could not find documents to delete in {index}: {e}") from e
+
+            ids = [hit["_id"] for hit in found.get("hits", {}).get("hits", [])]
+            if not ids:
+                return deleted
+
+            actions = [{"delete": {"_index": index, "_id": doc_id}} for doc_id in ids]
+            try:
+                client.bulk(body=actions, refresh=True)
+            except Exception as e:
+                raise VectorStoreError(
+                    f"could not delete {len(ids)} vectors from {index}: {e}"
+                ) from e
+            deleted += len(ids)
+
+            if len(ids) < DELETE_PAGE_SIZE:
+                return deleted
