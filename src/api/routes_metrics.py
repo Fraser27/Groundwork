@@ -29,7 +29,13 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from src.api.deps import Services, ServicesDep, TenantDep, require_admin
+from src.api.deps import (
+    Services,
+    ServicesDep,
+    TenantDep,
+    load_example_pack,
+    require_admin,
+)
 from src.metrics.compiler import compile_metric
 from src.metrics.graph_store import (
     STATUS_APPROVED,
@@ -409,16 +415,19 @@ async def seed_metrics(
     ctx, _ = principal
     store = _require_store(services)
 
-    matcher = services.metric_matcher
-    if matcher is None or not matcher.metrics:
+    # Read from disk rather than from `services.metric_matcher`. That attribute is a test
+    # seam and is None in a running system, because the matcher is built per request from
+    # the tenant's approved metrics now that definitions live in the graph.
+    pack = load_example_pack()
+    if not pack:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "no metric pack is loaded, so there is nothing to seed",
+            "the example metric pack could not be read, so there is nothing to seed",
         )
 
     counts = store.seed_from_pack(
         ctx.tenant_id,
-        matcher.metrics,
+        pack,
         updated_by=ctx.user_id,
         status=STATUS_APPROVED if approve else STATUS_DRAFT,
     )

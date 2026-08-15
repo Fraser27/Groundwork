@@ -330,3 +330,36 @@ class TestAdminOnly:
     def test_a_non_admin_may_still_read(self):
         """Knowing what metrics mean is the point of a semantic layer."""
         assert self._as_non_admin().get(BASE).status_code == 200
+
+
+class TestSeeding:
+    """Seeding reads the example pack off disk.
+
+    It used to read `services.metric_matcher`, which every test sets and a running system
+    never does, so the endpoint was dead in production while the suite stayed green. That is
+    the exact shape of bug an injected seam hides, hence a test with no matcher at all.
+    """
+
+    def test_seeding_works_with_no_injected_matcher(self, graph_client):
+        get_services().metric_matcher = None
+        r = graph_client.post(f"{BASE}/seed")
+        assert r.status_code == 200
+        assert r.json()["created"] > 0
+
+    def test_seeded_metrics_are_drafts(self, graph_client):
+        """The pack is examples for a fictional firm, so seeding must not put them into
+        service against a catalog that may not have those tables."""
+        get_services().metric_matcher = None
+        graph_client.post(f"{BASE}/seed")
+        assert graph_client.get(f"{BASE}?approved_only=true").json() == []
+        assert len(graph_client.get(BASE).json()) > 0
+
+    def test_seeding_can_approve_deliberately(self, graph_client):
+        get_services().metric_matcher = None
+        graph_client.post(f"{BASE}/seed?approve=true")
+        assert len(graph_client.get(f"{BASE}?approved_only=true").json()) > 0
+
+    def test_the_note_warns_the_metrics_are_examples(self, graph_client):
+        """An operator has to know to check them against their own catalog."""
+        get_services().metric_matcher = None
+        assert "fictional firm" in graph_client.post(f"{BASE}/seed").json()["note"]
