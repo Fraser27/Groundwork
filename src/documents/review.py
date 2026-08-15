@@ -121,6 +121,20 @@ class InMemoryAssertionStore:
         ids = self._dependents.get((tenant_id, assertion_id), set())
         return [r for aid in ids if (r := self.get(tenant_id, aid)) is not None]
 
+    def drop_tenant(self, tenant_id: str) -> int:
+        """Forget every assertion for one tenant, returning how many went.
+
+        For a rebuild, not a correction. Retracting each assertion would be the right tool
+        for withdrawing a belief — it supersedes and leaves a trail — but here the facts are
+        about to be re-derived from the same sources, so a trail of retractions would record
+        an event that did not happen.
+        """
+        doomed = [key for key in self._records if key[0] == tenant_id]
+        for key in doomed:
+            del self._records[key]
+        self._dependents = {k: v for k, v in self._dependents.items() if k[0] != tenant_id}
+        return len(doomed)
+
 
 @dataclass(frozen=True)
 class QueueItem:
@@ -184,8 +198,7 @@ class ReviewQueue:
         for a in assertions:
             if a.tenant_id != ctx.tenant_id:
                 raise ScopeViolation(
-                    f"assertion {a.assertion_id} is tenant {a.tenant_id}, caller is "
-                    f"{ctx.tenant_id}"
+                    f"assertion {a.assertion_id} is tenant {a.tenant_id}, caller is {ctx.tenant_id}"
                 )
             if a.matter_id is not None:
                 ctx.assert_can_read_matter(a.matter_id)
@@ -276,9 +289,7 @@ class ReviewQueue:
         logger.info("%s approved %s", ctx.user_id, assertion_id)
         return record
 
-    def reject(
-        self, ctx: AuthContext, assertion_id: str, *, reason: str
-    ) -> AssertionRecord:
+    def reject(self, ctx: AuthContext, assertion_id: str, *, reason: str) -> AssertionRecord:
         """Reject a claim. The reason is mandatory — it is the training signal.
 
         Does not cascade on its own. A PENDING assertion has no dependent inferences
@@ -337,9 +348,7 @@ class ReviewQueue:
         return promoted
 
     def live_assertions(self, ctx: AuthContext) -> list[AssertionRecord]:
-        return [
-            r for r in self.visible(ctx) if r.lifecycle is Lifecycle.LIVE and r.is_current
-        ]
+        return [r for r in self.visible(ctx) if r.lifecycle is Lifecycle.LIVE and r.is_current]
 
     def auto_asserted_ids(self, ctx: AuthContext) -> list[str]:
         return [

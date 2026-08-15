@@ -23,6 +23,7 @@ from src.documents.embed import Embedder, InMemoryVectorStore
 from src.documents.job_store import DynamoJobStore, InMemoryJobStore
 from src.documents.parse import VisionParser
 from src.documents.review import InMemoryAssertionStore, ReviewQueue
+from src.discovery.catalog_store import CatalogStore
 from src.documents.runner import IngestLimiter
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext, ScopeViolation
@@ -88,6 +89,10 @@ class Services:
     user_admin: UserAdmin | None = None
     """Creating and listing users. None without a user pool, which makes the admin routes
     answer 503 rather than pretending to work."""
+
+    catalog: CatalogStore = field(default_factory=CatalogStore)
+    """What the last Glue scan found. A cache over Glue, not a source of truth — losing it
+    costs a re-scan, which is why it is in-memory."""
 
     def settings_for(self, tenant_id: str) -> GovernanceSettings:
         if tenant_id not in self.governance:

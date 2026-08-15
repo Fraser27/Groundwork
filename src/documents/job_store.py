@@ -49,6 +49,7 @@ class TableLike(Protocol):
     def put_item(self, **kwargs: Any) -> dict[str, Any]: ...
     def get_item(self, **kwargs: Any) -> dict[str, Any]: ...
     def query(self, **kwargs: Any) -> dict[str, Any]: ...
+    def delete_item(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 def tenant_pk(tenant_id: str) -> str:
@@ -112,6 +113,12 @@ class InMemoryJobStore:
             if j.tenant_id == tenant_id and j.state is state
         ]
 
+    def drop_tenant(self, tenant_id: str) -> int:
+        doomed = [k for k in self._jobs if k[0] == tenant_id]
+        for key in doomed:
+            del self._jobs[key]
+        return len(doomed)
+
 
 class DynamoJobStore:
     """Job state in one DynamoDB table. boto3 is lazy and injectable, so tests need
@@ -173,6 +180,22 @@ class DynamoJobStore:
             },
         )
         return [_to_job(i) for i in got.get("Items", [])]
+
+    def drop_tenant(self, tenant_id: str) -> int:
+        """Delete every job row for a tenant.
+
+        Batched deletes rather than a TTL wait: a reset is meant to be observable
+        immediately, and `expires_at` is up to 30 days out.
+        """
+        deleted = 0
+        got = self.table.query(
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :sk)",
+            ExpressionAttributeValues={":pk": tenant_pk(tenant_id), ":sk": JOB},
+        )
+        for item in got.get("Items", []):
+            self.table.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
+            deleted += 1
+        return deleted
 
 
 class JobTracker:

@@ -93,6 +93,7 @@ class VectorStore(Protocol):
         matter_denylist: frozenset[str],
     ) -> list[SearchHit]: ...
     def delete_document(self, index: str, document_id: str) -> int: ...
+    def delete_tenant(self, index: str, tenant_id: str) -> int: ...
 
 
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
@@ -137,6 +138,13 @@ class InMemoryVectorStore:
     def delete_document(self, index: str, document_id: str) -> int:
         bucket = self._indexes.get(index, {})
         doomed = [vid for vid, r in bucket.items() if r.document_id == document_id]
+        for vid in doomed:
+            del bucket[vid]
+        return len(doomed)
+
+    def delete_tenant(self, index: str, tenant_id: str) -> int:
+        bucket = self._indexes.get(index, {})
+        doomed = [vid for vid, r in bucket.items() if r.tenant_id == tenant_id]
         for vid in doomed:
             del bucket[vid]
         return len(doomed)
@@ -243,6 +251,15 @@ class Embedder:
             written += self.store.upsert(index, self.embed_chunks(ctx, batch))
         logger.info("embedded %d chunks into %s", written, index)
         return written
+
+    def drop_tenant(self, tenant_id: str) -> int:
+        """Empty a tenant's vector index, returning how many chunks went.
+
+        Takes a plain tenant id rather than an `AuthContext` because a reset runs from an
+        admin route, not from the requesting user's scope. The index name is derived the
+        same way `index_name` derives it, so this cannot reach another tenant's index.
+        """
+        return self.store.delete_tenant(f"tenant-{tenant_id}-chunks", tenant_id)
 
     def search(self, ctx: AuthContext, query: str, *, top_k: int = 10) -> list[SearchHit]:
         return self.store.search(

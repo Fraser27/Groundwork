@@ -100,6 +100,13 @@ class MetricMatcher:
         self._registry = MetricRegistry.from_list(metrics)
 
     @property
+    def catalog(self) -> SchemaCatalog:
+        """The schema the compiler validates against. Exposed so the compile endpoint uses
+        the same catalog tier 1 does, rather than assembling a second one that could
+        disagree about a column's type."""
+        return self._catalog
+
+    @property
     def metrics(self) -> list[MetricDefinition]:
         """The pack this matcher matches against. Read-only: the copy stops a caller
         listing metrics from also editing what tier 1 will serve."""
