@@ -212,16 +212,25 @@ export default function Documents() {
               Attach to matter
               <FieldHelp text={HELP.matterWall} align="right" />
             </label>
-            <select value={uploadMatter} onChange={(e) => setUploadMatter(e.target.value)}>
-              <option value="">Unassigned</option>
+            {/* A list, plus free text. Matters are derived from the documents filed under
+                them, so the first document of a new matter has nothing to select: a pure
+                dropdown would force it in unassigned, and a matter cannot be corrected
+                afterwards without re-ingesting. */}
+            <input
+              list="upload-matter-options"
+              value={uploadMatter}
+              onChange={(e) => setUploadMatter(e.target.value)}
+              placeholder="Unassigned, or type a new reference"
+            />
+            <datalist id="upload-matter-options">
               {matters
                 .filter((m) => !m.walled)
                 .map((m) => (
                   <option key={m.matter_id} value={m.matter_id}>
-                    {m.matter_id} - {m.name}
+                    {m.name}
                   </option>
                 ))}
-            </select>
+            </datalist>
           </div>
         </div>
         <div

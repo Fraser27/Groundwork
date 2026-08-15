@@ -205,26 +205,38 @@ Symptom to recognise: the API returns 401 for a tenant the user never chose — 
 falls back to a default tenant id when the claim is absent, and the token then does not
 match it.
 
-## Loading the demo data
+## Trying it with the demo documents
 
-Five interlocking matters ship as PDFs in `sample/legal-demo.zip`. They are committed so a
-fresh clone needs no PDF toolchain, and they are regenerated with:
+Five interlocking matters are committed as PDFs in
+[`sample/legal-demo.zip`](sample/legal-demo.zip). Download that file from GitHub, unzip it,
+and upload the PDFs through **Documents, then Upload** the way a lawyer would upload anything
+else. That is the point of shipping them as a plain zip rather than a fixture: the demo walks
+the same path a real user walks, so nothing about it is special-cased.
+
+Each filename starts with its matter reference, and that is what to put in **Attach to
+matter** — `NTL-2026-0114` for the three `NTL-` files, `MBC-2024-0431` for the facility
+agreement, `HAL-2025-0092` for the authority note. The field takes free text as well as a
+selection, because a matter is derived from the documents filed under it and so has nothing
+to select until its first document is in.
+
+Getting this right is the difference between a demo that works and one that does not. Both
+things worth seeing here are *cross-matter*, so filing everything under one reference, or
+leaving it all unassigned, removes exactly what there is to look at.
+
+Uploading is per document, so the graph can be watched filling in. It also means you can
+stop after four and see what changes when the fifth arrives, which is the most useful thing
+this data does.
+
+An administrator can instead load all five at once with **Admin, then Load sample data**,
+which reads the same zip server-side. Either way the pipeline is identical: pages are
+rasterised, transcribed by the vision model, chunked, embedded and read for claims. Nothing
+is written into the graph directly, so every assertion cites a page and a verbatim span that
+the Provenance page resolves.
+
+Regenerate the PDFs after editing the content:
 
 ```bash
 .venv/bin/python sample/generate_demo_pdfs.py
-```
-
-To load them, sign in as a `platform-admin` and use **Admin, then Load sample data**. That
-uploads each PDF to the document bucket and runs the real ingest pipeline over it: pages are
-rasterised, transcribed by the vision model, chunked, embedded and extracted. Nothing is
-seeded straight into the graph, so every resulting assertion cites a page and a verbatim span
-that the Provenance page can resolve.
-
-The same thing over the API:
-
-```bash
-curl -X POST -H "Authorization: Bearer $TOKEN" \
-  "$BASE/api/tenants/$TENANT/admin/sample-data"
 ```
 
 The five matters are deliberately connected, because a demo whose facts do not interlock
