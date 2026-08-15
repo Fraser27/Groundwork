@@ -57,6 +57,18 @@ export class WebStack extends cdk.Stack {
       code: cloudfront.FunctionCode.fromInline(`
 function handler(event) {
   var uri = event.request.uri;
+  // The documentation is real HTML in S3, not a SPA route. It is checked before the asset
+  // test because .html is deliberately absent from that list: the SPA's own deep links are
+  // extensionless, so treating .html as an asset would only ever match these files.
+  // Directory-style URLs get index.html appended, since S3 has no directory index.
+  if (uri.indexOf('/docs/') === 0) {
+    if (uri.charAt(uri.length - 1) === '/') event.request.uri = uri + 'index.html';
+    return event.request;
+  }
+  if (uri === '/docs') {
+    event.request.uri = '/docs/index.html';
+    return event.request;
+  }
   // Assets live under /assets/ or are a known top-level file. Testing for "contains a dot"
   // instead sent /tables/aemo.price_demand to S3, where it 403'd: a table's full name is
   // database.table, so a legitimate SPA route can contain a dot.
@@ -170,8 +182,25 @@ function handler(event) {
           ]
         : [runtimeConfig],
       destinationBucket: bucket,
+      // Must not prune, or this deployment deletes `docs/` every time the UI is deployed:
+      // prune defaults to true and means "delete anything in the bucket not in my source".
+      // Stale hashed bundles are cleaned up by the direct-deploy path instead.
+      prune: false,
       distribution: this.distribution,
       distributionPaths: ['/*'],
+    });
+
+    // Separate deployment, and separate on purpose: the docs are plain committed HTML with
+    // no build step, so they must not be rebuilt (or invalidated) whenever the UI changes.
+    // `prune: false` matters — two BucketDeployments writing to one bucket will delete each
+    // other's objects otherwise.
+    new s3deploy.BucketDeployment(this, 'DocsDeploy', {
+      sources: [s3deploy.Source.asset(path.join(__dirname, '../../docs'))],
+      destinationBucket: bucket,
+      destinationKeyPrefix: 'docs',
+      prune: false,
+      distribution: this.distribution,
+      distributionPaths: ['/docs/*'],
     });
   }
 }

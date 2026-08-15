@@ -96,6 +96,7 @@ export default function Admin() {
     setScopeFlag('metrics', false)
   }
 
+  const tickedCount = (Object.keys(scope) as (keyof ResetScope)[]).filter((k) => scope[k]).length
   const resetBlocked = scope.metrics && !confirmMetricLoss
   const busy = running !== null
 
@@ -570,8 +571,14 @@ export default function Admin() {
           </span>
         </div>
 
-        <div className="form-group">
-          <label>Reset derived data</label>
+        <div className="subcard">
+          <div className="subcard-header">
+            <span className="subcard-title">
+              Reset derived data
+              <FieldHelp text={HELP.reset} />
+            </span>
+            <span className="subcard-note">These boxes apply to Reset only</span>
+          </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 20px', marginBottom: 10 }}>
             {RESET_OPTIONS.map((o) => (
               <label key={o.key} className="checkbox-row" style={{ minWidth: 210 }}>
@@ -610,15 +617,35 @@ export default function Admin() {
             </div>
           )}
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <button
-              className="btn btn-danger"
-              disabled={busy || resetBlocked}
-              title={resetBlocked ? 'Confirm the loss of metric definitions first' : undefined}
-              onClick={doReset}
-            >
-              {running === 'reset' ? 'Resetting…' : 'Reset'}
-            </button>
+          <button
+            className="btn btn-danger"
+            disabled={busy || resetBlocked || tickedCount === 0}
+            title={
+              resetBlocked
+                ? 'Confirm the loss of metric definitions first'
+                : tickedCount === 0
+                  ? 'Tick what to remove'
+                  : undefined
+            }
+            onClick={doReset}
+          >
+            {running === 'reset'
+              ? 'Resetting…'
+              : tickedCount === 0
+                ? 'Reset'
+                : `Reset ${tickedCount} selected`}
+          </button>
+        </div>
+
+        <div className="subcard-header">
+          <span className="subcard-title">
+            Rebuild
+            <FieldHelp text={HELP.derivedData} />
+          </span>
+          <span className="subcard-note">Each of these reads originals and writes derived data</span>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <span className="btn-with-help">
             <button
               className="btn btn-ghost"
               disabled={busy}
@@ -634,6 +661,9 @@ export default function Admin() {
             >
               {running === 'replay' ? 'Replaying…' : 'Replay from S3'}
             </button>
+            <FieldHelp text={HELP.replay} />
+          </span>
+          <span className="btn-with-help">
             <button
               className="btn btn-ghost"
               disabled={busy}
@@ -648,6 +678,9 @@ export default function Admin() {
             >
               {running === 'sample' ? 'Loading…' : 'Load sample data'}
             </button>
+            <FieldHelp text={HELP.loadSampleData} />
+          </span>
+          <span className="btn-with-help">
             <button
               className="btn btn-ghost"
               disabled={busy}
@@ -668,12 +701,16 @@ export default function Admin() {
             >
               {running === 'scan' ? 'Scanning…' : 'Scan catalog'}
             </button>
-          </div>
-          <p className="hint">
-            Replay and sample loading run inline without model extraction, so they return a report
-            rather than a spinner. A large corpus is better replayed by re-uploading.
-          </p>
+            <FieldHelp text={HELP.scanCatalog} />
+          </span>
         </div>
+        <p className="hint">
+          Replay and sample loading run inline without model extraction, so they return a report
+          rather than a spinner. A large corpus is better replayed by re-uploading.{' '}
+          <a href="/docs/demo-data.html" target="_blank" rel="noreferrer">
+            Read more about resetting and rebuilding
+          </a>
+        </p>
       </div>
 
       {ontology && (
