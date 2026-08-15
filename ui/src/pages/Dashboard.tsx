@@ -3,26 +3,43 @@ import { Link } from 'react-router-dom'
 import { api, type DashboardStats } from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC, EPISTEMIC_ORDER, HELP } from '../epistemic'
-import { fallback, MOCK_DASHBOARD } from '../mocks'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
-import { IngestPill, MockFlag, Spinner } from '../components/Shared'
+import { ErrorState, IngestPill, Spinner } from '../components/Shared'
 import { epiStyle, fmtDateTime, fmtNum } from '../format'
 
 export default function Dashboard() {
   const tenant = getTenantId()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    fallback(api.dashboard(tenant), MOCK_DASHBOARD)
-      .then(setStats)
-      .catch(console.error)
+    api
+      .dashboard(tenant)
+      .then((d) => {
+        setStats(d)
+        setError('')
+      })
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tenant])
+  }, [tenant, reloadKey])
+
+  const retry = () => {
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
 
   if (loading) return <Spinner />
-  if (!stats) return <div className="empty-state">Could not load the dashboard.</div>
+  if (error || !stats)
+    return (
+      <ErrorState
+        title="Could not load the dashboard"
+        detail={error}
+        onRetry={retry}
+      />
+    )
 
   const total = EPISTEMIC_ORDER.reduce((n, c) => n + (stats.assertions_by_class[c] || 0), 0)
   const docStates = Object.entries(stats.documents_by_state) as [string, number][]
@@ -39,7 +56,6 @@ export default function Dashboard() {
               on.
             </p>
           </div>
-          <MockFlag />
         </div>
       </div>
 

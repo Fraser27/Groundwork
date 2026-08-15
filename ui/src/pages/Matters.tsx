@@ -9,11 +9,10 @@ import {
 } from '../api'
 import { getTenantId } from '../auth'
 import { HELP } from '../epistemic'
-import { fallback, MOCK_ASSERTIONS, MOCK_DOCUMENTS, MOCK_MATTERS_RESPONSE } from '../mocks'
 import ConfidenceBar from '../components/ConfidenceBar'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
-import { EmptyState, IngestPill, MockFlag, Spinner } from '../components/Shared'
+import { EmptyState, ErrorState, IngestPill, Spinner } from '../components/Shared'
 import { fmtDate, fmtNum } from '../format'
 
 export default function Matters() {
@@ -25,24 +24,27 @@ export default function Matters() {
   const [docs, setDocs] = useState<DocumentSummary[]>([])
   const [assertions, setAssertions] = useState<Assertion[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
   const [filter, setFilter] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([
-      fallback(api.listMatters(tenant), MOCK_MATTERS_RESPONSE),
-      fallback(api.listDocuments(tenant), MOCK_DOCUMENTS),
-      fallback(api.listAssertions(tenant, { limit: 200 }), MOCK_ASSERTIONS),
+      api.listMatters(tenant),
+      api.listDocuments(tenant),
+      api.listAssertions(tenant, { limit: 200 }),
     ])
       .then(([m, d, a]) => {
         setMatters(m.matters)
         setWithheld(m.withheld)
         setDocs(d)
         setAssertions(a)
+        setError('')
       })
-      .catch(console.error)
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tenant])
+  }, [tenant, reloadKey])
 
   const filtered = useMemo(() => {
     if (!filter.trim()) return matters
@@ -56,6 +58,11 @@ export default function Matters() {
   }, [matters, filter])
 
   const selected = matters.find((m) => m.matter_id === selectedId) ?? null
+
+  const retry = () => {
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
 
   if (loading) return <Spinner />
 
@@ -231,9 +238,16 @@ export default function Matters() {
               by definition cross-matter, and shared parties are the conflict signal.
             </p>
           </div>
-          <MockFlag />
         </div>
       </div>
+
+      {error && (
+        <ErrorState
+          title="Could not load matters"
+          detail={error}
+          onRetry={retry}
+        />
+      )}
 
       {withheld.length > 0 && (
         <div className="withheld-block">
@@ -345,8 +359,10 @@ export default function Matters() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={8}>
-                  <EmptyState title="No matters match">
-                    Matters arrive from the case management system as declared records.
+                  <EmptyState title={matters.length === 0 ? 'No matters yet' : 'No matters match'}>
+                    {matters.length === 0
+                      ? 'Matters arrive from the case management system as declared records. None have been loaded for this tenant.'
+                      : 'Clear the filter to see every matter you can read.'}
                   </EmptyState>
                 </td>
               </tr>

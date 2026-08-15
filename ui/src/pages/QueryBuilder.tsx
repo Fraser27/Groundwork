@@ -11,27 +11,25 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { api, type Matter, type QueryResult, type ResolutionTier, type TenantSettings } from '../api'
 import { getTenantId } from '../auth'
 import { HELP, TIERS } from '../epistemic'
-import { fallback, MOCK_MATTERS_RESPONSE, MOCK_QUERY_RESULTS, MOCK_SETTINGS } from '../mocks'
 import { useProvenance } from '../useProvenance'
 import ConfidenceBar from '../components/ConfidenceBar'
 import DocumentViewer from '../components/DocumentViewer'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
-import { MockFlag, Spinner, TierBadge } from '../components/Shared'
+import { ErrorState, Spinner, TierBadge } from '../components/Shared'
 import { epiStyle } from '../format'
 
-const EXAMPLES: { q: string; key: string; tier: ResolutionTier }[] = [
-  { q: 'What were fees billed by practice area last quarter?', key: 'tier1', tier: 1 },
-  { q: 'Does acting for Halveston create a conflict?', key: 'tier2', tier: 2 },
+/** The tier is what each example is meant to demonstrate, not a promise about the answer. */
+const EXAMPLES: { q: string; tier: ResolutionTier }[] = [
+  { q: 'What were fees billed by practice area last quarter?', tier: 1 },
+  { q: 'Does acting for Halveston create a conflict?', tier: 2 },
   {
     q: 'Which open matters have unbilled work and an adverse party we also act for?',
-    key: 'tier3',
     tier: 3,
   },
   {
     q: 'What is the average number of days between opening a matter and the first invoice?',
-    key: 'tier4',
     tier: 4,
   },
 ]
@@ -47,6 +45,8 @@ export default function QueryBuilder() {
   const [result, setResult] = useState<QueryResult | null>(null)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
+  // The matter list and trust floor, not the answer. Asking still works without them.
+  const [contextError, setContextError] = useState('')
   const [openProvenance, setOpenProvenance] = useState<string | null>(null)
   const [openDocument, setOpenDocument] = useState<{
     documentId: string
@@ -54,39 +54,32 @@ export default function QueryBuilder() {
     page: number
     quote: string | null
   } | null>(null)
-  const prov = useProvenance(tenant, openProvenance)
+  const { provenance, error: provError } = useProvenance(tenant, openProvenance)
 
   useEffect(() => {
-    Promise.all([
-      fallback(api.listMatters(tenant), MOCK_MATTERS_RESPONSE),
-      fallback(api.getSettings(tenant), MOCK_SETTINGS),
-    ])
+    Promise.all([api.listMatters(tenant), api.getSettings(tenant)])
       .then(([m, s]) => {
         setMatters(m.matters)
         setSettings(s)
+        setContextError('')
       })
-      .catch(() => {})
+      .catch((e: Error) => setContextError(e.message))
   }, [tenant])
 
   const floor = floorOverride ?? settings?.min_confidence ?? 0.8
 
-  const ask = async (q: string, mockKey?: string) => {
+  const ask = async (q: string) => {
     setRunning(true)
     setError('')
     setResult(null)
     setOpenProvenance(null)
     try {
-      const mock =
-        MOCK_QUERY_RESULTS[mockKey ?? ''] ?? { ...MOCK_QUERY_RESULTS.tier4, question: q }
-      const res = await fallback(
-        api.query(tenant, {
-          question: q,
-          matter_id: matterId || undefined,
-          as_of: asOf || undefined,
-          min_confidence: floor,
-        }),
-        mock,
-      )
+      const res = await api.query(tenant, {
+        question: q,
+        matter_id: matterId || undefined,
+        as_of: asOf || undefined,
+        min_confidence: floor,
+      })
       setResult(res)
     } catch (e) {
       setError((e as Error).message.replace(/^\d+:\s*/, ''))
@@ -108,9 +101,17 @@ export default function QueryBuilder() {
               SQL where there is any, and cites the exact assertions behind every claim.
             </p>
           </div>
-          <MockFlag />
         </div>
       </div>
+
+      {contextError && (
+        <div className="banner banner-warn">
+          <span>
+            <strong>Could not load the matter list or the trust floor.</strong> {contextError}. You
+            can still ask, but the matter filter is empty and the default floor is in use.
+          </span>
+        </div>
+      )}
 
       <div className="card">
         <div className="form-group">
@@ -196,12 +197,12 @@ export default function QueryBuilder() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
           {EXAMPLES.map((ex) => (
             <button
-              key={ex.key}
+              key={ex.q}
               className="btn btn-ghost btn-sm"
               style={{ justifyContent: 'flex-start', textAlign: 'left', whiteSpace: 'normal' }}
               onClick={() => {
                 setQuestion(ex.q)
-                ask(ex.q, ex.key)
+                ask(ex.q)
               }}
             >
               <TierBadge tier={ex.tier} />
@@ -440,9 +441,13 @@ export default function QueryBuilder() {
             onClick={(e) => e.stopPropagation()}
             style={{ padding: 0, overflow: 'hidden' }}
           >
-            {prov ? (
+            {provError ? (
+              <div style={{ padding: 20 }}>
+                <ErrorState title="Could not load this provenance" detail={provError} />
+              </div>
+            ) : provenance ? (
               <ProvenancePanel
-                provenance={prov}
+                provenance={provenance}
                 confidenceFloor={floor}
                 onClose={() => setOpenProvenance(null)}
               />

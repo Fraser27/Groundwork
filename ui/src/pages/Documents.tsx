@@ -9,13 +9,12 @@ import {
 } from '../api'
 import { getTenantId } from '../auth'
 import { HELP, ingestPhase } from '../epistemic'
-import { fallback, mockDocumentDetail, MOCK_DOCUMENTS, MOCK_MATTERS_RESPONSE, MOCK_SETTINGS } from '../mocks'
 import ConfidenceBar from '../components/ConfidenceBar'
 import DocumentViewer from '../components/DocumentViewer'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import { SourceSpan } from '../components/ProvenancePanel'
-import { EmptyState, IngestPill, MockFlag, Pipeline, Spinner, Toast } from '../components/Shared'
+import { EmptyState, ErrorState, IngestPill, Pipeline, Spinner, Toast } from '../components/Shared'
 import { fmtBytes, fmtDateTime, fmtNum } from '../format'
 
 /** The user asked for 30s. On-demand refresh is the Refresh button and every upload. */
@@ -48,6 +47,7 @@ export default function Documents() {
   const [matters, setMatters] = useState<Matter[]>([])
   const [floor, setFloor] = useState(0.8)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [filter, setFilter] = useState('')
   const [stateFilter, setStateFilter] = useState('__all__')
   const [matterFilter, setMatterFilter] = useState('__all__')
@@ -69,17 +69,14 @@ export default function Documents() {
   }
 
   const load = () => {
-    Promise.all([
-      fallback(api.listDocuments(tenant), MOCK_DOCUMENTS),
-      fallback(api.listMatters(tenant), MOCK_MATTERS_RESPONSE),
-      fallback(api.getSettings(tenant), MOCK_SETTINGS),
-    ])
+    Promise.all([api.listDocuments(tenant), api.listMatters(tenant), api.getSettings(tenant)])
       .then(([d, m, s]) => {
         setDocs(d)
         setMatters(m.matters)
         setFloor(s.min_confidence)
+        setError('')
       })
-      .catch(console.error)
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
   }
 
@@ -141,9 +138,12 @@ export default function Documents() {
   const openDetail = async (id: string) => {
     setDetailLoading(true)
     try {
-      setDetail(await fallback(api.getDocument(tenant, id), mockDocumentDetail(id)))
+      setDetail(await api.getDocument(tenant, id))
     } catch (e) {
-      showToast((e as Error).message, 'error')
+      showToast(
+        `Could not open that document: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
+        'error',
+      )
     } finally {
       setDetailLoading(false)
     }
@@ -196,9 +196,10 @@ export default function Documents() {
               that can be rebuilt. A bad extraction run is therefore never a data-loss event.
             </p>
           </div>
-          <MockFlag />
         </div>
       </div>
+
+      {error && <ErrorState title="Could not load documents" detail={error} onRetry={load} />}
 
       <div className="card">
         <div className="card-header">
@@ -419,8 +420,10 @@ export default function Documents() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={8}>
-                  <EmptyState title="No documents match">
-                    Upload a file above to start the pipeline.
+                  <EmptyState title={docs.length === 0 ? 'No documents yet' : 'No documents match'}>
+                    {docs.length === 0
+                      ? 'Upload a file above to start the pipeline.'
+                      : 'Clear the search or the state and matter filters.'}
                   </EmptyState>
                 </td>
               </tr>

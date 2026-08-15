@@ -11,10 +11,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, type AccessEvent } from '../api'
 import { getTenantId } from '../auth'
 import { ACCESS_ACTION_LABEL, HELP } from '../epistemic'
-import { fallback, mockAccessAudit } from '../mocks'
 import { fmtDateTime } from '../format'
 import FieldHelp from './FieldHelp'
-import { EmptyState, Spinner } from './Shared'
+import { EmptyState, ErrorState, Spinner } from './Shared'
 
 const ACTION_COLOUR: Record<AccessEvent['action'], string> = {
   ASSIGN: 'var(--green)',
@@ -45,6 +44,7 @@ export default function AccessAudit({
   // What the rows in state describe. Comparing it to the current scope is how the
   // spinner is decided, so nothing has to be set before the fetch starts.
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
+  const [error, setError] = useState('')
   const [action, setAction] = useState<(typeof ACTIONS)[number]>('ALL')
 
   const scopeKey = `${matterId ?? ''}|${userId ?? ''}|${refreshKey}`
@@ -52,12 +52,19 @@ export default function AccessAudit({
   useEffect(() => {
     let cancelled = false
     const scope = { matter_id: matterId, user_id: userId }
-    fallback(api.accessAudit(tenant, scope), mockAccessAudit(scope))
+    api
+      .accessAudit(tenant, scope)
       .then((e) => {
-        if (!cancelled) setEvents(e)
+        if (!cancelled) {
+          setEvents(e)
+          setError('')
+        }
       })
-      .catch(() => {
-        if (!cancelled) setEvents([])
+      .catch((e: Error) => {
+        if (!cancelled) {
+          setEvents([])
+          setError(e.message)
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadedFor(scopeKey)
@@ -107,6 +114,8 @@ export default function AccessAudit({
 
       {loading ? (
         <Spinner />
+      ) : error ? (
+        <ErrorState title="Could not load the access trail" detail={error} />
       ) : shown.length === 0 ? (
         <EmptyState title="No changes recorded">
           Nothing has been added, removed or screened here.

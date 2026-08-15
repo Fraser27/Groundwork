@@ -161,15 +161,17 @@ export async function handleAuthCallback(): Promise<boolean> {
     localStorage.setItem('token_expiry', String(Date.now() + (tokens.expires_in ?? 3600) * 1000))
     if (tokens.refresh_token) localStorage.setItem('refresh_token', tokens.refresh_token)
 
-    try {
-      const payload = JSON.parse(atob(tokens.id_token.split('.')[1]))
-      localStorage.setItem('user_email', payload.email || payload['cognito:username'] || 'user')
-      // Tenant is a token claim, not a user preference — a caller must not be able
+    const payload = decodeClaims(tokens.id_token)
+    if (payload) {
+      localStorage.setItem(
+        'user_email',
+        String(payload.email || payload['cognito:username'] || 'user'),
+      )
+      // Tenant is a token claim, not a user preference: a caller must not be able
       // to widen their own scope by editing it.
       const tenant = payload['custom:tenant_id'] || payload.tenant_id
-      if (tenant) localStorage.setItem('tenant_id', tenant)
-      if (payload['custom:roles']) localStorage.setItem('user_roles', payload['custom:roles'])
-    } catch {
+      if (tenant) localStorage.setItem('tenant_id', String(tenant))
+    } else {
       localStorage.setItem('user_email', 'user')
     }
     return true
@@ -178,6 +180,19 @@ export async function handleAuthCallback(): Promise<boolean> {
     sessionStorage.removeItem(PKCE_VERIFIER_KEY)
     window.history.replaceState(null, '', '/')
   }
+}
+
+function decodeClaims(idToken: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(atob(idToken.split('.')[1]))
+  } catch {
+    return null
+  }
+}
+
+function idTokenClaims(): Record<string, unknown> | null {
+  const token = localStorage.getItem('id_token')
+  return token ? decodeClaims(token) : null
 }
 
 export function getAccessToken(): string | null {
@@ -202,12 +217,28 @@ export function getUserEmail(): string {
   return localStorage.getItem('user_email') || 'user'
 }
 
-/** Role names from the token, used only to hide UI — never to authorise. */
+/** Role names from the token, used only to hide UI, never to authorise. */
 export function getUserRoles(): string[] {
-  return (localStorage.getItem('user_roles') || '')
-    .split(',')
-    .map((r) => r.trim())
-    .filter(Boolean)
+  const claims = idTokenClaims()
+  // Roles are Cognito groups. `custom:roles` is read too so a non-Cognito issuer works.
+  const groups = claims?.['cognito:groups'] ?? claims?.['custom:roles']
+  if (Array.isArray(groups)) return groups.map(String).filter(Boolean)
+  if (typeof groups === 'string') {
+    return groups
+      .split(',')
+      .map((r) => r.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+/**
+ * Whether to render administration controls. Not a security boundary: `require_admin`
+ * in `src/api/deps.py` answers 403 whatever the browser chose to draw.
+ */
+export function isPlatformAdmin(): boolean {
+  if (!isAuthEnabled()) return true
+  return getUserRoles().includes('platform-admin')
 }
 
 function clearTokens(): void {
@@ -215,5 +246,4 @@ function clearTokens(): void {
   localStorage.removeItem('access_token')
   localStorage.removeItem('token_expiry')
   localStorage.removeItem('user_email')
-  localStorage.removeItem('user_roles')
 }

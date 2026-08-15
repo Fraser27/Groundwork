@@ -3,10 +3,9 @@ import { Link, useParams } from 'react-router-dom'
 import { api, type TableDetail as TableDetailType } from '../api'
 import { getTenantId } from '../auth'
 import { HELP } from '../epistemic'
-import { fallback, MOCK_TABLE_DETAIL } from '../mocks'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
-import { MockFlag, Spinner } from '../components/Shared'
+import { EmptyState, ErrorState, Spinner } from '../components/Shared'
 import { fmtDateTime, fmtNum } from '../format'
 
 export default function TableDetail() {
@@ -15,18 +14,46 @@ export default function TableDetail() {
   const [table, setTable] = useState<TableDetailType | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     if (!name) return
-    fallback(api.getTable(tenant, name), { ...MOCK_TABLE_DETAIL, full_name: name })
-      .then(setTable)
-      .catch((e) => setError((e as Error).message))
+    api
+      .getTable(tenant, name)
+      .then((t) => {
+        setTable(t)
+        setError('')
+      })
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tenant, name])
+  }, [tenant, name, reloadKey])
+
+  const retry = () => {
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
 
   if (loading) return <Spinner />
-  if (error) return <div className="empty-state">Error: {error}</div>
-  if (!table) return <div className="empty-state">Table not found.</div>
+  if (error || !table)
+    return (
+      <>
+        <Link to="/tables" className="back-link">
+          Back to structured sources
+        </Link>
+        {error ? (
+          <ErrorState
+            title="Could not load this table"
+            detail={error}
+            onRetry={retry}
+          />
+        ) : (
+          <EmptyState title="Table not in the catalogue">
+            <code>{name}</code> was not found. It may have been dropped, or the catalogue may need
+            rescanning from Admin.
+          </EmptyState>
+        )}
+      </>
+    )
 
   return (
     <>
@@ -40,7 +67,6 @@ export default function TableDetail() {
             <h2>{table.name}</h2>
             <p>{table.description || 'No description recorded.'}</p>
           </div>
-          <MockFlag />
         </div>
       </div>
 

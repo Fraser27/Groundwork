@@ -13,13 +13,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, type EpistemicClass, type GraphEdge, type GraphNode, type Matter } from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC, EPISTEMIC_ORDER, HELP } from '../epistemic'
-import { fallback, MOCK_MATTERS_RESPONSE, MOCK_NEIGHBOURHOOD, MOCK_SETTINGS } from '../mocks'
 import { useProvenance } from '../useProvenance'
 import ConfidenceBar from '../components/ConfidenceBar'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
-import { Spinner } from '../components/Shared'
+import { EmptyState, ErrorState, Spinner } from '../components/Shared'
 
 const NODE_COLOURS: Record<string, string> = {
   Matter: '#4361ee',
@@ -76,6 +75,7 @@ export default function GraphExplorer() {
   const [floor, setFloor] = useState(0.8)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
   const [fullscreen, setFullscreen] = useState(false)
 
   const [zoom, setZoom] = useState(1)
@@ -97,7 +97,10 @@ export default function GraphExplorer() {
   const [hovered, setHovered] = useState<{ kind: 'node' | 'edge'; id: string } | null>(null)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [selectedEdge, setSelectedEdge] = useState<GraphEdge | null>(null)
-  const prov = useProvenance(tenant, selectedEdge?.assertion_id ?? null)
+  const { provenance, error: provError } = useProvenance(
+    tenant,
+    selectedEdge?.assertion_id ?? null,
+  )
 
   const [matterFilter, setMatterFilter] = useState('__all__')
   const [visibleClasses, setVisibleClasses] = useState<Set<EpistemicClass>>(
@@ -111,9 +114,9 @@ export default function GraphExplorer() {
 
   useEffect(() => {
     Promise.all([
-      fallback(api.neighbourhood(tenant, { depth: 2 }), MOCK_NEIGHBOURHOOD),
-      fallback(api.listMatters(tenant), MOCK_MATTERS_RESPONSE),
-      fallback(api.getSettings(tenant), MOCK_SETTINGS),
+      api.neighbourhood(tenant, { depth: 2 }),
+      api.listMatters(tenant),
+      api.getSettings(tenant),
     ])
       .then(([n, m, s]) => {
         const canvas = canvasRef.current
@@ -132,10 +135,11 @@ export default function GraphExplorer() {
         setMatters(m.matters)
         setFloor(s.min_confidence)
         setMinConf(0)
+        setError('')
       })
-      .catch((e) => setError((e as Error).message))
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tenant])
+  }, [tenant, reloadKey])
 
   const nodeIndex = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
 
@@ -565,8 +569,27 @@ export default function GraphExplorer() {
   const hoveredEdge =
     hovered?.kind === 'edge' ? edges.find((e) => e.assertion_id === hovered.id) : null
 
+  const retry = () => {
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
+
   if (loading) return <Spinner />
-  if (error) return <div className="empty-state">Could not load the graph: {error}</div>
+  if (error)
+    return (
+      <ErrorState
+        title="Could not load the graph"
+        detail={error}
+        onRetry={retry}
+      />
+    )
+  if (nodes.length === 0)
+    return (
+      <EmptyState title="The graph is empty">
+        No facts have been recorded for this tenant yet. Ingest a document from Documents, and the
+        assertions drawn from it appear here.
+      </EmptyState>
+    )
 
   return (
     <div className={`graph-page${fullscreen ? ' graph-fullscreen' : ''}`}>
@@ -741,9 +764,11 @@ export default function GraphExplorer() {
         {/* Edge inspection — the provenance panel, in place. */}
         {selectedEdge && (
           <div className="graph-inspect">
-            {prov ? (
+            {provError ? (
+              <ErrorState title="Could not load this provenance" detail={provError} />
+            ) : provenance ? (
               <ProvenancePanel
-                provenance={prov}
+                provenance={provenance}
                 confidenceFloor={floor}
                 onClose={() => setSelectedEdge(null)}
                 compact

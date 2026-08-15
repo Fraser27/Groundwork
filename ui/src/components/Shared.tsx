@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import type { IngestState, ResolutionTier } from '../api'
 import { INGEST_STATES } from '../api'
 import { INGEST_STEP_HELP, INGEST_STEP_LABEL, TIERS, failureStep, ingestPhase } from '../epistemic'
-import { isMockActive } from '../mocks'
+import { isPlatformAdmin } from '../auth'
 
 export function Spinner() {
   return (
@@ -23,16 +23,28 @@ export function Toast({ toast }: { toast: { msg: string; type: string } | null }
   )
 }
 
-/** Marks a page as showing fixtures rather than live data. Goes with src/mocks.ts. */
-export function MockFlag() {
-  if (!isMockActive()) return null
+/** A failed request. Says nothing loaded, so an empty page is never read as no data. */
+export function ErrorState({
+  title = 'Could not load this page',
+  detail,
+  onRetry,
+}: {
+  title?: string
+  detail?: string
+  onRetry?: () => void
+}) {
   return (
-    <span
-      className="mock-flag"
-      title="The API did not respond, so this page is showing sample data. Nothing here reflects real records."
-    >
-      Sample data
-    </span>
+    <div className="banner banner-error">
+      <span>
+        <strong>{title}.</strong> {detail ? `${detail}. ` : ''}Nothing is shown below because
+        nothing was loaded.{' '}
+        {onRetry && (
+          <button className="btn btn-ghost btn-sm" onClick={onRetry} style={{ marginLeft: 4 }}>
+            Try again
+          </button>
+        )}
+      </span>
+    </div>
   )
 }
 
@@ -42,6 +54,23 @@ export function EmptyState({ title, children }: { title: string; children?: Reac
       <strong>{title}</strong>
       {children}
     </div>
+  )
+}
+
+/**
+ * Renders `children` only for a platform admin. Presentation, not enforcement: the
+ * routes underneath answer 403 regardless, and this only spares someone who reached the
+ * URL directly a page of failed requests.
+ */
+export function AdminOnly({ children }: { children: ReactNode }) {
+  if (isPlatformAdmin()) return <>{children}</>
+  return (
+    <EmptyState title="You do not have access to this page">
+      <p>
+        Administration requires the platform-admin role. Ask an administrator at your firm if you
+        need it.
+      </p>
+    </EmptyState>
   )
 }
 

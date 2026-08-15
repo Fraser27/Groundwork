@@ -11,14 +11,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, type Assertion, type EpistemicClass, type Matter } from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC, HELP } from '../epistemic'
-import { fallback, MOCK_MATTERS_RESPONSE, MOCK_PENDING, MOCK_SETTINGS } from '../mocks'
 import { useProvenance } from '../useProvenance'
 import ConfidenceBar from '../components/ConfidenceBar'
 import DocumentViewer from '../components/DocumentViewer'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel, { SourceSpan } from '../components/ProvenancePanel'
-import { EmptyState, MockFlag, Spinner, Toast } from '../components/Shared'
+import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { epiStyle, fmtDateTime } from '../format'
 
 type Decision = 'approved' | 'rejected'
@@ -29,6 +28,8 @@ export default function ReviewQueue() {
   const [matters, setMatters] = useState<Matter[]>([])
   const [floor, setFloor] = useState(0.8)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
 
   const [matterFilter, setMatterFilter] = useState('__all__')
@@ -51,18 +52,19 @@ export default function ReviewQueue() {
 
   useEffect(() => {
     Promise.all([
-      fallback(api.listAssertions(tenant, { review_state: 'PENDING', limit: 200 }), MOCK_PENDING),
-      fallback(api.listMatters(tenant), MOCK_MATTERS_RESPONSE),
-      fallback(api.getSettings(tenant), MOCK_SETTINGS),
+      api.listAssertions(tenant, { review_state: 'PENDING', limit: 200 }),
+      api.listMatters(tenant),
+      api.getSettings(tenant),
     ])
       .then(([a, m, s]) => {
         setPending(a)
         setMatters(m.matters)
         setFloor(s.min_confidence)
+        setError('')
       })
-      .catch(console.error)
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tenant])
+  }, [tenant, reloadKey])
 
   const predicates = useMemo(
     () => [...new Set(pending.map((a) => a.predicate))].sort(),
@@ -85,21 +87,27 @@ export default function ReviewQueue() {
   const outstanding = visible.filter((a) => !decided[a.assertion_id])
   const belowFloor = outstanding.filter((a) => a.confidence < floor).length
 
-  const decide = async (a: Assertion, decision: Decision, note?: string) => {
+  // Returns whether it was actually recorded, so a bulk run can report a partial failure.
+  const decide = async (a: Assertion, decision: Decision, note?: string): Promise<boolean> => {
     setBusy((b) => ({ ...b, [a.assertion_id]: true }))
     try {
       if (decision === 'approved') await api.approveAssertion(tenant, a.assertion_id, note)
       else await api.rejectAssertion(tenant, a.assertion_id, note)
-    } catch {
-      // The API is not up yet; record the decision locally so the flow is reviewable.
-    } finally {
-      setBusy((b) => ({ ...b, [a.assertion_id]: false }))
       setDecided((d) => ({ ...d, [a.assertion_id]: decision }))
       setSelected((s) => {
         const next = new Set(s)
         next.delete(a.assertion_id)
         return next
       })
+      return true
+    } catch (e) {
+      showToast(
+        `Could not record that decision: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
+        'error',
+      )
+      return false
+    } finally {
+      setBusy((b) => ({ ...b, [a.assertion_id]: false }))
     }
   }
 
@@ -115,8 +123,10 @@ export default function ReviewQueue() {
       if (!confirm(msg)) return
     } else if (!confirm(`Reject ${targets.length} claims?`)) return
 
-    for (const a of targets) await decide(a, decision)
-    showToast(`${targets.length} claims ${decision}`)
+    let ok = 0
+    for (const a of targets) if (await decide(a, decision)) ok++
+    if (ok === targets.length) showToast(`${targets.length} claims ${decision}`)
+    else showToast(`${ok} of ${targets.length} recorded. The rest were not changed.`, 'error')
   }
 
   const toggleSelect = (id: string) =>
@@ -135,6 +145,11 @@ export default function ReviewQueue() {
       return next
     })
 
+  const retry = () => {
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
+
   if (loading) return <Spinner />
 
   return (
@@ -149,9 +164,16 @@ export default function ReviewQueue() {
               the page they are on, so you are checking the source rather than trusting a summary.
             </p>
           </div>
-          <MockFlag />
         </div>
       </div>
+
+      {error && (
+        <ErrorState
+          title="Could not load the review queue"
+          detail={error}
+          onRetry={retry}
+        />
+      )}
 
       <div className="toolbar">
         <div className="toolbar-field">
@@ -238,7 +260,7 @@ export default function ReviewQueue() {
 
       <div className="review-layout">
         <div className="review-list">
-          {visible.length === 0 && (
+          {visible.length === 0 && !error && (
             <div className="card">
               <EmptyState title="Nothing to review">
                 Every model-extracted claim has been signed off. New ones appear here as documents
@@ -486,7 +508,8 @@ function InspectorPanel({
   floor: number
   onClose: () => void
 }) {
-  const prov = useProvenance(getTenantId(), assertion.assertion_id)
-  if (!prov) return <Spinner />
-  return <ProvenancePanel provenance={prov} confidenceFloor={floor} onClose={onClose} />
+  const { provenance, error } = useProvenance(getTenantId(), assertion.assertion_id)
+  if (error) return <ErrorState title="Could not load this provenance" detail={error} />
+  if (!provenance) return <Spinner />
+  return <ProvenancePanel provenance={provenance} confidenceFloor={floor} onClose={onClose} />
 }

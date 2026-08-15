@@ -8,10 +8,10 @@ import {
   hasPendingAuthCode,
   getUserEmail,
   getTenantId,
+  isPlatformAdmin,
   logout,
 } from './auth'
-import { Spinner } from './components/Shared'
-import { fallback, MOCK_DASHBOARD } from './mocks'
+import { AdminOnly, Spinner } from './components/Shared'
 import Dashboard from './pages/Dashboard'
 import Matters from './pages/Matters'
 import Documents from './pages/Documents'
@@ -69,13 +69,16 @@ function App() {
       .catch(() => setGraphStatus('disconnected'))
     // The pending badge is the one number worth carrying in the chrome: it is a
     // queue of claims nobody has signed off yet.
-    fallback(api.dashboard(tenant), MOCK_DASHBOARD)
+    api
+      .dashboard(tenant)
       .then((d) => setPendingCount(d.pending_review))
       .catch(() => setPendingCount(null))
   }, [authed, tenant])
 
   if (isAuthEnabled() && authed === null) return <Spinner />
   if (isAuthEnabled() && !authed) return <Login />
+
+  const admin = isPlatformAdmin()
 
   return (
     <div className={`app-layout${collapsed ? ' sidebar-collapsed' : ''}`}>
@@ -120,11 +123,15 @@ function App() {
           <NavItem to="/tables" icon={icons.tables} label="Tables" collapsed={collapsed} />
           <NavItem to="/metrics" icon={icons.metrics} label="Metrics" collapsed={collapsed} />
 
-          <div className="nav-section">Administration</div>
-          <div className="nav-section-rule" />
-          <NavItem to="/glossary" icon={icons.glossary} label="Glossary" collapsed={collapsed} />
-          <NavItem to="/access" icon={icons.access} label="Access" collapsed={collapsed} />
-          <NavItem to="/admin" icon={icons.admin} label="Admin" collapsed={collapsed} />
+          {admin && (
+            <>
+              <div className="nav-section">Administration</div>
+              <div className="nav-section-rule" />
+              <NavItem to="/glossary" icon={icons.glossary} label="Glossary" collapsed={collapsed} />
+              <NavItem to="/access" icon={icons.access} label="Access" collapsed={collapsed} />
+              <NavItem to="/admin" icon={icons.admin} label="Admin" collapsed={collapsed} />
+            </>
+          )}
         </nav>
 
         <div className="sidebar-footer">
@@ -170,8 +177,22 @@ function App() {
           <Route path="/tables/:name" element={<TableDetail />} />
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/glossary" element={<Glossary />} />
-          <Route path="/access" element={<Access />} />
-          <Route path="/admin" element={<Admin />} />
+          <Route
+            path="/access"
+            element={
+              <AdminOnly>
+                <Access />
+              </AdminOnly>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <AdminOnly>
+                <Admin />
+              </AdminOnly>
+            }
+          />
         </Routes>
       </main>
     </div>

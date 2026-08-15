@@ -10,13 +10,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, type Assertion, type EpistemicClass, type ReviewState } from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC_ORDER, HELP, REVIEW_STATE_LABEL } from '../epistemic'
-import { fallback, MOCK_ASSERTIONS, MOCK_SETTINGS } from '../mocks'
 import { useProvenance } from '../useProvenance'
 import ConfidenceBar from '../components/ConfidenceBar'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
-import { EmptyState, MockFlag, Spinner } from '../components/Shared'
+import { EmptyState, ErrorState, Spinner } from '../components/Shared'
 import { fmtDateTime } from '../format'
 
 export default function Provenance() {
@@ -24,25 +23,25 @@ export default function Provenance() {
   const [all, setAll] = useState<Assertion[]>([])
   const [floor, setFloor] = useState(0.8)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState<EpistemicClass | '__all__'>('__all__')
   const [stateFilter, setStateFilter] = useState<ReviewState | '__all__' | 'RETRACTED'>('__all__')
   const [asOf, setAsOf] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
-  const prov = useProvenance(tenant, selected)
+  const { provenance, error: provError } = useProvenance(tenant, selected)
 
   useEffect(() => {
-    Promise.all([
-      fallback(api.listAssertions(tenant, { limit: 500 }), MOCK_ASSERTIONS),
-      fallback(api.getSettings(tenant), MOCK_SETTINGS),
-    ])
+    Promise.all([api.listAssertions(tenant, { limit: 500 }), api.getSettings(tenant)])
       .then(([a, s]) => {
         setAll(a)
         setFloor(s.min_confidence)
+        setError('')
       })
-      .catch(console.error)
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tenant])
+  }, [tenant, reloadKey])
 
   const filtered = useMemo(() => {
     let out = all
@@ -76,6 +75,11 @@ export default function Provenance() {
 
   const retracted = all.filter((a) => !!a.superseded_at).length
 
+  const retry = () => {
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
+
   if (loading) return <Spinner />
 
   return (
@@ -90,9 +94,16 @@ export default function Provenance() {
               was believed and when stays intact.
             </p>
           </div>
-          <MockFlag />
         </div>
       </div>
+
+      {error && (
+        <ErrorState
+          title="Could not load the audit trail"
+          detail={error}
+          onRetry={retry}
+        />
+      )}
 
       <div className="toolbar">
         <div className="toolbar-field" style={{ flex: 1, minWidth: 260 }}>
@@ -239,8 +250,10 @@ export default function Provenance() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={7}>
-                  <EmptyState title="Nothing matches">
-                    Widen the filters, or clear the as-at date.
+                  <EmptyState title={all.length === 0 ? 'No facts recorded yet' : 'Nothing matches'}>
+                    {all.length === 0
+                      ? 'The graph is empty. Facts appear here as documents are ingested and claims are reviewed.'
+                      : 'Widen the filters, or clear the as-at date.'}
                   </EmptyState>
                 </td>
               </tr>
@@ -256,9 +269,13 @@ export default function Provenance() {
             onClick={(e) => e.stopPropagation()}
             style={{ padding: 0, overflow: 'hidden' }}
           >
-            {prov ? (
+            {provError ? (
+              <div style={{ padding: 20 }}>
+                <ErrorState title="Could not load this provenance" detail={provError} />
+              </div>
+            ) : provenance ? (
               <ProvenancePanel
-                provenance={prov}
+                provenance={provenance}
                 confidenceFloor={floor}
                 onClose={() => setSelected(null)}
               />

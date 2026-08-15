@@ -2,10 +2,9 @@ import { useEffect, useState } from 'react'
 import { api, type Ontology, type Source, type TenantSettings, type TenantUser } from '../api'
 import { getTenantId } from '../auth'
 import { HELP } from '../epistemic'
-import { fallback, MOCK_ONTOLOGY, MOCK_SETTINGS, MOCK_SOURCES } from '../mocks'
 import ConfidenceBar from '../components/ConfidenceBar'
 import FieldHelp from '../components/FieldHelp'
-import { MockFlag, Spinner, Toast } from '../components/Shared'
+import { ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDateTime, fmtNum } from '../format'
 
 export default function Admin() {
@@ -14,6 +13,8 @@ export default function Admin() {
   const [ontology, setOntology] = useState<Ontology | null>(null)
   const [sources, setSources] = useState<Source[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
   const [saving, setSaving] = useState<string | null>(null)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
   const [users, setUsers] = useState<TenantUser[]>([])
@@ -53,34 +54,36 @@ export default function Admin() {
   }
 
   useEffect(() => {
-    Promise.all([
-      fallback(api.getSettings(tenant), MOCK_SETTINGS),
-      fallback(api.listSources(tenant), MOCK_SOURCES),
-    ])
+    Promise.all([api.getSettings(tenant), api.listSources(tenant)])
       .then(([s, src]) => {
         setSettings(s)
         setSources(src)
-        return fallback(api.ontology(s.ontology_domain), MOCK_ONTOLOGY)
+        setError('')
+        return api.ontology(s.ontology_domain)
       })
       .then(setOntology)
-      .catch(console.error)
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
     loadUsers()
-  }, [tenant])
+  }, [tenant, reloadKey])
 
   const patch = async (key: string, body: Partial<TenantSettings>, message: string) => {
     setSaving(key)
-    // Applied locally first: these are single-field policy toggles and a stale
-    // switch is more confusing than an optimistic one.
+    const before = settings
     setSettings((s) => (s ? { ...s, ...body } : s))
     try {
       const next = await api.updateSettings(tenant, body)
       setSettings(next)
-    } catch {
-      // API not live yet; the local state above stands.
+      showToast(message)
+    } catch (e) {
+      // These are governance policies. A toggle that did not persist must snap back.
+      setSettings(before)
+      showToast(
+        `Could not save that setting: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
+        'error',
+      )
     } finally {
       setSaving(null)
-      showToast(message)
     }
   }
 
@@ -92,11 +95,31 @@ export default function Admin() {
     )
       return
     await patch('domain', { ontology_domain: domain }, `Ontology set to ${domain}`)
-    setOntology(await fallback(api.ontology(domain), MOCK_ONTOLOGY))
+    try {
+      setOntology(await api.ontology(domain))
+    } catch (e) {
+      setOntology(null)
+      showToast(
+        `Could not load the ${domain} vocabulary: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
+        'error',
+      )
+    }
+  }
+
+  const retry = () => {
+    setLoading(true)
+    setReloadKey((k) => k + 1)
   }
 
   if (loading) return <Spinner />
-  if (!settings) return <div className="empty-state">Could not load tenant settings.</div>
+  if (error || !settings)
+    return (
+      <ErrorState
+        title="Could not load tenant settings"
+        detail={error}
+        onRetry={retry}
+      />
+    )
 
   return (
     <>
@@ -106,7 +129,6 @@ export default function Admin() {
             <h2>Admin</h2>
             <p>Tenant configuration, the active vocabulary, and the governance controls.</p>
           </div>
-          <MockFlag />
         </div>
       </div>
 

@@ -11,9 +11,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, type Metric, type TableSummary } from '../api'
 import { getTenantId } from '../auth'
 import { HELP } from '../epistemic'
-import { fallback, mockCompiledSql, MOCK_METRICS, MOCK_TABLES } from '../mocks'
 import FieldHelp from '../components/FieldHelp'
-import { EmptyState, MockFlag, Spinner, Toast } from '../components/Shared'
+import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDateTime } from '../format'
 
 interface Form {
@@ -94,6 +93,7 @@ export default function Metrics() {
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [tables, setTables] = useState<TableSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [filter, setFilter] = useState('')
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<Metric | null>(null)
@@ -108,15 +108,13 @@ export default function Metrics() {
   }
 
   const load = () => {
-    Promise.all([
-      fallback(api.listMetrics(tenant), MOCK_METRICS),
-      fallback(api.listTables(tenant), MOCK_TABLES),
-    ])
+    Promise.all([api.listMetrics(tenant), api.listTables(tenant)])
       .then(([m, t]) => {
         setMetrics(m)
         setTables(t)
+        setError('')
       })
-      .catch(console.error)
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
   }
 
@@ -168,12 +166,12 @@ export default function Metrics() {
       await api.setMetricStatus(tenant, m.metric_id, status)
       showToast(`${m.name} ${status}`)
       load()
-    } catch {
-      // Optimistic when the API is not yet live.
-      setMetrics((all) =>
-        all.map((x) => (x.metric_id === m.metric_id ? { ...x, status } : x)),
+    } catch (e) {
+      // Never optimistic: approval is the governance act, so a failed write must not look done.
+      showToast(
+        `Could not ${status === 'approved' ? 'approve' : 'change'} ${m.name}: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
+        'error',
       )
-      showToast(`${m.name} ${status}`)
     }
   }
 
@@ -186,11 +184,15 @@ export default function Metrics() {
       })
       return
     }
-    const res = await fallback(api.compileMetric(tenant, m.metric_id), {
-      metric_id: m.metric_id,
-      sql: mockCompiledSql(m),
-    })
-    setSql((s) => ({ ...s, [m.metric_id]: res.sql }))
+    try {
+      const res = await api.compileMetric(tenant, m.metric_id)
+      setSql((s) => ({ ...s, [m.metric_id]: res.sql }))
+    } catch (e) {
+      showToast(
+        `Could not compile ${m.name}: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
+        'error',
+      )
+    }
   }
 
   if (loading) return <Spinner />
@@ -207,9 +209,10 @@ export default function Metrics() {
               language model writes any part of it. That is why the number is defensible.
             </p>
           </div>
-          <MockFlag />
         </div>
       </div>
+
+      {error && <ErrorState title="Could not load metrics" detail={error} onRetry={load} />}
 
       <div className="banner banner-info">
         <span>
@@ -395,8 +398,10 @@ export default function Metrics() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={7}>
-                  <EmptyState title="No metrics defined">
-                    A governed metric turns a recurring question into a fixed, auditable calculation.
+                  <EmptyState title={metrics.length === 0 ? 'No metrics defined' : 'No metrics match'}>
+                    {metrics.length === 0
+                      ? 'A governed metric turns a recurring question into a fixed, auditable calculation. Use New metric to define the first one.'
+                      : 'Clear the filter to see every metric.'}
                   </EmptyState>
                 </td>
               </tr>

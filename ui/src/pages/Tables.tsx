@@ -3,10 +3,9 @@ import { Link } from 'react-router-dom'
 import { api, type Source, type TableSummary } from '../api'
 import { getTenantId } from '../auth'
 import { HELP } from '../epistemic'
-import { fallback, MOCK_SOURCES, MOCK_TABLES } from '../mocks'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
-import { EmptyState, MockFlag, Spinner } from '../components/Shared'
+import { EmptyState, ErrorState, Spinner } from '../components/Shared'
 import { fmtDateTime, fmtNum } from '../format'
 
 export default function Tables() {
@@ -16,19 +15,19 @@ export default function Tables() {
   const [filter, setFilter] = useState('')
   const [sourceFilter, setSourceFilter] = useState('__all__')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    Promise.all([
-      fallback(api.listTables(tenant), MOCK_TABLES),
-      fallback(api.listSources(tenant), MOCK_SOURCES),
-    ])
+    Promise.all([api.listTables(tenant), api.listSources(tenant)])
       .then(([t, s]) => {
         setTables(t)
         setSources(s)
+        setError('')
       })
-      .catch(console.error)
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tenant])
+  }, [tenant, reloadKey])
 
   const filtered = useMemo(() => {
     let out = tables
@@ -47,6 +46,11 @@ export default function Tables() {
 
   const sourceName = (id: string) => sources.find((s) => s.source_id === id)?.name ?? id
 
+  const retry = () => {
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
+
   if (loading) return <Spinner />
 
   return (
@@ -60,9 +64,25 @@ export default function Tables() {
               move, and are queried in place when a question needs them.
             </p>
           </div>
-          <MockFlag />
         </div>
       </div>
+
+      {error && (
+        <ErrorState
+          title="Could not load the catalogue"
+          detail={error}
+          onRetry={retry}
+        />
+      )}
+
+      {!error && tables.length === 0 && sources.length === 0 && (
+        <div className="card">
+          <EmptyState title="No catalogue scan has been run">
+            Nothing has been discovered yet. Run a Glue catalogue scan from Admin, and the tables it
+            finds appear here.
+          </EmptyState>
+        </div>
+      )}
 
       <div className="banner banner-info">
         <span>
@@ -164,8 +184,10 @@ export default function Tables() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={5}>
-                  <EmptyState title="No tables match">
-                    Add a source in Admin and run a scan to populate the catalogue.
+                  <EmptyState title={tables.length === 0 ? 'No tables in the catalogue' : 'No tables match'}>
+                    {tables.length === 0
+                      ? 'A catalogue scan has not been run. Start one from Admin.'
+                      : 'Clear the search or pick a different source.'}
                   </EmptyState>
                 </td>
               </tr>

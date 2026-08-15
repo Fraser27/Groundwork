@@ -1722,17 +1722,6 @@ code, pre { font-family: var(--mono); }
 .toast-error { background: color-mix(in srgb, var(--red) 12%, var(--bg-card)); color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, transparent); }
 @keyframes slideIn { from { transform: translateY(16px); opacity: 0; } }
 
-.mock-flag {
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--orange);
-  border: 1px dashed color-mix(in srgb, var(--orange) 45%, transparent);
-  border-radius: 4px;
-  padding: 1px 6px;
-}
-
 /* ── Login ─────────────────────────────────────────────────────────────── */
 
 .login-shell {

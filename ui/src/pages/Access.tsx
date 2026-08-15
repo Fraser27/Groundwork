@@ -21,16 +21,9 @@ import {
 } from '../api'
 import { getTenantId } from '../auth'
 import { ACCESS_DECISIONS, HELP } from '../epistemic'
-import {
-  fallback,
-  MOCK_ACCESS_USERS,
-  MOCK_MATTERS_RESPONSE,
-  mockMatterAccess,
-  mockUserAccess,
-} from '../mocks'
 import AccessAudit from '../components/AccessAudit'
 import FieldHelp from '../components/FieldHelp'
-import { EmptyState, MockFlag, Spinner, Toast } from '../components/Shared'
+import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDate } from '../format'
 
 const ROLES = ['supervising partner', 'associate', 'paralegal', 'trainee', 'support'] as const
@@ -54,6 +47,9 @@ export default function Access() {
   const [matters, setMatters] = useState<MatterRef[]>([])
   const [users, setUsers] = useState<DirectoryUser[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
+  const [detailError, setDetailError] = useState('')
   const [matterId, setMatterId] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
   const [matterAccess, setMatterAccess] = useState<MatterAccessDetail | null>(null)
@@ -71,10 +67,7 @@ export default function Access() {
   }
 
   useEffect(() => {
-    Promise.all([
-      fallback(api.listMatters(tenant), MOCK_MATTERS_RESPONSE),
-      fallback(api.listAccessUsers(tenant), MOCK_ACCESS_USERS),
-    ])
+    Promise.all([api.listMatters(tenant), api.listAccessUsers(tenant)])
       .then(([m, u]) => {
         // A matter screened from the signed-in administrator is still administered here:
         // whoever manages a wall has to be able to see the matter it applies to. The list
@@ -88,10 +81,11 @@ export default function Access() {
         setUsers(u)
         setMatterId((id) => id ?? refs[0]?.matter_id ?? null)
         setUserId((id) => id ?? u[0]?.user_id ?? null)
+        setError('')
       })
-      .catch(console.error)
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tenant])
+  }, [tenant, reloadKey])
 
   const userLabels = useMemo(
     () => Object.fromEntries(users.map((u) => [u.user_id, u.display_name ?? u.user_id])),
@@ -112,16 +106,23 @@ export default function Access() {
     if (!id) return
     const p =
       view === 'matter'
-        ? fallback(api.getMatterAccess(tenant, id), mockMatterAccess(id)).then((d) => {
-            if (!cancelled) setMatterAccess(d)
+        ? api.getMatterAccess(tenant, id).then((d) => {
+            if (!cancelled) {
+              setMatterAccess(d)
+              setDetailError('')
+            }
           })
-        : fallback(api.getUserAccess(tenant, id), mockUserAccess(id)).then((d) => {
-            if (!cancelled) setUserAccess(d)
+        : api.getUserAccess(tenant, id).then((d) => {
+            if (!cancelled) {
+              setUserAccess(d)
+              setDetailError('')
+            }
           })
-    p.catch(() => {
+    p.catch((e: Error) => {
       if (!cancelled) {
         setMatterAccess(null)
         setUserAccess(null)
+        setDetailError(e.message)
       }
     }).finally(() => {
       if (!cancelled) setLoadedKey(wantKey)
@@ -155,6 +156,11 @@ export default function Access() {
     return users.filter((u) => !on.has(u.user_id))
   }, [users, matterAccess])
 
+  const retry = () => {
+    setLoading(true)
+    setReloadKey((k) => k + 1)
+  }
+
   if (loading) return <Spinner />
 
   return (
@@ -169,9 +175,16 @@ export default function Access() {
               through is not a wall. Every change here is added to the record and never removed.
             </p>
           </div>
-          <MockFlag />
         </div>
       </div>
+
+      {error && (
+        <ErrorState
+          title="Could not load matters or the user directory"
+          detail={error}
+          onRetry={retry}
+        />
+      )}
 
       <div className="access-tabs">
         <button
@@ -195,6 +208,9 @@ export default function Access() {
               <h3>Matters</h3>
             </div>
             <div className="access-picker">
+              {matters.length === 0 && !error && (
+                <EmptyState title="No matters">Nothing to staff yet.</EmptyState>
+              )}
               {matters.map((m) => (
                 <button
                   key={m.matter_id}
@@ -209,8 +225,18 @@ export default function Access() {
           </div>
 
           <div>
-            {detailLoading || !matterAccess ? (
+            {detailError ? (
+              <ErrorState
+                title="Could not load access for this matter"
+                detail={detailError}
+                onRetry={() => setRefreshKey((k) => k + 1)}
+              />
+            ) : detailLoading ? (
               <Spinner />
+            ) : !matterAccess ? (
+              <EmptyState title="Pick a matter">
+                Choose a matter on the left to see who may read it.
+              </EmptyState>
             ) : (
               <>
                 <div className="card">
@@ -481,6 +507,11 @@ export default function Access() {
               <h3>People</h3>
             </div>
             <div className="access-picker">
+              {users.length === 0 && !error && (
+                <EmptyState title="No people in the directory">
+                  Invite colleagues from Admin.
+                </EmptyState>
+              )}
               {users.map((u) => (
                 <button
                   key={u.user_id}
@@ -495,8 +526,18 @@ export default function Access() {
           </div>
 
           <div>
-            {detailLoading || !userAccess ? (
+            {detailError ? (
+              <ErrorState
+                title="Could not load access for this person"
+                detail={detailError}
+                onRetry={() => setRefreshKey((k) => k + 1)}
+              />
+            ) : detailLoading ? (
               <Spinner />
+            ) : !userAccess ? (
+              <EmptyState title="Pick a person">
+                Choose someone on the left to see what they can reach, and why.
+              </EmptyState>
             ) : (
               <>
                 <div className="card">

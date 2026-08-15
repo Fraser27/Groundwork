@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Ontology } from '../api'
 import { getTenantId } from '../auth'
-import { fallback, MOCK_SETTINGS } from '../mocks'
+import { ErrorState } from '../components/Shared'
 import {
   EPISTEMIC,
   EPISTEMIC_ORDER,
@@ -113,6 +113,8 @@ export default function Glossary() {
   const tenant = getTenantId()
   const [filter, setFilter] = useState('')
   const [onto, setOnto] = useState<Ontology | null>(null)
+  const [ontoError, setOntoError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
 
   // Two indirections on purpose. The vocabulary comes from the live ontology rather
   // than a copy here, because it is enforced server-side at write time and a stale copy
@@ -121,18 +123,25 @@ export default function Glossary() {
   // healthcare tenant sees the healthcare vocabulary without a rebuild.
   useEffect(() => {
     let cancelled = false
-    fallback(api.getSettings(tenant), MOCK_SETTINGS)
+    api
+      .getSettings(tenant)
       .then((s) => (cancelled ? null : api.ontology(s.ontology_domain)))
       .then((o) => {
-        if (!cancelled && o) setOnto(o)
+        if (!cancelled && o) {
+          setOnto(o)
+          setOntoError('')
+        }
       })
-      .catch(() => {
-        if (!cancelled) setOnto(null)
+      .catch((e: Error) => {
+        if (!cancelled) {
+          setOnto(null)
+          setOntoError(e.message)
+        }
       })
     return () => {
       cancelled = true
     }
-  }, [tenant])
+  }, [tenant, reloadKey])
 
   const terms = useMemo<Term[]>(
     () =>
@@ -254,6 +263,17 @@ export default function Glossary() {
           ))}
         </dl>
       </section>
+
+      {ontoError && (
+        <section className="card">
+          <h2>The relationship vocabulary</h2>
+          <ErrorState
+            title="Could not load the live vocabulary"
+            detail={ontoError}
+            onRetry={() => setReloadKey((k) => k + 1)}
+          />
+        </section>
+      )}
 
       {onto && (
         <section className="card">
