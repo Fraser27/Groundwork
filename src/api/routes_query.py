@@ -11,8 +11,10 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
-from src.api.deps import ServicesDep, TenantDep
+from src.api.deps import ServicesDep, TenantDep, build_metric_matcher
+from src.query.planner import Planner
 from src.query.resolver import QueryBlocked, Tier
+from src.query.vector_search import VectorSearch
 
 router = APIRouter(tags=["query"])
 
@@ -70,3 +72,51 @@ async def run_query(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from e
 
     return resolution.to_dict()
+
+
+class ComposeRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=4000)
+    execute: bool = True
+    synthesise: bool = True
+    """False returns the evidence without asking a model to write over it, which is the
+    reviewable form: every part is there with its own provenance."""
+
+
+@router.post("/tenants/{tenant}/query/compose")
+async def compose_query(
+    services: ServicesDep,
+    principal: TenantDep,
+    body: Annotated[ComposeRequest, Body()],
+) -> dict[str, Any]:
+    """Answer from several sources at once, grounded on the graph.
+
+    Different from `/query`, which returns the first tier that can answer. This runs the
+    lanes a question needs and keeps their results apart: a compiled metric, a graph
+    traversal, and quoted passages are not the same kind of claim, so merging them into one
+    number and one confidence would be inventing a statistic.
+
+    A governed metric that matches still short-circuits, because it is exact and fanning out
+    would add nothing but latency.
+
+    What the graph blocks is applied deterministically and before any model sees the
+    evidence. The synthesis model writes prose over what survived; it never decides what
+    survives.
+    """
+    ctx, _ = principal
+    settings = services.settings_for(ctx.tenant_id)
+
+    planner = Planner(
+        metric_matcher=build_metric_matcher(services, ctx.tenant_id),
+        graph_reader=services.graph_reader,
+        vector_search=VectorSearch(services.embedder) if services.embedder else None,
+        catalog=services.catalog,
+        synthesiser=None,
+    )
+    answer = planner.plan(
+        ctx,
+        body.query,
+        settings,
+        execute=body.execute,
+        allow_synthesis=body.synthesise,
+    )
+    return answer.to_dict()
