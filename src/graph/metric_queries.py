@@ -36,10 +36,10 @@ _SNAPSHOT_FIELDS = """
     expression: m.expression,
     type: m.type,
     source_table: m.source_table,
-    synonyms: m.synonyms,
-    grain: m.grain,
-    filters: m.filters,
-    time_grains: m.time_grains,
+    synonyms_json: m.synonyms_json,
+    grain_json: m.grain_json,
+    filters_json: m.filters_json,
+    time_grains_json: m.time_grains_json,
     time_grain_column: m.time_grain_column,
     aggregation: m.aggregation,
     status: m.status,
@@ -48,7 +48,7 @@ _SNAPSHOT_FIELDS = """
     updated_at: m.updated_at,
     joins_json: m.joins_json,
     parameters_json: m.parameters_json,
-    base_metrics: m.base_metrics,
+    base_metrics_json: m.base_metrics_json,
     entity_columns_json: m.entity_columns_json,
     source: m.source
 """
@@ -85,10 +85,10 @@ SET m.name = $name,
     m.expression = $expression,
     m.type = $type,
     m.source_table = $source_table,
-    m.synonyms = $synonyms,
-    m.grain = $grain,
-    m.filters = $filters,
-    m.time_grains = $time_grains,
+    m.synonyms_json = $synonyms_json,
+    m.grain_json = $grain_json,
+    m.filters_json = $filters_json,
+    m.time_grains_json = $time_grains_json,
     m.time_grain_column = $time_grain_column,
     m.aggregation = $aggregation,
     m.status = $status,
@@ -97,7 +97,7 @@ SET m.name = $name,
     m.updated_at = $updated_at,
     m.joins_json = $joins_json,
     m.parameters_json = $parameters_json,
-    m.base_metrics = $base_metrics,
+    m.base_metrics_json = $base_metrics_json,
     m.entity_columns_json = $entity_columns_json,
     m.source = $source
 RETURN m.metric_id AS metric_id, m.version AS version, m.status AS status
@@ -106,12 +106,12 @@ RETURN m.metric_id AS metric_id, m.version AS version, m.status AS status
 _METRIC_RETURN = """
 RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition,
        m.expression AS expression, m.type AS type, m.source_table AS source_table,
-       m.synonyms AS synonyms, m.grain AS grain, m.filters AS filters,
-       m.time_grains AS time_grains, m.time_grain_column AS time_grain_column,
+       m.synonyms_json AS synonyms_json, m.grain_json AS grain_json, m.filters_json AS filters_json,
+       m.time_grains_json AS time_grains_json, m.time_grain_column AS time_grain_column,
        m.aggregation AS aggregation, m.status AS status, m.owner AS owner,
        m.version AS version, m.updated_by AS updated_by, m.updated_at AS updated_at,
        m.joins_json AS joins_json, m.parameters_json AS parameters_json,
-       m.base_metrics AS base_metrics, m.entity_columns_json AS entity_columns_json,
+       m.base_metrics_json AS base_metrics_json, m.entity_columns_json AS entity_columns_json,
        m.source AS source
 """
 
@@ -150,12 +150,12 @@ MATCH (:Metric {tenant_id: $tenant_id, metric_id: $metric_id})
       -[:HAS_VERSION]->(mv:MetricVersion {version: $version})
 RETURN mv.metric_id AS metric_id, mv.name AS name, mv.definition AS definition,
        mv.expression AS expression, mv.type AS type, mv.source_table AS source_table,
-       mv.synonyms AS synonyms, mv.grain AS grain, mv.filters AS filters,
-       mv.time_grains AS time_grains, mv.time_grain_column AS time_grain_column,
+       mv.synonyms_json AS synonyms_json, mv.grain_json AS grain_json, mv.filters_json AS filters_json,
+       mv.time_grains_json AS time_grains_json, mv.time_grain_column AS time_grain_column,
        mv.aggregation AS aggregation, mv.status AS status, mv.owner AS owner,
        mv.version AS version, mv.updated_by AS updated_by, mv.updated_at AS updated_at,
        mv.joins_json AS joins_json, mv.parameters_json AS parameters_json,
-       mv.base_metrics AS base_metrics, mv.entity_columns_json AS entity_columns_json,
+       mv.base_metrics_json AS base_metrics_json, mv.entity_columns_json AS entity_columns_json,
        mv.source AS source
 """
 

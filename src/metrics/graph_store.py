@@ -64,10 +64,10 @@ def _to_params(
         "expression": metric.expression,
         "type": metric.type,
         "source_table": metric.source_table,
-        "synonyms": list(metric.synonyms),
-        "grain": list(metric.grain),
-        "filters": list(metric.filters),
-        "time_grains": list(metric.time_grains),
+        "synonyms_json": json.dumps(list(metric.synonyms)),
+        "grain_json": json.dumps(list(metric.grain)),
+        "filters_json": json.dumps(list(metric.filters)),
+        "time_grains_json": json.dumps(list(metric.time_grains)),
         "time_grain_column": metric.time_grain_column,
         "aggregation": metric.aggregation,
         "status": status,
@@ -76,10 +76,26 @@ def _to_params(
         "updated_at": _now(),
         "joins_json": json.dumps([j.model_dump() for j in metric.joins]),
         "parameters_json": json.dumps([p.model_dump() for p in metric.parameters]),
-        "base_metrics": list(metric.base_metrics),
+        "base_metrics_json": json.dumps(list(metric.base_metrics)),
         "entity_columns_json": json.dumps(metric.entity_columns or {}),
         "source": source,
     }
+
+
+def _json_list(row: dict[str, Any], field: str) -> list[str]:
+    """Read a list property back.
+
+    Accepts both the JSON-encoded form and a bare list, because a metric written before the
+    Neptune encoding was in place would otherwise fail to load and take tier 1 with it.
+    """
+    raw = row.get(f"{field}_json")
+    if raw:
+        try:
+            return list(json.loads(raw))
+        except (TypeError, ValueError):
+            return []
+    value = row.get(field)
+    return list(value) if value else []
 
 
 def _from_row(row: dict[str, Any]) -> MetricDefinition:
@@ -98,16 +114,16 @@ def _from_row(row: dict[str, Any]) -> MetricDefinition:
         expression=row["expression"],
         type=row.get("type") or "simple",
         source_table=row.get("source_table") or "",
-        synonyms=list(row.get("synonyms") or []),
-        grain=list(row.get("grain") or []),
-        filters=list(row.get("filters") or []),
-        time_grains=list(row.get("time_grains") or []),
+        synonyms=_json_list(row, "synonyms"),
+        grain=_json_list(row, "grain"),
+        filters=_json_list(row, "filters"),
+        time_grains=_json_list(row, "time_grains"),
         time_grain_column=row.get("time_grain_column") or "",
         aggregation=row.get("aggregation") or "additive",
         owner=row.get("owner") or "",
         joins=joins,
         parameters=parameters,
-        base_metrics=list(row.get("base_metrics") or []),
+        base_metrics=_json_list(row, "base_metrics"),
         entity_columns=json.loads(row.get("entity_columns_json") or "{}"),
     )
 

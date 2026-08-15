@@ -138,3 +138,47 @@ class TestLineage:
     def test_the_linked_table_is_tenant_scoped_too(self):
         """Linking to another firm's table node would cross the boundary in one hop."""
         assert "(t:Table {tenant_id: $tenant_id" in q.LINK_METRIC_TO_TABLE
+
+
+class TestNeptuneCompatibility:
+    """Neptune rejects a list-valued property with "Property value must be a simple literal".
+    Neo4j accepts one, so this is invisible to a fake graph and to the whole suite: the Cypher
+    reads identically either way, and only a real write against Neptune fails.
+
+    That is exactly what happened. These assert the encoding directly, because the alternative
+    is finding out on a deploy.
+    """
+
+    #: Every metric field that holds more than one value. All must be JSON-encoded.
+    COLLECTION_FIELDS = (
+        "synonyms",
+        "grain",
+        "filters",
+        "time_grains",
+        "base_metrics",
+        "parameters",
+        "joins",
+        "entity_columns",
+    )
+
+    def test_no_collection_is_written_as_a_bare_property(self):
+        for field in self.COLLECTION_FIELDS:
+            assert f"m.{field} = ${field}," not in q.UPSERT_METRIC, (
+                f"{field} is written as a bare property; Neptune will refuse it"
+            )
+
+    def test_every_collection_is_written_json_encoded(self):
+        for field in self.COLLECTION_FIELDS:
+            assert f"m.{field}_json = ${field}_json" in q.UPSERT_METRIC, (
+                f"{field} must be stored as {field}_json"
+            )
+
+    def test_snapshots_carry_the_encoded_form(self):
+        """A snapshot copying a bare list would fail on the same Neptune restriction."""
+        for field in self.COLLECTION_FIELDS:
+            assert f"{field}_json: m.{field}_json" in q.SNAPSHOT_METRIC_VERSION
+
+    def test_reads_project_the_encoded_form(self):
+        for field in self.COLLECTION_FIELDS:
+            assert f"m.{field}_json AS {field}_json" in q.GET_METRIC
+            assert f"mv.{field}_json AS {field}_json" in q.GET_METRIC_VERSION
