@@ -163,8 +163,16 @@ class DocumentStorage:
             factory = self._s3_factory
             if factory is None:
                 import boto3
+                from botocore.config import Config
 
-                factory = lambda: boto3.client("s3")  # noqa: E731
+                # signature_version must be set explicitly. The client resolves to s3v4 on
+                # its own, but `generate_presigned_post` still builds a v2 policy from the
+                # default config and emits AWSAccessKeyId/signature, and S3 refuses a v2
+                # POST to a KMS-encrypted bucket: "Requests specifying Server Side
+                # Encryption with AWS KMS managed keys require AWS Signature Version 4".
+                def factory() -> S3Like:
+                    return boto3.client("s3", config=Config(signature_version="s3v4"))
+
             self._s3 = factory()
         return self._s3
 

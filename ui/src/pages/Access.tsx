@@ -74,7 +74,10 @@ export default function Access() {
         // endpoint does not disclose its name to this caller, so the id stands in until
         // the detail fetch supplies one.
         const refs: MatterRef[] = [
-          ...m.matters.map((x) => ({ matter_id: x.matter_id, name: x.name })),
+          // The id stands in when there is no name, which is the usual case: nothing
+          // stores a matter name, so a screen confirmation must not read "removed from
+          // undefined".
+          ...m.matters.map((x) => ({ matter_id: x.matter_id, name: x.name || x.matter_id })),
           ...m.withheld.map((w) => ({ matter_id: w.matter_id, name: w.matter_id })),
         ]
         setMatters(refs)

@@ -113,6 +113,13 @@ class InMemoryJobStore:
             if j.tenant_id == tenant_id and j.state is state
         ]
 
+    def jobs_for_tenant(self, tenant_id: str) -> list[IngestJob]:
+        return sorted(
+            (j.model_copy(deep=True) for j in self._jobs.values() if j.tenant_id == tenant_id),
+            key=lambda j: j.created_at,
+            reverse=True,
+        )
+
     def drop_tenant(self, tenant_id: str) -> int:
         doomed = [k for k in self._jobs if k[0] == tenant_id]
         for key in doomed:
@@ -180,6 +187,19 @@ class DynamoJobStore:
             },
         )
         return [_to_job(i) for i in got.get("Items", [])]
+
+    def jobs_for_tenant(self, tenant_id: str) -> list[IngestJob]:
+        """Every job for a tenant, newest first.
+
+        A query on the partition key, not a scan: jobs are already partitioned by tenant,
+        so the document list costs one read regardless of how many tenants share the table.
+        """
+        got = self.table.query(
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :sk)",
+            ExpressionAttributeValues={":pk": tenant_pk(tenant_id), ":sk": JOB},
+        )
+        jobs = [_to_job(i) for i in got.get("Items", [])]
+        return sorted(jobs, key=lambda j: j.created_at, reverse=True)
 
     def drop_tenant(self, tenant_id: str) -> int:
         """Delete every job row for a tenant.

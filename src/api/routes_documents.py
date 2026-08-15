@@ -56,6 +56,7 @@ from src.documents.runner import IngestBusy, IngestRunner
 from src.documents.storage import (
     DEFAULT_EXPIRY_SECONDS,
     MAX_EXPIRY_SECONDS,
+    DocumentMeta,
     DocumentNotFound,
     DocumentStorage,
     storage_from_config,
@@ -439,6 +440,191 @@ def _job_summary(job: IngestJob) -> dict[str, Any]:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
         "history": [{"state": h.state.value, "at": h.at, "reason": h.reason} for h in job.history],
+    }
+
+
+def _assertion_out(a: Any) -> dict[str, Any]:
+    """An assertion as the UI declares it.
+
+    `source_locator` and `premises` are the two the UI dereferences without a guard, so a
+    payload that omits them does not degrade, it white-screens the page.
+    """
+    return {
+        "assertion_id": a.assertion_id,
+        "tenant_id": a.tenant_id,
+        "matter_id": a.matter_id,
+        "subject_id": a.subject_id,
+        "predicate": a.predicate,
+        "object_id": a.object_id,
+        "epistemic_class": a.epistemic_class.value,
+        "method": a.method,
+        "confidence": a.confidence,
+        "source_locator": a.source_locator.to_dict(),
+        "premises": list(a.premises),
+        "rule_id": a.rule_id,
+        "rule_version": a.rule_version,
+        "valid_from": a.valid_from,
+        "valid_until": a.valid_until,
+        "recorded_at": a.recorded_at,
+        "superseded_at": a.superseded_at,
+        "review_state": a.review_state.value,
+        "reviewed_by": a.reviewed_by,
+        "reviewed_at": a.reviewed_at,
+    }
+
+
+def _latest_per_document(jobs: list[IngestJob]) -> list[IngestJob]:
+    """One job per document, the most recent.
+
+    A document re-ingested after a failure has several jobs, and the list must show where
+    it stands now rather than every attempt. The per-document history stays available at
+    `/documents/{id}/jobs`.
+    """
+    newest: dict[str, IngestJob] = {}
+    for job in jobs:
+        seen = newest.get(job.document_id)
+        if seen is None or job.created_at > seen.created_at:
+            newest[job.document_id] = job
+    return sorted(newest.values(), key=lambda j: j.created_at, reverse=True)
+
+
+def _document_summary(
+    job: IngestJob,
+    *,
+    meta: DocumentMeta | None,
+    assertion_count: int = 0,
+    pending_review_count: int = 0,
+) -> dict[str, Any]:
+    """What the documents table renders.
+
+    Assembled from the job plus S3 metadata rather than stored as a row: a document record
+    that can disagree with the job that produced it is worse than no record.
+    """
+    return {
+        "document_id": job.document_id,
+        "filename": meta.filename if meta else job.document_id,
+        "matter_id": job.matter_id,
+        "state": job.state.value,
+        "uploaded_at": meta.uploaded_at if meta else job.created_at,
+        "page_count": getattr(meta, "page_count", None) if meta else None,
+        "size_bytes": getattr(meta, "size_bytes", None) if meta else None,
+        "assertion_count": assertion_count,
+        "pending_review_count": pending_review_count,
+        "error": job.reason if job.state.is_failed else None,
+    }
+
+
+@router.get("/tenants/{tenant}/documents")
+async def list_documents(
+    services: ServicesDep,
+    principal: TenantDep,
+    matter_id: Annotated[str | None, Query()] = None,
+) -> dict[str, Any]:
+    """Documents ingested for this tenant, newest first.
+
+    Derived from job state, because jobs are the only per-document record that is written
+    on every path. Filtering by matter goes through the same scope check as a read, so a
+    screened matter cannot be enumerated by passing its id here.
+    """
+    ctx, _ = principal
+    if matter_id:
+        _assert_matter(ctx, matter_id)
+
+    jobs = _latest_per_document(services.job_store.jobs_for_tenant(ctx.tenant_id))
+
+    # Matter scoping is applied to the *rows*, not just the filter: a document filed under
+    # a matter this caller is screened from must not appear in an unfiltered list either.
+    visible = []
+    for job in jobs:
+        if matter_id and job.matter_id != matter_id:
+            continue
+        if job.matter_id:
+            try:
+                ctx.assert_can_read_matter(job.matter_id)
+            except ScopeViolation:
+                continue
+        visible.append(job)
+
+    storage = storage_from_config(services.config)
+    counts = _assertion_counts(services, ctx)
+    documents = [
+        _document_summary(
+            job,
+            meta=storage.describe(job.document_id) if storage else None,
+            assertion_count=counts.get(job.document_id, (0, 0))[0],
+            pending_review_count=counts.get(job.document_id, (0, 0))[1],
+        )
+        for job in visible
+    ]
+    return {"documents": documents, "total": len(documents)}
+
+
+def _assertion_counts(services: Services, ctx: AuthContext) -> dict[str, tuple[int, int]]:
+    """Per-document (total, pending) assertion counts, from what this caller may see.
+
+    Built off `review_queue.visible`, so the numbers already respect the matter wall and a
+    screened document contributes nothing rather than a count that hints at its size.
+    """
+    counts: dict[str, list[int]] = {}
+    for record in services.review_queue.visible(ctx):
+        doc_id = record.assertion.source_locator.document_id
+        if not doc_id:
+            continue
+        entry = counts.setdefault(doc_id, [0, 0])
+        entry[0] += 1
+        if record.needs_review and not record.reviewed_at:
+            entry[1] += 1
+    return {k: (v[0], v[1]) for k, v in counts.items()}
+
+
+@router.get("/tenants/{tenant}/documents/{document_id}")
+async def get_document(
+    services: ServicesDep,
+    principal: TenantDep,
+    document_id: str,
+) -> dict[str, Any]:
+    """One document, with its ingest timeline and the facts read out of it."""
+    ctx, _ = principal
+    jobs = services.job_store.jobs_for_document(ctx.tenant_id, document_id)
+    if not jobs:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no document {document_id!r}")
+
+    latest = max(jobs, key=lambda j: j.created_at)
+    if latest.matter_id:
+        _assert_matter(ctx, latest.matter_id)
+
+    storage = storage_from_config(services.config)
+    meta = storage.describe(document_id) if storage else None
+
+    assertions = [
+        r.assertion
+        for r in services.review_queue.visible(ctx)
+        if r.assertion.source_locator.document_id == document_id
+    ]
+    pending = sum(
+        1
+        for r in services.review_queue.visible(ctx)
+        if r.assertion.source_locator.document_id == document_id
+        and r.needs_review
+        and not r.reviewed_at
+    )
+
+    summary = _document_summary(
+        latest, meta=meta, assertion_count=len(assertions), pending_review_count=pending
+    )
+    # Every attempt, oldest first: a document that failed twice before succeeding should
+    # show all three, because that history is what makes a stuck document diagnosable.
+    timeline = [
+        {"state": h.state.value, "at": h.at, "detail": h.reason}
+        for job in sorted(jobs, key=lambda j: j.created_at)
+        for h in job.history
+    ]
+    return {
+        **summary,
+        "s3_uri": f"s3://{storage.bucket}/{meta.key}" if storage and meta else "",
+        "content_sha256": getattr(meta, "content_sha256", None) if meta else None,
+        "timeline": timeline,
+        "assertions": [_assertion_out(a) for a in assertions],
     }
 
 

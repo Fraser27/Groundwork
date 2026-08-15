@@ -172,7 +172,6 @@ def create_app(config: LexGraphConfig | None = None) -> FastAPI:
     for module in (
         routes_review,
         routes_governance,
-    routes_metrics,
         routes_access,
         routes_catalog,
         routes_documents,

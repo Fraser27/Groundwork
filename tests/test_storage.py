@@ -316,3 +316,30 @@ class TestConfigWiring:
         set_document_storage(storage)
         cfg = LexGraphConfig(documents=DocumentConfig(bucket=""))
         assert storage_from_config(cfg) is storage
+
+
+class TestTheSigningVersion:
+    """A KMS bucket refuses a SigV2 presigned POST, and boto3's default produces one.
+
+    `boto3.client("s3")` reports `signature_version` as `s3v4`, but
+    `generate_presigned_post` builds its policy from the *default* config and emits
+    `AWSAccessKeyId`/`signature` unless the version is set explicitly. S3 then rejects the
+    upload with "Requests specifying Server Side Encryption with AWS KMS managed keys
+    require AWS Signature Version 4" -- a 400 that only ever appears in the browser, since
+    nothing server-side signs or sends the form.
+    """
+
+    def test_the_client_is_built_with_sigv4(self):
+        storage = DocumentStorage("bucket", kms_key_id="alias/x")
+        assert storage.s3.meta.config.signature_version == "s3v4"
+
+    def test_a_presigned_post_carries_v4_fields(self, ctx):
+        """Asserted on the wire format rather than on the config, because the config was
+        already right and the emitted policy was still v2. No fake S3 here on purpose: a
+        stub cannot show which policy botocore builds."""
+        storage = DocumentStorage("bucket", kms_key_id="alias/x")
+        ticket = storage.presign_upload(ctx, filename="a.pdf", max_bytes=1024)
+
+        assert ticket.fields["x-amz-algorithm"] == "AWS4-HMAC-SHA256"
+        assert "x-amz-credential" in ticket.fields
+        assert "AWSAccessKeyId" not in ticket.fields

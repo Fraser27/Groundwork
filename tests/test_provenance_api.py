@@ -162,7 +162,7 @@ class TestProvenanceCarriesWhatAViewerNeeds:
 
     def test_no_url_is_stored_on_the_assertion(self, client, storage, ctx):
         doc = _store(storage, ctx)
-        source = _provenance(client, _stage(doc.document_id))["assertion"]["source"]
+        source = _provenance(client, _stage(doc.document_id))["assertion"]["source_locator"]
         assert not any("url" in k for k in source)
         assert not any("expires" in k for k in source)
 

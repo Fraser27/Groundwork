@@ -178,3 +178,99 @@ class TestJobEndpoints:
 
     def test_another_tenants_jobs_are_404(self, client):
         assert client.get("/api/tenants/other-firm/jobs/job-1").status_code == 404
+
+
+class TestTheDocumentListExists:
+    """`GET /documents` and `GET /documents/{id}` had no implementation at all.
+
+    The UI called both. FastAPI matched the paths against the POST routes and answered 405,
+    which the Documents and Matters pages surfaced as "could not load" — and because
+    `updateSettings` pointed at a PUT that also did not exist, saving any governance setting
+    failed the same way. Missing routes are worth a test precisely because nothing else
+    notices: a typed client compiles happily against an endpoint that was never written.
+    """
+
+    def _job(self, tenant: str, doc_id: str, matter_id: str | None = None):
+        from src.documents.models import IngestJob, JobState
+
+        job = IngestJob(
+            job_id=f"job-{doc_id}",
+            document_id=doc_id,
+            tenant_id=tenant,
+            matter_id=matter_id,
+            state=JobState.LIVE,
+        )
+        return job
+
+    def test_listing_documents_is_not_405(self, client):
+        res = client.get(f"/api/tenants/{TENANT}/documents")
+        assert res.status_code == 200
+        assert "documents" in res.json()
+
+    def test_an_ingested_document_is_listed(self, client):
+        from src.api.deps import get_services
+
+        get_services().job_store.put_job(self._job(TENANT, "doc-1"))
+        body = client.get(f"/api/tenants/{TENANT}/documents").json()
+        assert [d["document_id"] for d in body["documents"]] == ["doc-1"]
+        assert body["documents"][0]["state"] == "LIVE"
+
+    def test_only_the_latest_job_per_document_is_shown(self, client):
+        """A document re-ingested after a failure has several jobs. The list is a statement
+        about where each document stands now, not a log of attempts."""
+        from src.api.deps import get_services
+        from src.documents.models import JobState
+
+        store = get_services().job_store
+        old = self._job(TENANT, "doc-1")
+        old.state = JobState.PARSE_FAILED
+        old.created_at = "2020-01-01T00:00:00Z"
+        store.put_job(old)
+        new = self._job(TENANT, "doc-1")
+        new.job_id = "job-newer"
+        new.created_at = "2030-01-01T00:00:00Z"
+        store.put_job(new)
+
+        docs = client.get(f"/api/tenants/{TENANT}/documents").json()["documents"]
+        assert len(docs) == 1
+        assert docs[0]["state"] == "LIVE"
+
+    def test_another_tenants_documents_are_not_listed(self, client):
+        from src.api.deps import get_services
+
+        get_services().job_store.put_job(self._job("other-firm", "theirs"))
+        body = client.get(f"/api/tenants/{TENANT}/documents").json()
+        assert body["documents"] == []
+
+    def test_a_missing_document_is_404_not_405(self, client):
+        res = client.get(f"/api/tenants/{TENANT}/documents/nope")
+        assert res.status_code == 404
+
+    def test_the_detail_carries_a_timeline(self, client):
+        from src.api.deps import get_services
+
+        get_services().job_store.put_job(self._job(TENANT, "doc-1"))
+        body = client.get(f"/api/tenants/{TENANT}/documents/doc-1").json()
+        assert body["document_id"] == "doc-1"
+        assert isinstance(body["timeline"], list)
+        assert isinstance(body["assertions"], list)
+
+
+class TestGovernanceIsWritable:
+    def test_the_ungoverned_switch_can_be_turned_on(self, client):
+        """The Admin toggle wrote to PUT /settings, which does not exist. This is the route
+        that actually holds the setting."""
+        res = client.patch(
+            f"/api/tenants/{TENANT}/governance", json={"block_ungoverned_queries": True}
+        )
+        assert res.status_code == 200
+        assert res.json()["settings"]["block_ungoverned_queries"] is True
+
+        shown = client.get(f"/api/tenants/{TENANT}/settings").json()
+        assert shown["block_ungoverned_queries"] is True
+
+    def test_there_is_no_put_settings(self, client):
+        """Pinned so the UI is not tempted back. GET /settings is a read-only projection
+        that joins governance onto process config; writes belong on governance."""
+        res = client.put(f"/api/tenants/{TENANT}/settings", json={"min_confidence": 0.9})
+        assert res.status_code == 405

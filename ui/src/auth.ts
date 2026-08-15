@@ -41,7 +41,19 @@ function cfg(runtimeKey: keyof RuntimeConfig, viteKey: string): string {
 
 const getPoolId = () => cfg('cognitoUserPoolId', 'VITE_COGNITO_USER_POOL_ID')
 const getClientId = () => cfg('cognitoClientId', 'VITE_COGNITO_CLIENT_ID')
-const getDomain = () => cfg('cognitoDomain', 'VITE_COGNITO_DOMAIN')
+
+/**
+ * A bare host, scheme stripped if one was supplied. Callers prepend `https://`.
+ *
+ * The stack output `HostedUiDomain` carries a scheme while the config key wants a host, so
+ * pasting the output into runtime-config.json yields `https://https//...` and the browser
+ * tries to resolve a host named `https`. Cheaper to accept both than to be right about
+ * which one is in the file.
+ */
+const getDomain = () =>
+  cfg('cognitoDomain', 'VITE_COGNITO_DOMAIN')
+    .replace(/^https?:\/\//, '')
+    .replace(/\/+$/, '')
 
 export function isAuthEnabled(): boolean {
   return !!(getPoolId() && getClientId() && getDomain())

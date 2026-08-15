@@ -53,7 +53,18 @@ class AssertionOut(BaseModel):
     matter_id: str | None = None
     recorded_at: str | None = None
     superseded_at: str | None = None
-    source: dict[str, Any] = Field(default_factory=dict)
+    tenant_id: str = ""
+    # Named to match what the UI dereferences. It reads `source_locator.quote` and
+    # `premises.length` with no guard, so omitting either does not render a blank cell, it
+    # throws inside the table body and takes the whole page with it.
+    source_locator: dict[str, Any] = Field(default_factory=dict)
+    premises: list[str] = Field(default_factory=list)
+    rule_id: str | None = None
+    rule_version: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: str | None = None
     below_floor: bool = False
     """Whether this sits under the retrieval trust floor. Shown so a reviewer knows
     the claim is not currently shaping any answer."""
@@ -73,7 +84,15 @@ def _to_out(record: Any, floor: float) -> AssertionOut:
         matter_id=a.matter_id,
         recorded_at=a.recorded_at,
         superseded_at=a.superseded_at,
-        source=a.source_locator.to_dict(),
+        tenant_id=a.tenant_id,
+        source_locator=a.source_locator.to_dict(),
+        premises=list(a.premises),
+        rule_id=a.rule_id,
+        rule_version=a.rule_version,
+        valid_from=a.valid_from,
+        valid_until=a.valid_until,
+        reviewed_by=a.reviewed_by,
+        reviewed_at=a.reviewed_at,
         below_floor=a.confidence < floor,
     )
 

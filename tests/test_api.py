@@ -192,7 +192,7 @@ class TestProvenance:
         """File, page and quote — what a reviewer opens the PDF and searches for."""
         aid = _stage_model_assertion()
         body = client.get(f"/api/tenants/{TENANT}/assertions/{aid}/provenance").json()
-        src = body["assertion"]["source"]
+        src = body["assertion"]["source_locator"]
         assert src["document_id"] == "doc-1"
         assert src["filename"] == "memorandum.pdf"
         assert src["page"] == 2

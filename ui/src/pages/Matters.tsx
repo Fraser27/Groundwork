@@ -49,11 +49,11 @@ export default function Matters() {
   const filtered = useMemo(() => {
     if (!filter.trim()) return matters
     const q = filter.toLowerCase()
-    return matters.filter(
-      (m) =>
-        m.matter_id.toLowerCase().includes(q) ||
-        m.name.toLowerCase().includes(q) ||
-        (m.client || '').toLowerCase().includes(q),
+    // Everything but matter_id is optional here. A matter is derived from the assertions
+    // filed under it, so there is no record carrying a name until something names it, and
+    // `m.name.toLowerCase()` threw the moment anyone typed in this box.
+    return matters.filter((m) =>
+      [m.matter_id, m.name, m.client].some((v) => (v ?? '').toLowerCase().includes(q)),
     )
   }, [matters, filter])
 
@@ -78,7 +78,7 @@ export default function Matters() {
         <div className="page-header">
           <div className="page-header-row">
             <div>
-              <h2>{selected.name}</h2>
+              <h2>{selected.name || selected.matter_id}</h2>
               <p>
                 <code>{selected.matter_id}</code>
                 {selected.client && ` · ${selected.client}`}
@@ -326,7 +326,7 @@ export default function Matters() {
             {filtered.map((m) => (
               <tr key={m.matter_id} onClick={() => setSelectedId(m.matter_id)}>
                 <td>
-                  <strong>{m.name}</strong>
+                  <strong>{m.name || m.matter_id}</strong>
                   <div className="dim" style={{ fontSize: 11.5 }}>
                     <code>{m.matter_id}</code>
                   </div>

@@ -166,11 +166,18 @@ export interface Tenant {
   created_at?: string | null
 }
 
+/**
+ * Only `matter_id` and `assertion_count` are actually sent. A matter is not a record: it is
+ * derived from the assertions filed under it, so nothing stores a name or a status until
+ * something names one. The rest are optional so the compiler forces a guard at each use --
+ * declaring `name: string` is what let `m.name.toLowerCase()` ship.
+ */
 export interface Matter {
   matter_id: string
-  name: string
+  assertion_count?: number
+  name?: string
   client?: string | null
-  status: string
+  status?: string
   opened_at?: string | null
   /** Ethical wall: this matter is walled off from the calling user. */
   walled?: boolean
@@ -713,7 +720,9 @@ export const api = {
     request<TableDetail>(`/tenants/${tenant}/tables/${encodeURIComponent(fullName)}`),
 
   listDocuments: (tenant: string, matterId?: string) =>
-    request<DocumentSummary[]>(`/tenants/${tenant}/documents${q({ matter_id: matterId })}`),
+    request<{ documents: DocumentSummary[] } | DocumentSummary[]>(
+      `/tenants/${tenant}/documents${q({ matter_id: matterId })}`,
+    ).then((r) => (Array.isArray(r) ? r : r.documents ?? [])),
   getDocument: (tenant: string, id: string) =>
     request<DocumentDetail>(`/tenants/${tenant}/documents/${id}`),
   // Presigned and short-lived, and issued only after matter access is checked. Never
@@ -935,11 +944,28 @@ export const api = {
   dashboard: (tenant: string) => request<DashboardStats>(`/tenants/${tenant}/dashboard`),
 
   getSettings: (tenant: string) => request<TenantSettings>(`/tenants/${tenant}/settings`),
-  updateSettings: (tenant: string, s: Partial<TenantSettings>) =>
-    request<TenantSettings>(`/tenants/${tenant}/settings`, {
-      method: 'PUT',
-      body: JSON.stringify(s),
-    }),
+
+  /**
+   * Writes go to PATCH /governance, which is where the settings actually live and where
+   * `GovernanceSettings.apply` validates them. There is no PUT /settings; GET /settings is
+   * a read-only projection that joins governance onto process config.
+   *
+   * `min_confidence` is renamed on the way out: the projection flattens
+   * `min_confidence_floor`, and sending the flattened name silently changes nothing,
+   * because `apply` ignores keys it does not recognise.
+   */
+  updateSettings: async (tenant: string, s: Partial<TenantSettings>): Promise<TenantSettings> => {
+    const { min_confidence, ...rest } = s
+    const patch: Record<string, unknown> = { ...rest }
+    if (min_confidence !== undefined) patch.min_confidence_floor = min_confidence
+    await request<{ settings: unknown; warnings: string[] }>(`/tenants/${tenant}/governance`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
+    // Re-read rather than trusting the patch response: the two shapes differ, and the
+    // projection is what the page renders.
+    return request<TenantSettings>(`/tenants/${tenant}/settings`)
+  },
 
   /**
    * Drop derived data. S3 and Glue are untouched, so everything except metrics is
@@ -1008,6 +1034,10 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  // Unwraps {matter_id, user_id, events}. Declaring the response as a bare array instead
+  // typechecked fine and then threw "is not iterable" the moment the caller spread it.
   accessAudit: (tenant: string, opts: { matter_id?: string; user_id?: string } = {}) =>
-    request<AccessEvent[]>(`/tenants/${tenant}/access/audit${q(opts)}`),
+    request<{ events: AccessEvent[] } | AccessEvent[]>(
+      `/tenants/${tenant}/access/audit${q(opts)}`,
+    ).then((r) => (Array.isArray(r) ? r : r.events ?? [])),
 }
