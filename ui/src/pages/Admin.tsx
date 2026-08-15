@@ -1,11 +1,26 @@
 import { useEffect, useState } from 'react'
-import { api, type Ontology, type Source, type TenantSettings, type TenantUser } from '../api'
+import {
+  api,
+  type Ontology,
+  type ResetScope,
+  type Source,
+  type TenantSettings,
+  type TenantUser,
+} from '../api'
 import { getTenantId } from '../auth'
 import { HELP } from '../epistemic'
 import ConfidenceBar from '../components/ConfidenceBar'
 import FieldHelp from '../components/FieldHelp'
 import { ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDateTime, fmtNum } from '../format'
+
+const RESET_OPTIONS: { key: keyof ResetScope; label: string; rebuild: string }[] = [
+  { key: 'graph', label: 'Graph facts', rebuild: 'Rebuilt by Replay' },
+  { key: 'vectors', label: 'Search index', rebuild: 'Rebuilt by Replay' },
+  { key: 'jobs', label: 'Ingest job history', rebuild: 'Rewritten on the next ingest' },
+  { key: 'catalog', label: 'Catalog cache', rebuild: 'Rebuilt by Scan catalog' },
+  { key: 'metrics', label: 'Metric definitions', rebuild: 'Nothing rebuilds these' },
+]
 
 export default function Admin() {
   const tenant = getTenantId()
@@ -21,11 +36,67 @@ export default function Admin() {
   const [newEmail, setNewEmail] = useState('')
   const [newIsAdmin, setNewIsAdmin] = useState(false)
   const [inviting, setInviting] = useState(false)
+  const [scope, setScope] = useState<ResetScope>({
+    graph: true,
+    vectors: true,
+    jobs: true,
+    catalog: true,
+    metrics: false,
+  })
+  const [confirmMetricLoss, setConfirmMetricLoss] = useState(false)
+  const [running, setRunning] = useState<string | null>(null)
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
-    setTimeout(() => setToast(null), 4000)
+    setTimeout(() => setToast(null), type === 'error' ? 9000 : 5000)
   }
+
+  const setScopeFlag = (key: keyof ResetScope, on: boolean) => {
+    setScope((s) => ({ ...s, [key]: on }))
+    if (key === 'metrics' && !on) setConfirmMetricLoss(false)
+  }
+
+  // A partial failure must not read as a success, so errors are surfaced as an error toast
+  // even though the request itself returned 200.
+  const runOp = async <T extends { errors: string[]; note?: string }>(
+    key: string,
+    call: () => Promise<T>,
+    summarise: (r: T) => string,
+  ) => {
+    setRunning(key)
+    try {
+      const r = await call()
+      const line = summarise(r)
+      if (r.errors.length)
+        showToast(`${line}. ${r.errors.length} problem(s): ${r.errors.slice(0, 3).join('; ')}`, 'error')
+      else showToast(line)
+      setReloadKey((k) => k + 1)
+    } catch (e) {
+      showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
+    } finally {
+      setRunning(null)
+    }
+  }
+
+  const doReset = async () => {
+    const parts = (Object.keys(scope) as (keyof ResetScope)[]).filter((k) => scope[k])
+    if (!parts.length) return
+    if (!confirm(`Remove ${parts.join(', ')} for ${tenant}?`)) return
+    await runOp(
+      'reset',
+      () => api.resetDerived(tenant, scope, confirmMetricLoss),
+      (r) =>
+        `Reset done: ${fmtNum(r.assertions_dropped)} assertions, ${fmtNum(r.vectors_dropped)} vectors, ` +
+        `${fmtNum(r.jobs_dropped)} jobs, ${fmtNum(r.tables_forgotten)} tables removed. ` +
+        (r.metrics_dropped
+          ? `${fmtNum(r.metrics_dropped)} metric definitions deleted and not recoverable.`
+          : `${fmtNum(r.metrics_preserved)} metric definitions kept.`),
+    )
+    setScopeFlag('metrics', false)
+  }
+
+  const resetBlocked = scope.metrics && !confirmMetricLoss
+  const busy = running !== null
 
   const loadUsers = () => {
     // No mock fallback: an empty list is a truthful answer, and inventing colleagues on
@@ -357,7 +428,7 @@ export default function Admin() {
           </label>
           <p className="card-note">
             When on, a question that matches no approved governed metric is refused instead of being
-            answered with model-generated SQL — in the web UI and over the API alike. Governed metrics
+            answered with model-generated SQL, in the web UI and over the API alike. Governed metrics
             are unaffected: they compile deterministically and never depended on a model.
           </p>
           <p className="card-note" style={{ marginTop: 9 }}>
@@ -457,6 +528,120 @@ export default function Admin() {
           </table>
           <p className="card-note" style={{ marginTop: 10 }}>
             A scan records metadata only. Rows never leave the source.
+          </p>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <h3>Maintenance</h3>
+          <span className="card-note">
+            Nothing here touches S3 &middot; documents and schemas stay where they are
+          </span>
+        </div>
+
+        <div className="form-group">
+          <label>Reset derived data</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 20px', marginBottom: 10 }}>
+            {RESET_OPTIONS.map((o) => (
+              <label key={o.key} className="checkbox-row" style={{ minWidth: 210 }}>
+                <input
+                  type="checkbox"
+                  checked={scope[o.key]}
+                  onChange={(e) => setScopeFlag(o.key, e.target.checked)}
+                />
+                <span>
+                  {o.label}
+                  <span className="dim" style={{ display: 'block', fontSize: 11 }}>
+                    {o.rebuild}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {scope.metrics && (
+            <div className="banner banner-error">
+              <div>
+                <strong>Metric definitions cannot be rebuilt.</strong> Documents come back from S3
+                and schemas come back from Glue, so Replay restores everything else on this list. A
+                metric definition was authored in this app and has no upstream source, so deleting
+                it is permanent: the expression, grain, filters, synonyms and approval history are
+                gone, and every question that resolved through it falls back to model-generated SQL.
+                <label className="checkbox-row" style={{ marginTop: 9 }}>
+                  <input
+                    type="checkbox"
+                    checked={confirmMetricLoss}
+                    onChange={(e) => setConfirmMetricLoss(e.target.checked)}
+                  />
+                  I accept that these metric definitions are unrecoverable.
+                </label>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button
+              className="btn btn-danger"
+              disabled={busy || resetBlocked}
+              title={resetBlocked ? 'Confirm the loss of metric definitions first' : undefined}
+              onClick={doReset}
+            >
+              {running === 'reset' ? 'Resetting…' : 'Reset'}
+            </button>
+            <button
+              className="btn btn-ghost"
+              disabled={busy}
+              onClick={() =>
+                runOp(
+                  'replay',
+                  () => api.replay(tenant),
+                  (r) =>
+                    `Replay done: ${fmtNum(r.documents_ingested)} of ${fmtNum(r.documents_found)} documents rebuilt from S3` +
+                    (r.documents_failed ? `, ${fmtNum(r.documents_failed)} failed` : ''),
+                )
+              }
+            >
+              {running === 'replay' ? 'Replaying…' : 'Replay from S3'}
+            </button>
+            <button
+              className="btn btn-ghost"
+              disabled={busy}
+              onClick={() =>
+                runOp(
+                  'sample',
+                  () => api.loadSampleData(tenant),
+                  (r) =>
+                    `Loaded ${fmtNum(r.documents_loaded)} example documents, ${fmtNum(r.chunks)} passages indexed`,
+                )
+              }
+            >
+              {running === 'sample' ? 'Loading…' : 'Load sample data'}
+            </button>
+            <button
+              className="btn btn-ghost"
+              disabled={busy}
+              onClick={() =>
+                runOp(
+                  'scan',
+                  async () => {
+                    const r = await api.scanSources(tenant)
+                    return {
+                      ...r,
+                      errors: [...r.scan_errors, ...(r.graph_error ? [r.graph_error] : [])],
+                    }
+                  },
+                  (r) =>
+                    `Scanned the catalog: ${fmtNum(r.tables_found)} tables, ${fmtNum(r.assertions_live)} declared facts live`,
+                )
+              }
+            >
+              {running === 'scan' ? 'Scanning…' : 'Scan catalog'}
+            </button>
+          </div>
+          <p className="hint">
+            Replay and sample loading run inline without model extraction, so they return a report
+            rather than a spinner. A large corpus is better replayed by re-uploading.
           </p>
         </div>
       </div>

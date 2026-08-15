@@ -616,7 +616,7 @@ export default function GraphExplorer() {
                 .filter((m) => !m.walled)
                 .map((m) => (
                   <option key={m.matter_id} value={m.matter_id}>
-                    {m.matter_id} — {m.name}
+                    {m.matter_id} - {m.name}
                   </option>
                 ))}
             </select>
@@ -761,7 +761,7 @@ export default function GraphExplorer() {
           )}
         </div>
 
-        {/* Edge inspection — the provenance panel, in place. */}
+        {/* Edge inspection, the provenance panel, in place. */}
         {selectedEdge && (
           <div className="graph-inspect">
             {provError ? (

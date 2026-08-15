@@ -30,27 +30,58 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ResetScope:
+    """What a reset is allowed to remove.
+
+    Everything defaults to on except `metrics`, and that asymmetry is the point. Documents
+    come back from S3 and schemas come back from Glue, so removing them is reversible.
+    A metric definition is authored work with no upstream source: nothing can rebuild it, so
+    including it in a "rebuild from source" operation is destruction wearing a rebuild's
+    clothes.
+    """
+
+    graph: bool = True
+    vectors: bool = True
+    jobs: bool = True
+    catalog: bool = True
+    metrics: bool = False
+
+    @property
+    def destroys_unrecoverable_work(self) -> bool:
+        return self.metrics
+
+
+@dataclass
 class ResetReport:
     assertions_dropped: int = 0
     documents_forgotten: int = 0
     vectors_dropped: int = 0
     jobs_dropped: int = 0
     tables_forgotten: int = 0
+    metrics_dropped: int = 0
+    metrics_preserved: int = 0
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        rebuildable = (
+            "Every document is still in S3 and every schema is still in Glue, so Replay and "
+            "a catalog scan reconstruct what was just removed."
+        )
+        lost = (
+            f"{self.metrics_dropped} metric definitions were deleted and CANNOT be "
+            "reconstructed: they were authored here, not derived from S3 or Glue. "
+        )
         return {
             "assertions_dropped": self.assertions_dropped,
             "documents_forgotten": self.documents_forgotten,
             "vectors_dropped": self.vectors_dropped,
             "jobs_dropped": self.jobs_dropped,
             "tables_forgotten": self.tables_forgotten,
+            "metrics_dropped": self.metrics_dropped,
+            "metrics_preserved": self.metrics_preserved,
             "errors": self.errors,
             "s3_preserved": True,
-            "note": (
-                "The graph and the search index were rebuilt from empty. Every document is "
-                "still in S3, so Replay reconstructs what was just removed."
-            ),
+            "note": (lost + rebuildable) if self.metrics_dropped else rebuildable,
         }
 
 
@@ -76,13 +107,34 @@ class ReplayReport:
         }
 
 
-def reset_derived(services: Any, ctx: AuthContext) -> ResetReport:
-    """Drop everything derived for one tenant. S3 is untouched.
+def reset_derived(services: Any, ctx: AuthContext, scope: ResetScope | None = None) -> ResetReport:
+    """Drop the derived tiers for one tenant. S3 is untouched.
+
+    `scope` selects what goes. Metrics are excluded by default because they are the one thing
+    in the graph with no upstream source to rebuild from.
 
     Tenant-scoped throughout: a reset in one firm must not empty another's graph, which is
     why nothing here is a bare "delete all".
     """
+    scope = scope or ResetScope()
     report = ResetReport()
+
+    # Read the metrics before anything is dropped, so they can be restored afterwards. The
+    # graph wipe cannot distinguish a Metric node from an assertion, so preserving them means
+    # holding them in memory across the delete rather than filtering the delete itself.
+    preserved: list[Any] = []
+    _count_metrics_before_reset = _count_metrics(services, ctx) if scope.metrics else 0
+    if not scope.metrics and services.graph is not None:
+        try:
+            from src.metrics.graph_store import GraphMetricStore
+
+            store = GraphMetricStore(services.graph)
+            preserved = [
+                (m, store.status_of(ctx.tenant_id, m.metric_id) or "draft")
+                for m in store.list_metrics(ctx.tenant_id)
+            ]
+        except Exception as e:
+            report.errors.append(f"could not read metrics to preserve them: {e}")
 
     # Assertions first. Retracting one at a time would cascade through the premise graph
     # and write a retraction trail for facts that are about to cease existing, which is
@@ -102,32 +154,53 @@ def reset_derived(services: Any, ctx: AuthContext) -> ResetReport:
     except Exception as e:
         report.errors.append(f"assertions: {e}")
 
-    if services.graph is not None:
+    if scope.graph and services.graph is not None:
         try:
             # The one place outside src/graph/ that would need Cypher, so it is delegated
-            # rather than written here — see the working agreement.
+            # rather than written here, see the working agreement.
             from src.graph.schema import drop_tenant_data
 
             drop_tenant_data(services.graph, ctx.tenant_id)
         except Exception as e:
             report.errors.append(f"graph: {e}")
 
-    if services.embedder is not None:
+    # Written back after the wipe. The graph delete cannot distinguish a Metric node from an
+    # assertion, so preserving them means holding them across the delete rather than
+    # filtering it. A restored definition keeps its status, so an approved metric is still
+    # answering the moment the reset finishes.
+    if preserved and services.graph is not None:
+        try:
+            from src.metrics.graph_store import GraphMetricStore
+
+            metric_store = GraphMetricStore(services.graph)
+            for metric, metric_status in preserved:
+                metric_store.save_metric(
+                    ctx.tenant_id, metric, updated_by="reset", status=metric_status
+                )
+            report.metrics_preserved = len(preserved)
+        except Exception as e:
+            report.errors.append(f"could not restore preserved metrics: {e}")
+    elif scope.metrics:
+        report.metrics_dropped = _count_metrics_before_reset
+
+    if scope.vectors and services.embedder is not None:
         try:
             report.vectors_dropped = services.embedder.drop_tenant(ctx.tenant_id)
         except Exception as e:
             report.errors.append(f"vectors: {e}")
 
-    try:
-        report.jobs_dropped = services.job_store.drop_tenant(ctx.tenant_id)
-    except Exception as e:
-        report.errors.append(f"jobs: {e}")
+    if scope.jobs:
+        try:
+            report.jobs_dropped = services.job_store.drop_tenant(ctx.tenant_id)
+        except Exception as e:
+            report.errors.append(f"jobs: {e}")
 
-    try:
-        report.tables_forgotten = len(services.catalog.tables(ctx.tenant_id))
-        services.catalog.clear(ctx.tenant_id)
-    except Exception as e:
-        report.errors.append(f"catalog: {e}")
+    if scope.catalog:
+        try:
+            report.tables_forgotten = len(services.catalog.tables(ctx.tenant_id))
+            services.catalog.clear(ctx.tenant_id)
+        except Exception as e:
+            report.errors.append(f"catalog: {e}")
 
     logger.info(
         "reset derived data for %s: %d assertions, %d vectors, %d tables",
@@ -220,6 +293,17 @@ def replay(services: Any, ctx: AuthContext, *, run_model_extraction: bool = True
         report.documents_found,
     )
     return report
+
+
+def _count_metrics(services: Any, ctx: AuthContext) -> int:
+    if services.graph is None:
+        return 0
+    try:
+        from src.metrics.graph_store import GraphMetricStore
+
+        return len(GraphMetricStore(services.graph).list_metrics(ctx.tenant_id))
+    except Exception:
+        return 0
 
 
 def list_processed_documents(storage: Any, tenant_id: str) -> list[str]:

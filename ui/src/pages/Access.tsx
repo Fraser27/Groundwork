@@ -171,7 +171,7 @@ export default function Access() {
             <h2>Access</h2>
             <p>
               Nobody reads a matter unless someone put them on it. A screen overrides being on
-              the team, and it overrides the administrator role — a wall a senior person can read
+              the team, and it overrides the administrator role, a wall a senior person can read
               through is not a wall. Every change here is added to the record and never removed.
             </p>
           </div>
@@ -556,7 +556,7 @@ export default function Access() {
                       <span>
                         <strong>Every matter below is open to this person by role.</strong>{' '}
                         <span>
-                          Nobody staffed them onto these matters — they can read them because they
+                          Nobody staffed them onto these matters, they can read them because they
                           hold the administrator role. A screen still overrides it, so screen them
                           from anything they must not reach.
                         </span>
@@ -646,7 +646,7 @@ export default function Access() {
                   </table>
 
                   <p className="card-note" style={{ marginTop: 12 }}>
-                    “Not on the team” is not a wall — nobody decided anything, and adding them is
+                    “Not on the team” is not a wall, nobody decided anything, and adding them is
                     an ordinary staffing change. “Screened” is a decision someone recorded, with a
                     reason, and it stands until it is lifted with a reason of its own.
                   </p>
@@ -852,7 +852,7 @@ function ScreenModal({
 
         <div className="form-group">
           <label>
-            Reason — required
+            Reason, required
             <FieldHelp text="Written for whoever reads the file in a year, including the person screened. Name the conflict rather than describing the outcome: “acted for the counterparty in 2024” explains itself, “risk decision” does not." />
           </label>
           <textarea

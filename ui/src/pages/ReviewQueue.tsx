@@ -160,7 +160,7 @@ export default function ReviewQueue() {
             <h2>Review queue</h2>
             <p>
               Conclusions a language model drew from your documents. None of them can shape an answer
-              until someone here approves them — and each one shows the words it was drawn from, with
+              until someone here approves them, and each one shows the words it was drawn from, with
               the page they are on, so you are checking the source rather than trusting a summary.
             </p>
           </div>
@@ -187,7 +187,7 @@ export default function ReviewQueue() {
               .filter((m) => !m.walled)
               .map((m) => (
                 <option key={m.matter_id} value={m.matter_id}>
-                  {m.matter_id} — {m.name}
+                  {m.matter_id} - {m.name}
                 </option>
               ))}
           </select>
@@ -464,7 +464,7 @@ export default function ReviewQueue() {
               <p className="card-note" style={{ marginTop: 10 }}>
                 Quotes the system confirmed are on the page they name do not appear here, and neither
                 do records declared by a system of record. Both are checkable without judgement, so
-                they need no sign-off. What is left is the judgement calls — which is what keeps this
+                they need no sign-off. What is left is the judgement calls, which is what keeps this
                 queue clearable.
               </p>
               <div className="prov-section-title" style={{ marginTop: 14 }}>

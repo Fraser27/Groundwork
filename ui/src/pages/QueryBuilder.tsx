@@ -139,7 +139,7 @@ export default function QueryBuilder() {
                 .filter((m) => !m.walled)
                 .map((m) => (
                   <option key={m.matter_id} value={m.matter_id}>
-                    {m.matter_id} — {m.name}
+                    {m.matter_id} - {m.name}
                   </option>
                 ))}
             </select>
@@ -182,7 +182,7 @@ export default function QueryBuilder() {
           <div className="banner banner-info" style={{ marginBottom: 0 }}>
             <span>
               Reading the graph as it stood on {asOf}. Facts recorded later are excluded, and facts
-              since retracted are included — this is what the file showed on that date, not what it
+              since retracted are included, this is what the file showed on that date, not what it
               shows now.
             </span>
           </div>
@@ -227,7 +227,7 @@ export default function QueryBuilder() {
               <span>
                 <strong>Refused.</strong> {result.blocked_reason} No approved governed metric covers
                 this question, and this tenant is configured to refuse rather than fall back to
-                model-generated SQL. The question has been logged — it is a candidate for a new
+                model-generated SQL. The question has been logged, it is a candidate for a new
                 governed metric.
               </span>
             </div>

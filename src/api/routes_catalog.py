@@ -15,10 +15,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from src.admin_ops import replay, reset_derived
+from src.admin_ops import ResetScope, replay, reset_derived
 from src.api.deps import ServicesDep, TenantDep, require_admin
 from src.discovery.catalog_store import CatalogTable
 from src.discovery.glue_scanner import scan_catalog
+from src.documents.models import JobState
 from src.graph.assertions import EpistemicClass, ReviewState
 from src.ontology.loader import ONTOLOGY_DIR, load_ontology
 from src.sample_data import load_sample_data
@@ -59,6 +60,30 @@ async def dashboard(services: ServicesDep, principal: TenantDep) -> dict[str, An
     by_class = Counter(r.assertion.epistemic_class.value for r in records if r.is_current)
     by_state = Counter(r.assertion.review_state.value for r in records if r.is_current)
 
+    # Every field the UI reads has to be present, even when empty. The dashboard crashed on
+    # `Object.entries(undefined)` because these four were declared in the TypeScript
+    # interface but never sent: a type is a claim about runtime data, and the compiler cannot
+    # check it against an API response.
+    documents_by_state: dict[str, int] = {}
+    try:
+        for state in JobState:
+            found = services.job_store.jobs_in_state(ctx.tenant_id, state)
+            if found:
+                documents_by_state[state.value] = len(found)
+    except Exception as e:
+        logger.debug("could not count documents by state: %s", e)
+
+    metric_total = metric_approved = 0
+    if services.graph is not None:
+        try:
+            from src.metrics.graph_store import GraphMetricStore
+
+            store = GraphMetricStore(services.graph)
+            metric_total = len(store.list_metrics(ctx.tenant_id))
+            metric_approved = len(store.list_metrics(ctx.tenant_id, approved_only=True))
+        except Exception as e:
+            logger.debug("could not count metrics: %s", e)
+
     return {
         "tenant_id": ctx.tenant_id,
         "assertions_by_class": {c.value: by_class.get(c.value, 0) for c in EpistemicClass},
@@ -69,6 +94,10 @@ async def dashboard(services: ServicesDep, principal: TenantDep) -> dict[str, An
         "ontology_domain": settings.ontology_domain,
         "can_review": grants.can_review,
         "kill_switch_active": settings.block_ungoverned_queries,
+        "documents_by_state": documents_by_state,
+        "matters": len({r.assertion.matter_id for r in records if r.assertion.matter_id}),
+        "metrics": {"total": metric_total, "approved": metric_approved},
+        "recent_activity": [],
     }
 
 
@@ -426,17 +455,58 @@ async def load_sample_data_route(
     return report.to_dict()
 
 
-@router.post("/tenants/{tenant}/admin/reset")
-async def reset_derived_route(services: ServicesDep, principal: TenantDep) -> dict[str, Any]:
-    """Drop the graph, the vector index, job state and the catalog cache. S3 is untouched.
+class ResetRequest(BaseModel):
+    """What to remove. Every box is ticked by default except metrics."""
 
-    Safe in the sense that matters: nothing irreplaceable goes, because the documents remain
-    in S3 and Replay reconstructs what was removed. Scoped to the caller's own tenant, so a
-    reset in one firm cannot empty another's graph.
+    graph: bool = True
+    vectors: bool = True
+    jobs: bool = True
+    catalog: bool = True
+
+    metrics: bool = False
+    """Off by default, and the only option here that destroys something unrecoverable.
+    Documents come back from S3 and schemas come back from Glue; a metric definition was
+    authored in this app and has no upstream source to rebuild from."""
+
+    confirm_metric_loss: bool = False
+    """Required when `metrics` is true. A second, explicit acknowledgement, because the
+    checkbox and the consequence are not obviously connected: "reset derived data" does not
+    read like "delete work nobody can recover"."""
+
+
+@router.post("/tenants/{tenant}/admin/reset")
+async def reset_derived_route(
+    services: ServicesDep,
+    principal: TenantDep,
+    body: Annotated[ResetRequest, Body()] = ResetRequest(),
+) -> dict[str, Any]:
+    """Drop selected derived data. S3 is never touched.
+
+    Safe by default in the sense that matters: what it removes can be rebuilt, because the
+    documents remain in S3 and the schemas remain in Glue. Scoped to the caller's own tenant,
+    so a reset in one firm cannot empty another's graph.
+
+    Metrics are the exception and are excluded unless asked for twice.
     """
     require_admin(principal)
     ctx, _ = principal
-    return reset_derived(services, ctx).to_dict()
+
+    if body.metrics and not body.confirm_metric_loss:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Deleting metric definitions cannot be undone. They were authored here, not "
+            "derived from S3 or Glue, so no replay reconstructs them. Set "
+            "confirm_metric_loss to proceed.",
+        )
+
+    scope = ResetScope(
+        graph=body.graph,
+        vectors=body.vectors,
+        jobs=body.jobs,
+        catalog=body.catalog,
+        metrics=body.metrics,
+    )
+    return reset_derived(services, ctx, scope).to_dict()
 
 
 @router.post("/tenants/{tenant}/admin/replay")

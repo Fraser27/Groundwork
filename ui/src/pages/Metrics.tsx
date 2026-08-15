@@ -205,7 +205,7 @@ export default function Metrics() {
             <h2>Governed metrics</h2>
             <p>
               A metric here is a definition, not a query. When a question matches one, the SQL is
-              compiled from this definition — the same question always yields the same query, and no
+              compiled from this definition, the same question always yields the same query, and no
               language model writes any part of it. That is why the number is defensible.
             </p>
           </div>

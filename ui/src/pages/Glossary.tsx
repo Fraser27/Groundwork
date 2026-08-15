@@ -282,14 +282,14 @@ export default function Glossary() {
             Two tiers, and the difference matters. <strong>Governing</strong> relationships
             drive decisions with legal consequence, so the list is closed: a proposed fact
             using anything not on it is refused rather than recorded. That is
-            deliberate — the same idea recorded five different ways is how a conflict check
+            deliberate, the same idea recorded five different ways is how a conflict check
             comes back empty and looks like a clean report.{' '}
             <strong>Descriptive</strong> relationships are open, because a wrong subject-matter
             tag is an inconvenience rather than an exposure.
           </p>
 
           <h3 className="glossary-subhead">
-            Governing — closed list, {onto.governing_predicates.length} in the{' '}
+            Governing, closed list, {onto.governing_predicates.length} in the{' '}
             {onto.domain} vocabulary
           </h3>
           <table className="glossary-classes">
@@ -324,7 +324,7 @@ export default function Glossary() {
           </table>
 
           <h3 className="glossary-subhead">
-            Descriptive — open, {onto.descriptive_predicates.length} defined
+            Descriptive, open, {onto.descriptive_predicates.length} defined
           </h3>
           <dl className="glossary-list">
             {onto.descriptive_predicates.map((p) => (

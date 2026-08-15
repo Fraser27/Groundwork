@@ -60,7 +60,7 @@ export default function Tables() {
           <div>
             <h2>Structured sources</h2>
             <p>
-              Tables discovered in the data catalogue. Only the metadata enters the graph — rows never
+              Tables discovered in the data catalogue. Only the metadata enters the graph, rows never
               move, and are queried in place when a question needs them.
             </p>
           </div>

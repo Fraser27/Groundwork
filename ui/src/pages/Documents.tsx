@@ -218,7 +218,7 @@ export default function Documents() {
                 .filter((m) => !m.walled)
                 .map((m) => (
                   <option key={m.matter_id} value={m.matter_id}>
-                    {m.matter_id} — {m.name}
+                    {m.matter_id} - {m.name}
                   </option>
                 ))}
             </select>

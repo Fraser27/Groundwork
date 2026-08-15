@@ -234,7 +234,7 @@ export default function Matters() {
           <div>
             <h2>Matters</h2>
             <p>
-              Matters are subgraphs of one firm-wide graph, not separate graphs — conflict checking is
+              Matters are subgraphs of one firm-wide graph, not separate graphs, conflict checking is
               by definition cross-matter, and shared parties are the conflict signal.
             </p>
           </div>
@@ -322,7 +322,7 @@ export default function Matters() {
             </tr>
           </thead>
           <tbody>
-            {/* Only readable matters reach here — a screened one never enters `matters`. */}
+            {/* Only readable matters reach here, a screened one never enters `matters`. */}
             {filtered.map((m) => (
               <tr key={m.matter_id} onClick={() => setSelectedId(m.matter_id)}>
                 <td>

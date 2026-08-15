@@ -595,6 +595,54 @@ export interface DirectoryUser {
   is_platform_admin?: boolean
 }
 
+/** What a reset removes. Mirrors src/admin_ops.py :: ResetScope. */
+export interface ResetScope {
+  graph: boolean
+  vectors: boolean
+  jobs: boolean
+  catalog: boolean
+  metrics: boolean
+}
+
+export interface ResetReport {
+  assertions_dropped: number
+  documents_forgotten: number
+  vectors_dropped: number
+  jobs_dropped: number
+  tables_forgotten: number
+  metrics_dropped: number
+  metrics_preserved: number
+  errors: string[]
+  s3_preserved?: boolean
+  note: string
+}
+
+export interface ReplayReport {
+  documents_found: number
+  documents_ingested: number
+  documents_failed: number
+  tables_rescanned?: number
+  errors: string[]
+  note: string
+}
+
+export interface SampleDataReport {
+  documents_loaded: number
+  documents_skipped?: number
+  chunks: number
+  errors: string[]
+  note: string
+}
+
+export interface ScanReport {
+  source_id: string
+  tables_found: number
+  assertions_live: number
+  scan_errors: string[]
+  graph_error?: string | null
+  note: string
+}
+
 export interface TenantSettings {
   tenant_id: string
   name: string
@@ -868,6 +916,35 @@ export const api = {
     request<TenantSettings>(`/tenants/${tenant}/settings`, {
       method: 'PUT',
       body: JSON.stringify(s),
+    }),
+
+  /**
+   * Drop derived data. S3 and Glue are untouched, so everything except metrics is
+   * rebuildable by `replay` and `scanSources`. `confirm_metric_loss` is required when
+   * `metrics` is set, and the server answers 400 without it.
+   */
+  resetDerived: (tenant: string, scope: ResetScope, confirmMetricLoss = false) =>
+    request<ResetReport>(`/tenants/${tenant}/admin/reset`, {
+      method: 'POST',
+      body: JSON.stringify({ ...scope, confirm_metric_loss: confirmMetricLoss }),
+    }),
+
+  replay: (tenant: string, runModelExtraction = false) =>
+    request<ReplayReport>(
+      `/tenants/${tenant}/admin/replay${q({ run_model_extraction: runModelExtraction })}`,
+      { method: 'POST' },
+    ),
+
+  loadSampleData: (tenant: string, runModelExtraction = false) =>
+    request<SampleDataReport>(
+      `/tenants/${tenant}/admin/sample-data${q({ run_model_extraction: runModelExtraction })}`,
+      { method: 'POST' },
+    ),
+
+  scanSources: (tenant: string) =>
+    request<ScanReport>(`/tenants/${tenant}/sources/scan`, {
+      method: 'POST',
+      body: JSON.stringify({}),
     }),
 
   listAccessUsers: (tenant: string) => request<DirectoryUser[]>(`/tenants/${tenant}/access/users`),

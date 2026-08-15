@@ -90,7 +90,7 @@ export default function Provenance() {
             <h2>Audit</h2>
             <p>
               Every fact the graph has ever held, including the ones since withdrawn. Facts are never
-              edited or deleted — a correction supersedes rather than overwrites, so the record of what
+              edited or deleted, a correction supersedes rather than overwrites, so the record of what
               was believed and when stays intact.
             </p>
           </div>

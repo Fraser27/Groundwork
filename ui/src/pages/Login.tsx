@@ -20,22 +20,22 @@ export default function Login() {
 
         <div className="login-points">
           <div className="login-point">
-            <span className="login-point-mark">—</span>
+            <span className="login-point-mark">-</span>
             <span>
               Every claim records how it was reached: declared by a system of record, quoted from a
               document and checked, read into a document by a model, or inferred by a rule.
             </span>
           </div>
           <div className="login-point">
-            <span className="login-point-mark">—</span>
+            <span className="login-point-mark">-</span>
             <span>
               Anything a model claimed waits for a human to approve it before it can shape an answer.
             </span>
           </div>
           <div className="login-point">
-            <span className="login-point-mark">—</span>
+            <span className="login-point-mark">-</span>
             <span>
-              Ask why, and you get the file, the page and the exact words — or the chain of
+              Ask why, and you get the file, the page and the exact words, or the chain of
               reasoning.
             </span>
           </div>
