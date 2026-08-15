@@ -225,12 +225,18 @@ export class AppStack extends cdk.Stack {
               // No aoss:DeleteIndex. Dropping the index is a rebuild-from-S3
               // operation an operator performs deliberately, not something the
               // request-serving role should be able to do by accident.
+              //
+              // DeleteDocument *is* needed: re-ingesting a document clears its old
+              // chunks first, and a tenant reset deletes by query rather than
+              // dropping the index so the mapping survives. Without it both 403 at
+              // the moment somebody rebuilds, which is the worst time to find out.
               Permission: [
                 'aoss:CreateIndex',
                 'aoss:DescribeIndex',
                 'aoss:UpdateIndex',
                 'aoss:ReadDocument',
                 'aoss:WriteDocument',
+                'aoss:DeleteDocument',
               ],
             },
           ],
