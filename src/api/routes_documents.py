@@ -551,7 +551,7 @@ async def list_documents(
     documents = [
         _document_summary(
             job,
-            meta=storage.describe(job.document_id) if storage else None,
+            meta=storage.describe(job.document_id, tenant_id=ctx.tenant_id) if storage else None,
             assertion_count=counts.get(job.document_id, (0, 0))[0],
             pending_review_count=counts.get(job.document_id, (0, 0))[1],
         )
@@ -598,7 +598,7 @@ async def get_document(
         _assert_matter(ctx, latest.matter_id)
 
     storage = storage_from_config(services.config)
-    meta = storage.describe(document_id) if storage else None
+    meta = storage.describe(document_id, tenant_id=ctx.tenant_id) if storage else None
 
     assertions = [
         r.assertion
@@ -818,7 +818,7 @@ async def download_document(
             "no document store configured (DOCUMENT_BUCKET unset)",
         )
 
-    doc = storage.describe(document_id)
+    doc = storage.describe(document_id, tenant_id=ctx.tenant_id)
     if doc is None or doc.tenant_id != ctx.tenant_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no document {document_id!r}")
 

@@ -81,3 +81,25 @@ def parse_raw_key(key: str) -> tuple[str, str, str] | None:
     if filename != safe_filename(filename):
         return None
     return tenant_id, upload_id, filename
+
+
+def parse_document_key(key: str) -> tuple[str, str, str] | None:
+    """Recover (tenant_id, content_sha256, filename) from a processed key, or None.
+
+    The counterpart to `document_key`. It exists because the key is the only durable record
+    of where a document lives: `document_id` is a hash of tenant and content, so it cannot be
+    reversed, but it *can* be recomputed from what this returns.
+    """
+    if not key.startswith(PROCESSED_PREFIX):
+        return None
+    parts = key[len(PROCESSED_PREFIX) :].split("/")
+    if len(parts) != 3 or not all(parts):
+        return None
+    tenant_id, content_sha256, filename = parts
+    # Same reasoning as parse_raw_key: the prefix is the tenant boundary IAM relies on, so a
+    # traversal segment would be a cross-tenant read. Reject rather than sanitise.
+    if tenant_id != safe_filename(tenant_id) or content_sha256 != safe_filename(content_sha256):
+        return None
+    if filename != safe_filename(filename):
+        return None
+    return tenant_id, content_sha256, filename

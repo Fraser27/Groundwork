@@ -32,7 +32,14 @@ from typing import Any, Protocol
 
 from src.config import LexGraphConfig
 from src.documents.ingest import guess_media_type
-from src.documents.keys import document_key, parse_raw_key, raw_key, safe_filename
+from src.documents.keys import (
+    PROCESSED_PREFIX,
+    document_key,
+    parse_document_key,
+    parse_raw_key,
+    raw_key,
+    safe_filename,
+)
 from src.documents.models import DocumentMeta, sha256_hex
 from src.graph.scope import AuthContext, ScopeViolation
 
@@ -69,9 +76,12 @@ class S3Like(Protocol):
 class DocumentIndex(Protocol):
     """Resolves a document id to its S3 location.
 
-    A seam, not a design — `IngestStore` already satisfies it and DynamoDB will. It
-    exists because `document_id` is a one-way hash of tenant and content, so the key
-    cannot be recomputed from the id alone and something has to remember it.
+    A cache, not a system of record. `document_id` is a one-way hash of tenant and content
+    so it cannot be reversed, but the key contains both halves, which means a miss is
+    recoverable by listing the tenant's prefix rather than fatal. `describe` does that.
+
+    The default implementation is per-process, which is why the fallback matters: without it
+    every deploy made previously uploaded documents report as "no longer in storage".
     """
 
     def put_document(self, doc: DocumentMeta) -> None: ...
@@ -240,9 +250,65 @@ class DocumentStorage:
         logger.info("stored %s as %s", doc.key, doc.document_id)
         return doc
 
-    def describe(self, document_id: str) -> DocumentMeta | None:
-        """Where a document lives. Callers use this to authorise *before* presigning."""
-        return self.index.get_document(document_id)
+    def describe(self, document_id: str, *, tenant_id: str = "") -> DocumentMeta | None:
+        """Where a document lives. Callers use this to authorise *before* presigning.
+
+        Falls back to S3 on a miss, because the default index is per-process: a document
+        uploaded before the last deploy was reported as "no longer in storage" while its
+        bytes sat in the bucket untouched. S3 is the source of truth, so the index is a
+        cache, and a cache miss must not read as absence.
+
+        The lookup works without any stored mapping because `processed/{tenant}/{sha}/{name}`
+        already contains everything: `document_id` is `sha256(tenant:content_sha)`, so listing
+        a tenant's prefix and recomputing the id finds the object. Scoped to one tenant's
+        prefix, so a miss cannot walk into another firm's documents.
+        """
+        found = self.index.get_document(document_id)
+        if found is not None or not tenant_id:
+            return found
+        return self._find_in_bucket(document_id, tenant_id)
+
+    def _find_in_bucket(self, document_id: str, tenant_id: str) -> DocumentMeta | None:
+        prefix = f"{PROCESSED_PREFIX}{tenant_id}/"
+        token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": self.bucket, "Prefix": prefix}
+            if token:
+                kwargs["ContinuationToken"] = token
+            try:
+                page = self.s3.list_objects_v2(**kwargs)
+            except Exception as e:
+                logger.warning("could not list %s while resolving %s: %s", prefix, document_id, e)
+                return None
+
+            for obj in page.get("Contents", []):
+                key = str(obj.get("Key", ""))
+                parsed = parse_document_key(key)
+                if parsed is None:
+                    continue
+                key_tenant, content_sha256, filename = parsed
+                if f"doc-{sha256_hex(f'{key_tenant}:{content_sha256}')[:24]}" != document_id:
+                    continue
+                meta = DocumentMeta(
+                    tenant_id=key_tenant,
+                    bucket=self.bucket,
+                    key=key,
+                    filename=filename,
+                    media_type=guess_media_type(filename),
+                    content_sha256=content_sha256,
+                    byte_size=int(obj.get("Size", 0) or 0),
+                    # Not recoverable from the key. Left empty rather than guessed: an
+                    # invented uploader on an audit surface is worse than a blank one.
+                    uploaded_by="",
+                )
+                # Repopulate, so a burst of page requests costs one listing.
+                self.index.put_document(meta)
+                logger.info("resolved %s from the bucket after an index miss", document_id)
+                return meta
+
+            token = page.get("NextContinuationToken")
+            if not token:
+                return None
 
     def presign_upload(
         self,

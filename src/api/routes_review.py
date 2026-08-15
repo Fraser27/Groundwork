@@ -227,7 +227,7 @@ def _document_provenance(
         )
         return out
 
-    doc = storage.describe(loc.document_id)
+    doc = storage.describe(loc.document_id, tenant_id=ctx.tenant_id)
     if doc is None:
         out.link_unavailable = (
             "the source file is not in the document store; it may have been ingested as "

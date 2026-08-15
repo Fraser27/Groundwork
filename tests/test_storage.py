@@ -42,6 +42,7 @@ class FakeS3:
         self.puts: list[dict[str, Any]] = []
         self.deletes: list[dict[str, Any]] = []
         self.presigns: list[dict[str, Any]] = []
+        self.lists: list[dict[str, Any]] = []
 
     def put_object(self, **kwargs: Any) -> dict[str, Any]:
         self.puts.append(kwargs)
@@ -63,6 +64,12 @@ class FakeS3:
         self.presigns.append({"ClientMethod": ClientMethod, **kwargs})
         key = kwargs["Params"]["Key"]
         return f"https://{BUCKET}.s3.amazonaws.com/{key}?X-Amz-Signature=deadbeef"
+
+    def list_objects_v2(self, **kwargs: Any) -> dict[str, Any]:
+        self.lists.append(kwargs)
+        prefix = kwargs.get("Prefix", "")
+        keys = sorted(k for k in self.existing if k.startswith(prefix))
+        return {"Contents": [{"Key": k, "Size": len(PDF)} for k in keys]}
 
 
 @pytest.fixture
@@ -343,3 +350,54 @@ class TestTheSigningVersion:
         assert ticket.fields["x-amz-algorithm"] == "AWS4-HMAC-SHA256"
         assert "x-amz-credential" in ticket.fields
         assert "AWSAccessKeyId" not in ticket.fields
+
+
+class TestAnIndexMissFallsBackToTheBucket:
+    """The index is per-process, so a deploy empties it while S3 keeps every byte.
+
+    Before this, a document uploaded before the last deploy reported "The file is no longer
+    in storage" in the UI, with the object sitting untouched in the bucket. S3 is the source
+    of truth, so a cache miss must not read as absence.
+    """
+
+    def test_a_document_missing_from_the_index_is_found_in_s3(self, s3, ctx):
+        writer = DocumentStorage(BUCKET, s3=s3)
+        doc = writer.put_document(ctx, filename="motion.pdf", body=PDF)
+
+        # A fresh process: same bucket, same objects, empty index.
+        restarted = DocumentStorage(BUCKET, s3=s3)
+        assert restarted.describe(doc.document_id) is None
+
+        found = restarted.describe(doc.document_id, tenant_id=TENANT)
+        assert found is not None
+        assert found.document_id == doc.document_id
+        assert found.key == doc.key
+        assert found.filename == "motion.pdf"
+
+    def test_the_listing_is_scoped_to_one_tenant(self, s3, ctx):
+        """A miss must not walk another firm's prefix, whatever id is passed."""
+        restarted = DocumentStorage(BUCKET, s3=s3)
+        restarted.describe("doc-whatever", tenant_id=TENANT)
+        assert all(c["Prefix"] == f"processed/{TENANT}/" for c in s3.lists)
+
+    def test_the_result_is_cached_so_a_burst_costs_one_listing(self, s3, ctx):
+        writer = DocumentStorage(BUCKET, s3=s3)
+        doc = writer.put_document(ctx, filename="motion.pdf", body=PDF)
+
+        restarted = DocumentStorage(BUCKET, s3=s3)
+        restarted.describe(doc.document_id, tenant_id=TENANT)
+        before = len(s3.lists)
+        restarted.describe(doc.document_id, tenant_id=TENANT)
+        assert len(s3.lists) == before
+
+    def test_an_unknown_document_is_still_absent(self, s3):
+        """The fallback must not invent a document. A wrong id stays a miss."""
+        restarted = DocumentStorage(BUCKET, s3=s3)
+        assert restarted.describe("doc-nonexistent", tenant_id=TENANT) is None
+
+    def test_no_tenant_means_no_listing(self, s3):
+        """Callers that cannot name a tenant get the old behaviour rather than a scan of
+        the bucket."""
+        restarted = DocumentStorage(BUCKET, s3=s3)
+        assert restarted.describe("doc-x") is None
+        assert s3.lists == []
