@@ -68,6 +68,19 @@ async def run_query(
             execute=body.execute,
         )
     except QueryBlocked as e:
+        # Recorded before raising. The resolver keeps its own list, but a resolver is built per
+        # request and discarded, so that list died with it and the Governance screen could only
+        # ever show an empty backlog. A refusal is the signal the kill switch exists to produce.
+        for entry in resolver.blocked:
+            services.record_blocked(
+                ctx.tenant_id,
+                {
+                    "question": entry.question,
+                    "user_id": entry.user_id,
+                    "reason": entry.reason,
+                    "at": entry.at,
+                },
+            )
         # 403, not 400: the request was well-formed and deliberately refused.
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from e
 

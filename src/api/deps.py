@@ -26,6 +26,7 @@ from src.documents.parse import VisionParser
 from src.documents.review import InMemoryAssertionStore, ReviewQueue
 from src.documents.runner import IngestLimiter
 from src.governance import GovernanceSettings
+from src.governance_store import GovernanceStore, InMemoryGovernanceStore
 from src.graph.scope import AuthContext, ScopeViolation
 from src.metrics.loader import load_metrics
 from src.metrics.models import StaticCatalog
@@ -40,6 +41,10 @@ from src.user_admin import UserAdmin
 logger = logging.getLogger(__name__)
 
 #: Example metrics for a fictional firm, used only to seed a demo. The real store is the
+#: How many refused questions to keep per tenant. Enough to see a pattern worth writing a
+#: metric for, bounded so a firm asking thousands cannot exhaust the task's memory.
+MAX_BLOCKED_PER_TENANT = 200
+
 #: graph, so this is not a configuration point and there is deliberately no env var for it.
 EXAMPLE_METRICS_PATH = FsPath(__file__).resolve().parents[2] / "sample" / "metrics.yaml"
 
@@ -57,7 +62,24 @@ class Services:
     resolves through, so a screen raised over the API bites the next request."""
 
     governance: dict[str, GovernanceSettings] = field(default_factory=dict)
-    """Per-tenant overrides. Absent means env defaults."""
+    """Per-request cache in front of `governance_store`. Absent means read it."""
+
+    governance_store: Any | None = None
+    """Where settings live. DynamoDB when a tenant table is configured, memory otherwise.
+    Without this an Admin change was lost on the next deploy, which for the ungoverned-query
+    kill switch means a firm believing questions are refused while they are being answered."""
+
+    blocked_queries: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    """Refused questions per tenant, newest last.
+
+    Here rather than on the `Resolver` because a resolver is built per request and thrown away,
+    so its record of refusals died with it and the admin surface could only ever show an empty
+    list. A refusal is the signal the kill switch exists to produce: a question people keep
+    asking is a governed metric waiting to be written.
+
+    In process and capped, deliberately. This is a backlog to read, not an audit record -- the
+    audit trail is the log line -- so losing it on a deploy costs a hint rather than evidence,
+    and a firm that asks ten thousand refused questions must not exhaust the task's memory."""
 
     graph: object | None = None
     """None when no graph is reachable. Routes that need it return 503 rather than
@@ -99,8 +121,31 @@ class Services:
 
     def settings_for(self, tenant_id: str) -> GovernanceSettings:
         if tenant_id not in self.governance:
-            self.governance[tenant_id] = GovernanceSettings.from_env()
+            store = self.governance_store
+            self.governance[tenant_id] = (
+                store.get(tenant_id) if store is not None else GovernanceSettings.from_env()
+            )
         return self.governance[tenant_id]
+
+    def record_blocked(self, tenant_id: str, entry: dict[str, Any]) -> None:
+        """Remember a refusal for the Governance screen."""
+        log = self.blocked_queries.setdefault(tenant_id, [])
+        log.append(entry)
+        if len(log) > MAX_BLOCKED_PER_TENANT:
+            # Oldest first: a recent refusal is the one an administrator can still act on.
+            del log[: len(log) - MAX_BLOCKED_PER_TENANT]
+
+    def save_settings(self, tenant_id: str, settings: GovernanceSettings) -> GovernanceSettings:
+        """Persist a governance change and refresh the in-process copy.
+
+        Both, in that order: writing without updating the cache would leave this task serving
+        the old settings for the cache's lifetime, so an administrator would toggle something
+        and watch it appear not to apply.
+        """
+        if self.governance_store is not None:
+            settings = self.governance_store.put(tenant_id, settings)
+        self.governance[tenant_id] = settings
+        return settings
 
     def build_resolver(self, tenant_id: str = "") -> Resolver:
         """A resolver wired to whatever is actually available.
@@ -242,6 +287,19 @@ def _build_job_store(cfg: LexGraphConfig) -> InMemoryJobStore | DynamoJobStore:
     return DynamoJobStore(cfg.tables.jobs)
 
 
+def _build_governance_store(cfg: LexGraphConfig) -> object:
+    """DynamoDB when a tenant table is configured, memory otherwise.
+
+    Shares the tenant table rather than adding one: settings are a single small item per tenant
+    read by key, which is what that table already is.
+    """
+    if not cfg.tables.tenants:
+        logger.info("governance settings held in process (no tenant table configured)")
+        return InMemoryGovernanceStore()
+    logger.info("governance settings backed by DynamoDB table %s", cfg.tables.tenants)
+    return GovernanceStore(cfg.tables.tenants)
+
+
 def _build_vector_store(cfg: LexGraphConfig) -> object:
     """OpenSearch when an endpoint is configured, memory otherwise.
 
@@ -278,6 +336,8 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
     # newly invited user can sign in without waiting for a cache in a second copy.
     tenants = _build_tenant_directory(cfg)
 
+    governance_store = _build_governance_store(cfg)
+
     embedder: Embedder | None = None
     if cfg.vector.enabled:
         # Only constructed when an endpoint is configured; Bedrock is reached lazily
@@ -300,6 +360,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
         job_store=_build_job_store(cfg),
         ingest_limiter=IngestLimiter(cfg.documents.max_concurrent_ingests),
         tenant_directory=tenants,
+        governance_store=governance_store,
         user_admin=(
             UserAdmin(cfg.auth.user_pool_id, region=cfg.auth.region)
             if cfg.auth.user_pool_id
