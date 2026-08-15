@@ -7,6 +7,12 @@ dependencies = [
     "fastapi>=0.115.0",
     "mangum>=0.19.0",
     "uvicorn>=0.34.0",
+    # Separate from uvicorn on purpose. Without a WebSocket protocol library uvicorn cannot
+    # honour an Upgrade request and answers 404, which is what the live ingest endpoint did
+    # in production while passing locally -- TestClient speaks ASGI directly and needs none.
+    # Not `uvicorn[websockets]`: that extra was removed in uvicorn 0.52, so it resolves to
+    # nothing and installs no protocol library at all.
+    "websockets>=13.0",
     "neo4j>=5.25.0",
     "boto3>=1.35.0",
     "sqlglot>=26.0",
