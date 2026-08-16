@@ -465,3 +465,115 @@ class TestListingGlueDatabasesBeforeScanning:
         out = list_databases(Broken())
         assert out["databases"] == []
         assert out["errors"]
+
+
+class TestRelinkingMovesTheEmbeddingsToo:
+    """The wall held for the graph and leaked through vector search.
+
+    A chunk with no `matter_id` is deliberately tenant-wide -- `search()` admits it under any
+    allowlist, mirroring `edge_scope`'s `matter_id IS NULL OR matter_id IN allowlist`. That is
+    correct on its own, and it was `link_documents` that made it a leak: relinking updated the
+    graph assertions and left the chunks carrying their old label, so a document moved into a
+    matter somebody is screened from stayed retrievable by them. Verified in production, where a
+    chunk of the Halveston note sat at `matter_id: None` after its 28 facts had moved.
+
+    The graph half being scoped is what makes this the dangerous shape of the bug: a conflict check
+    reads clean while retrieval still returns the text.
+    """
+
+    def _services(self, graph_ids, vector_store):
+        from src.documents.embed import Embedder
+        from src.graph import matter_queries as q
+
+        class FakeGraph:
+            def query(self, cypher, params=None):
+                if cypher is q.GET_MATTER:
+                    return [{"m": {"matter_id": NTL, "name": "Northwind"}}]
+                if cypher is q.RELINK_DOCUMENT_ASSERTIONS:
+                    return [{"assertion_ids": list(graph_ids)}]
+                raise AssertionError(f"unexpected query: {cypher}")
+
+        class Queue:
+            def visible(self, ctx):
+                return []
+
+        class Services:
+            review_queue = Queue()
+            graph_audit = InMemoryGraphAudit()
+
+        s = Services()
+        s.graph = FakeGraph()
+        s.embedder = Embedder(vector_store, model_id="test-model")
+        return s
+
+    def _chunk(self, document_id: str, matter_id: str | None, vector_id: str = "c1"):
+        from src.documents.embed import VectorRecord
+
+        return VectorRecord(
+            vector_id=vector_id,
+            tenant_id=TENANT,
+            document_id=document_id,
+            page=1,
+            char_start=0,
+            char_end=10,
+            text="Calder Shipping AG has appeared as a counterparty",
+            embedding=(0.1, 0.2),
+            model_id="test-model",
+            matter_id=matter_id,
+        )
+
+    def test_an_unfiled_chunk_is_filed_by_the_link(self, ctx):
+        """The production state exactly: facts moved, chunk left at None."""
+        from src.documents.embed import InMemoryVectorStore, index_name
+
+        store = InMemoryVectorStore()
+        index = index_name(ctx)
+        store.upsert(index, [self._chunk("doc-a", None)])
+
+        report = link_documents(self._services(["a-1"], store), ctx, NTL, ["doc-a"])
+
+        assert report.chunks_refiled == 1
+        assert store._indexes[index]["c1"].matter_id == NTL
+
+    def test_a_screened_reader_stops_seeing_the_moved_chunk(self, ctx):
+        """The consequence, stated as a read rather than a field. Before the fix this search
+        returned the chunk, because a null matter clears every allowlist."""
+        from src.documents.embed import InMemoryVectorStore, index_name
+
+        store = InMemoryVectorStore()
+        index = index_name(ctx)
+        store.upsert(index, [self._chunk("doc-a", None)])
+
+        # Somebody staffed on another matter only. The chunk is unfiled, so they can read it.
+        before = store.search(index, [0.1, 0.2], top_k=5, matter_allowlist=frozenset({"OTHER-1"}))
+        assert len(before) == 1, "an unfiled chunk is tenant-wide, which is the leak"
+
+        link_documents(self._services(["a-1"], store), ctx, NTL, ["doc-a"])
+
+        after = store.search(index, [0.1, 0.2], top_k=5, matter_allowlist=frozenset({"OTHER-1"}))
+        assert after == [], "once filed under NTL it is out of reach of an OTHER-1 allowlist"
+
+    def test_chunks_of_other_documents_are_left_alone(self, ctx):
+        from src.documents.embed import InMemoryVectorStore, index_name
+
+        store = InMemoryVectorStore()
+        index = index_name(ctx)
+        store.upsert(index, [self._chunk("doc-a", None), self._chunk("doc-b", MBC, "c2")])
+
+        link_documents(self._services(["a-1"], store), ctx, NTL, ["doc-a"])
+
+        assert store._indexes[index]["c2"].matter_id == MBC
+
+    def test_a_vector_failure_is_reported_not_raised(self, ctx):
+        """The facts have already moved by then. Failing the call would leave the two halves
+        inconsistent with no record of why, so it is reported loudly instead."""
+        from src.documents.embed import InMemoryVectorStore
+
+        class Broken(InMemoryVectorStore):
+            def relabel_matter(self, index, document_id, matter_id):
+                raise RuntimeError("collection unreachable")
+
+        report = link_documents(self._services(["a-1"], Broken()), ctx, NTL, ["doc-a"])
+
+        assert report.assertions_relinked == 1
+        assert any("vector chunks did not" in e for e in report.errors)

@@ -331,6 +331,66 @@ class OpenSearchVectorStore:
         """
         return self._delete_by(index, {"term": {"tenant_id": tenant_id}})
 
+    def relabel_matter(self, index: str, document_id: str, matter_id: str | None) -> int:
+        """Re-file a document's chunks under a different matter.
+
+        Filing is an access change, not bookkeeping. A chunk with no `matter_id` is deliberately
+        tenant-wide -- `search()` admits it under any allowlist, mirroring `edge_scope` -- so a
+        document relinked in the graph while its chunks kept the old label stayed retrievable by
+        someone screened from the matter it had moved into. The graph half was scoped and the
+        retrieval half was not, which is the worse of the two halves to get wrong.
+
+        `_update_by_query` is unavailable on Serverless for the same reason as
+        `_delete_by_query`, so this is search-then-bulk. Partial updates, so the 1024-float
+        embedding is never re-sent.
+        """
+        client = self._os()
+        moved = 0
+        while True:
+            try:
+                found = client.search(
+                    index=index,
+                    body={
+                        "query": {
+                            "bool": {
+                                "must": [{"term": {"document_id": document_id}}],
+                                # Already-correct chunks are skipped rather than rewritten, so a
+                                # re-run costs nothing and the loop cannot spin on its own writes.
+                                "must_not": [
+                                    {"term": {"matter_id": matter_id}}
+                                    if matter_id is not None
+                                    else {"bool": {"must_not": {"exists": {"field": "matter_id"}}}}
+                                ],
+                            }
+                        },
+                        "size": DELETE_PAGE_SIZE,
+                        "_source": False,
+                    },
+                )
+            except Exception as e:
+                if "index_not_found" in str(e):
+                    return moved
+                raise VectorStoreError(f"could not find chunks to re-file in {index}: {e}") from e
+
+            ids = [hit["_id"] for hit in found.get("hits", {}).get("hits", [])]
+            if not ids:
+                return moved
+
+            actions: list[dict[str, Any]] = []
+            for doc_id in ids:
+                actions.append({"update": {"_index": index, "_id": doc_id}})
+                actions.append({"doc": {"matter_id": matter_id}})
+            try:
+                client.bulk(body=actions)
+            except Exception as e:
+                raise VectorStoreError(
+                    f"could not re-file {len(ids)} vectors in {index}: {e}"
+                ) from e
+            moved += len(ids)
+
+            if len(ids) < DELETE_PAGE_SIZE:
+                return moved
+
     def _delete_by(self, index: str, query: dict[str, Any]) -> int:
         """Search for matching ids, then bulk-delete them.
 

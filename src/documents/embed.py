@@ -20,7 +20,7 @@ import json
 import logging
 import math
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from src.documents.models import Chunk
@@ -94,6 +94,7 @@ class VectorStore(Protocol):
     ) -> list[SearchHit]: ...
     def delete_document(self, index: str, document_id: str) -> int: ...
     def delete_tenant(self, index: str, tenant_id: str) -> int: ...
+    def relabel_matter(self, index: str, document_id: str, matter_id: str | None) -> int: ...
 
 
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
@@ -148,6 +149,15 @@ class InMemoryVectorStore:
         for vid in doomed:
             del bucket[vid]
         return len(doomed)
+
+    def relabel_matter(self, index: str, document_id: str, matter_id: str | None) -> int:
+        bucket = self._indexes.get(index, {})
+        moved = 0
+        for vid, record in list(bucket.items()):
+            if record.document_id == document_id and record.matter_id != matter_id:
+                bucket[vid] = replace(record, matter_id=matter_id)
+                moved += 1
+        return moved
 
     def count(self, index: str) -> int:
         return len(self._indexes.get(index, {}))

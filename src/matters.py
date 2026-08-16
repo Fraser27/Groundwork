@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from src.documents.embed import index_name
 from src.graph import matter_queries as q
 from src.graph.scope import AuthContext
 
@@ -64,6 +65,9 @@ class LinkReport:
     matter_id: str
     documents: tuple[str, ...] = ()
     assertion_ids: tuple[str, ...] = ()
+    chunks_refiled: int = 0
+    """Embeddings moved with the facts. Counted separately because they are a different store and
+    can fail independently -- and a chunk left behind is a retrieval leak, not a stale number."""
     previous_matters: dict[str, str | None] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     at: str = field(default_factory=_now)
@@ -80,6 +84,7 @@ class LinkReport:
             "documents": list(self.documents),
             "assertions_relinked": self.assertions_relinked,
             "assertion_ids": list(self.assertion_ids),
+            "chunks_refiled": self.chunks_refiled,
             "previous_matters": dict(self.previous_matters),
             "errors": self.errors,
             "at": self.at,
@@ -217,6 +222,8 @@ def link_documents(
             # move the rest and say which one did not.
             report.errors.append(f"{document_id}: {e}")
 
+        report.chunks_refiled += _refile_chunks(services, ctx, document_id, matter_id, report)
+
     _audit_link(services, ctx, report, reason)
     logger.info(
         "%s linked %d documents to %s, %d assertions relinked",
@@ -226,6 +233,41 @@ def link_documents(
         report.assertions_relinked,
     )
     return report
+
+
+def _refile_chunks(
+    services: Any, ctx: AuthContext, document_id: str, matter_id: str, report: LinkReport
+) -> int:
+    """Move the document's embeddings to the new matter as well as its facts.
+
+    Without this the graph half was scoped and the retrieval half was not. A chunk carrying no
+    matter is deliberately tenant-wide, so a document relinked in the graph stayed *searchable* by
+    someone screened from the matter it had moved into -- the wall held for the graph and leaked
+    through vector search.
+
+    An error is reported rather than raised: the facts have already moved, and failing the whole
+    call would leave the two halves inconsistent with no record of why. It is loud because the
+    residue is a read path that is wrong.
+    """
+    embedder = getattr(services, "embedder", None)
+    if embedder is None:
+        return 0
+
+    store = getattr(embedder, "store", None)
+    relabel = getattr(store, "relabel_matter", None)
+    if relabel is None:
+        report.errors.append(
+            f"{document_id}: vector chunks were not re-filed, so they may still be retrievable "
+            "under the previous matter"
+        )
+        return 0
+
+    try:
+        return int(relabel(index_name(ctx), document_id, matter_id))
+    except Exception as e:
+        report.errors.append(f"{document_id}: facts moved but vector chunks did not: {e}")
+        logger.error("chunk re-file failed for %s into %s: %s", document_id, matter_id, e)
+        return 0
 
 
 def _current_matter(services: Any, ctx: AuthContext, document_id: str) -> str | None:
