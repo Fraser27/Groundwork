@@ -299,3 +299,83 @@ class TestTheUploadRequiresARealMatter:
             json={"filename": "a.pdf", "matter_id": NTL},
         )
         assert res.status_code == 200
+
+
+class TestListingGlueDatabasesBeforeScanning:
+    """Choosing what to govern, rather than reading whatever AWS permits.
+
+    Scanning used to take every database the task role could see. A firm's catalog holds other
+    teams' data, so that made the Tables page unusable and the graph misleading: a governed layer
+    is supposed to hold what somebody chose to govern, and "everything I have permission to read"
+    is not a choice.
+    """
+
+    def test_it_lists_names_with_table_counts(self):
+        """Names alone cannot answer "which of these do I want", and an empty database is almost
+        always the wrong pick."""
+        from src.discovery.glue_scanner import list_databases
+
+        class FakePaginator:
+            def __init__(self, pages):
+                self.pages = pages
+
+            def paginate(self, **kw):
+                if "DatabaseName" in kw:
+                    return self.pages.get(kw["DatabaseName"], [{"TableList": []}])
+                return self.pages["__dbs__"]
+
+        class FakeGlue:
+            def get_paginator(self, op):
+                return FakePaginator(
+                    {
+                        "__dbs__": [{"DatabaseList": [{"Name": "aemo"}, {"Name": "other_team"}]}],
+                        "aemo": [{"TableList": [{"Name": "t1"}, {"Name": "t2"}]}],
+                        "other_team": [{"TableList": []}],
+                    }
+                )
+
+        out = list_databases(FakeGlue())
+        assert [d["name"] for d in out["databases"]] == ["aemo", "other_team"]
+        assert out["databases"][0]["table_count"] == 2
+        assert out["databases"][1]["table_count"] == 0
+
+    def test_one_unreadable_database_does_not_hide_the_rest(self):
+        """A permission gap on one database is a normal state in a shared catalog, so a partial
+        list somebody can act on beats an error page."""
+        from src.discovery.glue_scanner import list_databases
+
+        class Paginator:
+            def __init__(self, name):
+                self.name = name
+
+            def paginate(self, **kw):
+                if kw.get("DatabaseName") == "forbidden":
+                    raise RuntimeError("AccessDeniedException")
+                if "DatabaseName" in kw:
+                    return [{"TableList": [{"Name": "t1"}]}]
+                return [{"DatabaseList": [{"Name": "aemo"}, {"Name": "forbidden"}]}]
+
+        class FakeGlue:
+            def get_paginator(self, op):
+                return Paginator(op)
+
+        out = list_databases(FakeGlue())
+        assert len(out["databases"]) == 2
+        forbidden = next(d for d in out["databases"] if d["name"] == "forbidden")
+        assert forbidden["table_count"] is None
+        assert "AccessDenied" in forbidden["error"]
+
+    def test_a_catalog_that_cannot_be_listed_reports_why(self):
+        from src.discovery.glue_scanner import list_databases
+
+        class Broken:
+            def get_paginator(self, op):
+                class P:
+                    def paginate(self, **kw):
+                        raise RuntimeError("no such region")
+
+                return P()
+
+        out = list_databases(Broken())
+        assert out["databases"] == []
+        assert out["errors"]

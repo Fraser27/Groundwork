@@ -145,9 +145,41 @@ def _list_databases(glue_client) -> tuple[list[str], list[str]]:
     return names, []
 
 
-def _scan_database(
-    glue_client, database: str, *, tenant_id: str, source_id: str
-) -> ScanResult:
+def list_databases(glue_client, *, include_table_counts: bool = True) -> dict[str, Any]:
+    """What is in the catalog, without reading any of it into the graph.
+
+    Separate from `scan_catalog` because they answer different questions. Scanning declares tables
+    into the graph as facts; this only says what is available, so an administrator can choose. A
+    tenant's catalog usually holds databases belonging to other teams, and pulling those in makes
+    the Tables page unusable and the graph misleading -- the whole point of a governed layer is
+    that it holds what somebody chose to govern.
+
+    Table counts are included because "which of these do I want" is impossible to answer from
+    names alone, and an empty database is almost always the wrong choice. Best-effort per database:
+    one unreadable database must not hide the rest, since a partial list a user can act on beats an
+    error page.
+    """
+    names, errors = _list_databases(glue_client)
+    databases: list[dict[str, Any]] = []
+
+    for name in sorted(names):
+        entry: dict[str, Any] = {"name": name, "table_count": None}
+        if include_table_counts:
+            try:
+                tables = 0
+                for page in glue_client.get_paginator("get_tables").paginate(DatabaseName=name):
+                    tables += len(page.get("TableList", []))
+                entry["table_count"] = tables
+            except Exception as e:
+                # Recorded against the database rather than raised: a permission gap on one
+                # database is a normal state in a shared catalog.
+                entry["error"] = str(e)
+        databases.append(entry)
+
+    return {"databases": databases, "errors": errors}
+
+
+def _scan_database(glue_client, database: str, *, tenant_id: str, source_id: str) -> ScanResult:
     result = ScanResult()
     try:
         pages = list(glue_client.get_paginator("get_tables").paginate(DatabaseName=database))
@@ -158,9 +190,7 @@ def _scan_database(
     for page in pages:
         for raw in page.get("TableList", []):
             try:
-                result.extend(
-                    _scan_table(raw, database, tenant_id=tenant_id, source_id=source_id)
-                )
+                result.extend(_scan_table(raw, database, tenant_id=tenant_id, source_id=source_id))
             except (KeyError, TypeError) as e:
                 # A malformed table entry is a defect in one table, not the database.
                 name = raw.get("Name", "<unnamed>") if isinstance(raw, dict) else "<unnamed>"

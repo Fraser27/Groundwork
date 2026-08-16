@@ -262,6 +262,16 @@ export interface Source {
   last_scanned_at?: string | null
 }
 
+/** A Glue database as offered for selection, before anything is read into the graph. */
+export interface GlueDatabase {
+  name: string
+  /** Null when it could not be counted, which is not the same as empty. */
+  table_count: number | null
+  /** Already represented in the graph, so a scan would replace rather than add. */
+  scanned?: boolean
+  error?: string
+}
+
 export interface TableSummary {
   full_name: string
   name: string
@@ -478,6 +488,7 @@ export interface GraphEdge {
   confidence: number
   review_state: ReviewState
   governing: boolean
+  matter_id?: string | null
 }
 
 export interface Neighbourhood {
@@ -1119,10 +1130,18 @@ export const api = {
       { method: 'POST' },
     ),
 
-  scanSources: (tenant: string) =>
+  /** What is in the Glue catalog. Reads nothing into the graph. */
+  glueDatabases: (tenant: string) =>
+    request<{ databases: GlueDatabase[]; errors: string[]; note: string }>(
+      `/tenants/${tenant}/glue/databases`,
+    ),
+
+  /** Scan the chosen databases. An empty list means every one the role can see, which is
+   *  rarely what a firm wants: a shared catalog holds other teams' data. */
+  scanSources: (tenant: string, databases: string[] = []) =>
     request<ScanReport>(`/tenants/${tenant}/sources/scan`, {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ databases }),
     }),
 
   listAccessUsers: (tenant: string) =>

@@ -1342,6 +1342,18 @@ code, pre { font-family: var(--mono); }
 /* No matter chosen. Visibly inert rather than merely ignoring a click, because a drop zone that
    silently does nothing reads as broken; the text alongside says what is missing. */
 .dropzone.disabled { cursor: not-allowed; opacity: 0.55; border-style: dotted; }
+
+/* Scrolls rather than growing the dialogue: a shared catalog can hold dozens of databases, and a
+   modal taller than the viewport puts its own buttons out of reach. */
+.scan-db-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.scan-db-row { padding: 5px 0; align-items: flex-start; }
+.scan-db-row + .scan-db-row { border-top: 1px solid var(--border); }
 .dropzone strong { display: block; color: var(--text); font-size: 13.5px; margin-bottom: 4px; }
 
 /* Bytes leaving the browser, not pages being read. The file goes straight to S3, so this

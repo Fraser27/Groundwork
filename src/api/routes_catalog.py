@@ -422,6 +422,56 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
     }
 
 
+@router.get("/tenants/{tenant}/glue/databases")
+async def glue_databases(services: ServicesDep, principal: TenantDep) -> dict[str, Any]:
+    """What is in the Glue catalog, so an administrator can choose before scanning.
+
+    Reads nothing into the graph. A firm's catalog usually holds databases belonging to other
+    teams, and scanning everything makes the Tables page unusable and the graph misleading -- the
+    point of a governed layer is that it holds what somebody chose to govern.
+
+    Requires only `glue:GetDatabases` and `glue:GetTables`, both already granted, so this needs no
+    IAM change.
+    """
+    require_admin(principal)
+
+    try:
+        import boto3
+
+        glue = boto3.client("glue", region_name=services.config.models.region)
+    except Exception as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"cannot reach Glue: {e}") from e
+
+    from src.discovery.glue_scanner import list_databases
+
+    try:
+        found = list_databases(glue)
+    except Exception as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"could not list databases: {e}") from e
+
+    # Which are already in the graph, so the picker can show what a scan would replace rather
+    # than making the user remember.
+    scanned: set[str] = set()
+    try:
+        for table in services.catalog.tables(principal[0].tenant_id):
+            if table.database:
+                scanned.add(table.database)
+    except Exception as e:
+        logger.debug("could not read the catalog cache: %s", e)
+
+    for entry in found["databases"]:
+        entry["scanned"] = entry["name"] in scanned
+
+    return {
+        **found,
+        "note": (
+            "Nothing here is in the graph until you scan it. Scanning declares a database's "
+            "tables as facts a system of record asserted, so choose the ones this firm actually "
+            "works with."
+        ),
+    }
+
+
 class ScanRequest(BaseModel):
     source_id: str = Field(default="glue-main", min_length=1, max_length=128)
     databases: list[str] = Field(default_factory=list)

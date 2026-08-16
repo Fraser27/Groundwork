@@ -151,18 +151,17 @@ export default function GraphExplorer() {
         if (!includePending && e.review_state === 'PENDING') return false
         if (governingOnly && !e.governing) return false
         if (matterFilter !== '__all__') {
-          const s = nodeIndex.get(e.source)
-          const t = nodeIndex.get(e.target)
+          // The assertion carries the matter, not the node — nodes are derived from entity
+          // ids and have no matter at all. Endpoint ids are `kind:slug`, so a Matter entity
+          // is `matter:<id>`; that catches an edge on the matter itself left unfiled.
+          const entityId = `matter:${matterFilter}`
           const touches =
-            s?.matter_id === matterFilter ||
-            t?.matter_id === matterFilter ||
-            e.source === matterFilter ||
-            e.target === matterFilter
+            e.matter_id === matterFilter || e.source === entityId || e.target === entityId
           if (!touches) return false
         }
         return true
       }),
-    [edges, visibleClasses, minConf, includePending, governingOnly, matterFilter, nodeIndex],
+    [edges, visibleClasses, minConf, includePending, governingOnly, matterFilter],
   )
 
   const visibleNodeIds = useMemo(() => {

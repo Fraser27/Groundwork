@@ -11,6 +11,7 @@ import { getTenantId } from '../auth'
 import { HELP } from '../epistemic'
 import ConfidenceBar from '../components/ConfidenceBar'
 import FieldHelp from '../components/FieldHelp'
+import ScanPicker from '../components/ScanPicker'
 import { ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDateTime, fmtNum } from '../format'
 
@@ -46,6 +47,9 @@ export default function Admin() {
   })
   const [confirmMetricLoss, setConfirmMetricLoss] = useState(false)
   const [running, setRunning] = useState<string | null>(null)
+  /** Open the database picker rather than scanning straight away: a shared catalog holds other
+   *  teams' databases, and reading all of them makes the graph misleading. */
+  const [scanning, setScanning] = useState(false)
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
@@ -681,24 +685,7 @@ export default function Admin() {
             <FieldHelp text={HELP.loadSampleData} />
           </span>
           <span className="btn-with-help">
-            <button
-              className="btn btn-ghost"
-              disabled={busy}
-              onClick={() =>
-                runOp(
-                  'scan',
-                  async () => {
-                    const r = await api.scanSources(tenant)
-                    return {
-                      ...r,
-                      errors: [...r.scan_errors, ...(r.graph_error ? [r.graph_error] : [])],
-                    }
-                  },
-                  (r) =>
-                    `Scanned the catalog: ${fmtNum(r.tables_found)} tables, ${fmtNum(r.assertions_live)} declared facts live`,
-                )
-              }
-            >
+            <button className="btn btn-ghost" disabled={busy} onClick={() => setScanning(true)}>
               {running === 'scan' ? 'Scanning…' : 'Scan catalog'}
             </button>
             <FieldHelp text={HELP.scanCatalog} />
@@ -712,6 +699,30 @@ export default function Admin() {
           </a>
         </p>
       </div>
+
+      {scanning && (
+        <ScanPicker
+          tenant={tenant}
+          busy={running === 'scan'}
+          onCancel={() => setScanning(false)}
+          onScan={async (databases) => {
+            setScanning(false)
+            await runOp(
+              'scan',
+              async () => {
+                const r = await api.scanSources(tenant, databases)
+                return {
+                  ...r,
+                  errors: [...r.scan_errors, ...(r.graph_error ? [r.graph_error] : [])],
+                }
+              },
+              (r) =>
+                `Scanned ${databases.length} database(s): ${fmtNum(r.tables_found)} tables, ` +
+                `${fmtNum(r.assertions_live)} declared facts live`,
+            )
+          }}
+        />
+      )}
 
       {ontology && (
         <div className="card">
