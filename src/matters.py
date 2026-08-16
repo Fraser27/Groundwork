@@ -63,16 +63,23 @@ class LinkReport:
 
     matter_id: str
     documents: tuple[str, ...] = ()
-    assertions_relinked: int = 0
+    assertion_ids: tuple[str, ...] = ()
     previous_matters: dict[str, str | None] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     at: str = field(default_factory=_now)
+
+    @property
+    def assertions_relinked(self) -> int:
+        """Derived, not tracked separately: a count that can drift from the ids is how the audit
+        log came to report a 28-assertion move as affecting none."""
+        return len(self.assertion_ids)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "matter_id": self.matter_id,
             "documents": list(self.documents),
             "assertions_relinked": self.assertions_relinked,
+            "assertion_ids": list(self.assertion_ids),
             "previous_matters": dict(self.previous_matters),
             "errors": self.errors,
             "at": self.at,
@@ -203,7 +210,8 @@ def link_documents(
                     "matter_id": matter_id,
                 },
             )
-            report.assertions_relinked += int(rows[0]["updated"]) if rows else 0
+            moved = tuple(str(i) for i in (rows[0]["assertion_ids"] or ())) if rows else ()
+            report.assertion_ids += moved
         except Exception as e:
             # Reported per document rather than raised: a batch where one document fails should
             # move the rest and say which one did not.
@@ -245,11 +253,13 @@ def _audit_link(services: Any, ctx: AuthContext, report: LinkReport, reason: str
                 action=LINK_DOCUMENTS,
                 at=report.at,
                 matter_id=report.matter_id,
+                # Not a count in `detail`: `affected` is what the Audit page reads, so an access
+                # change recorded only as a detail field shows up as having touched nothing.
+                assertion_ids=report.assertion_ids,
                 reason=reason,
                 detail={
                     "documents": list(report.documents),
                     "previous_matters": dict(report.previous_matters),
-                    "assertions_relinked": report.assertions_relinked,
                 },
             )
         )

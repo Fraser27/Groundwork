@@ -23,6 +23,7 @@ from src.documents.models import JobState
 from src.graph.assertions import EpistemicClass, ReviewState
 from src.graph.scope import ScopeViolation
 from src.ontology.loader import ONTOLOGY_DIR, load_ontology
+from src.query_audit import MAX_SCAN
 
 logger = logging.getLogger(__name__)
 
@@ -743,6 +744,57 @@ async def graph_audit_log(
             "Append-only. Nothing here is edited or removed, and neither are the facts it "
             "describes: they are closed rather than deleted, so an as-of read before an entry "
             "still reconstructs what the graph held."
+        ),
+    }
+
+
+@router.get("/tenants/{tenant}/audit/questions")
+async def question_audit_log(
+    services: ServicesDep,
+    principal: TenantDep,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    assertion_id: Annotated[str | None, Query()] = None,
+) -> dict[str, Any]:
+    """What was asked, who asked it, which tier answered, and on what basis. Newest first.
+
+    `assertion_id` inverts it: which questions rested on one fact. That is the question asked
+    after a fact turns out to be wrong, and it is why the assertion ids are stored rather than
+    only counted. Bounded by `scanned` — there is no index on a citation, so this is exact within
+    the window it read and makes no claim beyond it.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+
+    audit = services.query_audit
+    if audit is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no query audit log is configured")
+
+    if assertion_id:
+        window = min(max(limit, MAX_SCAN), 500)
+        scanned = audit.questions(ctx.tenant_id, limit=window)
+        events = [e for e in scanned if e.uses(assertion_id)]
+        return {
+            "questions": [e.to_dict() for e in events],
+            "count": len(events),
+            "scanned": len(scanned),
+            "assertion_id": assertion_id,
+            "note": (
+                f"Questions among the last {len(scanned)} that used this fact. Exact within that "
+                "window and no further: one question cites many facts, so there is no index to "
+                "read instead."
+            ),
+        }
+
+    events = audit.questions(ctx.tenant_id, limit=limit)
+    return {
+        "questions": [e.to_dict() for e in events],
+        "count": len(events),
+        "scanned": len(events),
+        "assertion_id": None,
+        "note": (
+            "Append-only. Every answered question is recorded with the tier that answered and the "
+            "facts it used, so which advice rested on a given fact stays answerable. Refused "
+            "questions are not here -- they produced no answer and appear in Governance."
         ),
     }
 

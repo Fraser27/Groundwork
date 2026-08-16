@@ -36,6 +36,7 @@ from src.query.graph_reader import GraphReader
 from src.query.metric_matcher import MetricMatcher
 from src.query.resolver import Resolver
 from src.query.vector_search import VectorSearch
+from src.query_audit import InMemoryQueryAudit, QueryAudit
 from src.tenant_directory import StaticTenantDirectory, TenantDirectory
 from src.user_admin import UserAdmin
 
@@ -74,6 +75,10 @@ class Services:
     """Append-only record of who changed what the system believes: a reviewer overriding a model,
     an administrator wiping a document. Distinct from the access audit, which answers who could
     *read* what."""
+
+    query_audit: Any | None = None
+    """Append-only record of what was asked and on what basis. The read side of the same claim:
+    without it a partner cannot say which advice rested on a fact that later turned out wrong."""
 
     blocked_queries: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     """Refused questions per tenant, newest last.
@@ -140,6 +145,22 @@ class Services:
         if len(log) > MAX_BLOCKED_PER_TENANT:
             # Oldest first: a recent refusal is the one an administrator can still act on.
             del log[: len(log) - MAX_BLOCKED_PER_TENANT]
+
+    def record_question(self, event: Any) -> bool:
+        """Record an answered question. False means it was not recorded.
+
+        Never raises. An audit write that fails must not turn a good answer into a 500 — the
+        caller already has the answer, and the log line below is the fallback record.
+        """
+        audit = self.query_audit
+        if audit is None:
+            return False
+        try:
+            audit.append(event)
+            return True
+        except Exception:
+            logger.exception("question not recorded in the query audit: %r", event.question)
+            return False
 
     def save_settings(self, tenant_id: str, settings: GovernanceSettings) -> GovernanceSettings:
         """Persist a governance change and refresh the in-process copy.
@@ -306,6 +327,19 @@ def _build_graph_audit(cfg: LexGraphConfig) -> object:
     return GraphAudit(cfg.tables.grants)
 
 
+def _build_query_audit(cfg: LexGraphConfig) -> object:
+    """The same table as the graph log, in its own partition.
+
+    Falls back to memory rather than to nothing, for the same reason: a question that cannot be
+    recorded is still answered, and losing the record on a deploy beats refusing to answer.
+    """
+    if not cfg.tables.grants:
+        logger.info("query audit held in process (no grants table configured)")
+        return InMemoryQueryAudit()
+    logger.info("query audit backed by DynamoDB table %s", cfg.tables.grants)
+    return QueryAudit(cfg.tables.grants)
+
+
 def _build_governance_store(cfg: LexGraphConfig) -> object:
     """DynamoDB when a tenant table is configured, memory otherwise.
 
@@ -357,6 +391,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
 
     governance_store = _build_governance_store(cfg)
     graph_audit = _build_graph_audit(cfg)
+    query_audit = _build_query_audit(cfg)
 
     embedder: Embedder | None = None
     if cfg.vector.enabled:
@@ -382,6 +417,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
         tenant_directory=tenants,
         governance_store=governance_store,
         graph_audit=graph_audit,
+        query_audit=query_audit,
         user_admin=(
             UserAdmin(cfg.auth.user_pool_id, region=cfg.auth.region)
             if cfg.auth.user_pool_id

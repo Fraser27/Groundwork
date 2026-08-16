@@ -403,9 +403,12 @@ export class DataStack extends cdk.Stack {
       sortKey: { name: 'GSI1SK', type: dynamodb.AttributeType.STRING },
     });
 
-    // Matter assignments, ethical screens, and the append-only audit trail, in one
-    // table. Keys are owned by `src/access_dynamo.py`:
+    // Matter assignments, ethical screens, and the append-only audit trails, in one
+    // table. Keys are owned by `src/access_dynamo.py`, `src/graph_audit.py` and
+    // `src/query_audit.py`:
     //   PK = TENANT#{t}#USER#{u}    SK = ASSIGN#{m} | SCREEN#{m} | EVENT#{at}#{uuid}
+    //   PK = TENANT#{t}#GRAPH       SK = EVENT#{at}#{uuid}
+    //   PK = TENANT#{t}#ASKED       SK = ASK#{at}#{uuid}
     // RETAIN because this is the only thing here that is not rebuildable. Neptune and
     // the vector index are derived from S3; the record of who screened whom, when and
     // why exists nowhere else, and it is the compliance artifact.

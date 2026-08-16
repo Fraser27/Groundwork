@@ -12,6 +12,7 @@ import {
   type Assertion,
   type EpistemicClass,
   type GraphAuditEvent,
+  type QueryAuditEvent,
   type ReviewState,
 } from '../api'
 import { getTenantId } from '../auth'
@@ -32,8 +33,11 @@ export default function Provenance() {
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   /** Facts is the default: "what does the graph hold, including what it once held" is the question
-   *  asked most. Graph changes answers the narrower one, "who altered it". */
-  const [tab, setTab] = useState<'facts' | 'changes'>('facts')
+   *  asked most. Graph changes answers the narrower one, "who altered it", and Questions the read
+   *  side, "what did we tell people and on what basis". Three tabs rather than one merged feed:
+   *  questions outnumber belief changes by orders of magnitude, so interleaving them would bury
+   *  every wipe under a page of queries. */
+  const [tab, setTab] = useState<'facts' | 'changes' | 'questions'>('facts')
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState<EpistemicClass | '__all__'>('__all__')
   const [stateFilter, setStateFilter] = useState<ReviewState | '__all__' | 'RETRACTED'>('__all__')
@@ -119,6 +123,12 @@ export default function Provenance() {
         >
           Graph changes
         </button>
+        <button
+          className={`access-tab${tab === 'questions' ? ' active' : ''}`}
+          onClick={() => setTab('questions')}
+        >
+          Questions
+        </button>
       </div>
 
       {error && (
@@ -130,6 +140,8 @@ export default function Provenance() {
       )}
 
       {tab === 'changes' && <GraphChanges tenant={tenant} />}
+
+      {tab === 'questions' && <Questions tenant={tenant} onInspect={setSelected} />}
 
       {tab === 'facts' && (
         <>
@@ -404,6 +416,207 @@ function GraphChanges({ tenant }: { tenant: string }) {
       </p>
     </div>
   )
+}
+
+/**
+ * What was asked, and on what basis.
+ *
+ * The read side of the audit trail. Without it the graph records how beliefs changed and nothing
+ * records that anyone acted on them, so "what did we tell the client, and on what evidence" has no
+ * answer. The assertion filter is the inverse and the harder question: a fact turns out to be
+ * wrong, and somebody has to find which advice rested on it.
+ */
+function Questions({
+  tenant,
+  onInspect,
+}: {
+  tenant: string
+  onInspect: (assertionId: string) => void
+}) {
+  const [events, setEvents] = useState<QueryAuditEvent[] | null>(null)
+  const [scanned, setScanned] = useState(0)
+  const [error, setError] = useState('')
+  const [factFilter, setFactFilter] = useState('')
+  /** Applied on submit, not per keystroke: each change is a server read over a 500-row window. */
+  const [applied, setApplied] = useState('')
+
+  useEffect(() => {
+    let live = true
+    api
+      .questionAudit(tenant, { limit: 200, assertionId: applied || undefined })
+      .then((r) => {
+        if (!live) return
+        setEvents(r.questions)
+        setScanned(r.scanned)
+        setError('')
+      })
+      .catch((e: Error) => {
+        if (!live) return
+        setEvents([])
+        setError(e.message)
+      })
+    return () => {
+      live = false
+    }
+  }, [tenant, applied])
+
+  if (error) return <ErrorState title="Could not load the question log" detail={error} />
+
+  return (
+    <>
+      <div className="toolbar">
+        <div className="toolbar-field" style={{ flex: 1, minWidth: 300 }}>
+          <label>
+            Questions that used a fact
+            <FieldHelp text="Paste an assertion id to see which questions rested on it. This is the trace to run when a fact turns out to be wrong: it names the answers that need revisiting." />
+          </label>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              setApplied(factFilter.trim())
+            }}
+            style={{ display: 'flex', gap: 8 }}
+          >
+            <input
+              placeholder="Assertion id"
+              value={factFilter}
+              onChange={(e) => setFactFilter(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <button type="submit" className="btn btn-ghost">
+              Trace
+            </button>
+            {applied && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  setFactFilter('')
+                  setApplied('')
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </form>
+        </div>
+        <div className="toolbar-field toolbar-spacer">
+          <label>&nbsp;</label>
+          <span className="search-count">
+            {events === null ? '—' : `${events.length} question${events.length === 1 ? '' : 's'}`}
+            {applied && events !== null && ` of ${scanned} scanned`}
+          </span>
+        </div>
+      </div>
+
+      {applied && (
+        <div className="banner banner-info">
+          <span>
+            <strong>Tracing one fact.</strong> Questions among the last {scanned} that used{' '}
+            <code>{applied}</code>. Exact within that window and no further: one question cites many
+            facts, so there is no index to read instead.
+          </span>
+        </div>
+      )}
+
+      {events === null ? (
+        <Spinner />
+      ) : events.length === 0 ? (
+        <div className="card">
+          <EmptyState title={applied ? 'No question used this fact' : 'No questions recorded'}>
+            {applied
+              ? 'Nothing in the window scanned rested on it. A question asked before that window may still have.'
+              : 'Every answered question is recorded here with the tier that answered and the facts it used. Refused questions are not: they produced no answer, and an administrator sees them in Governance.'}
+          </EmptyState>
+        </div>
+      ) : (
+        <div className="card">
+          <div className="card-header">
+            <h3>Questions asked</h3>
+            <span className="card-note">
+              Append-only &middot; newest first &middot; refusals are in Governance, not here
+            </span>
+          </div>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Who</th>
+                <th>Question</th>
+                <th>
+                  Answered by
+                  <FieldHelp text="Which tier produced the answer. A governed metric is deterministic; an AI-written query is not, and the distinction is recorded rather than inferred later." />
+                </th>
+                <th className="num">Facts used</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((e, i) => (
+                <tr key={`${e.at}-${i}`}>
+                  <td className="nowrap dim">{fmtDateTime(e.at)}</td>
+                  <td className="nowrap">{e.actor}</td>
+                  <td>
+                    {e.question}
+                    {!e.answered && (
+                      <div style={{ marginTop: 4 }}>
+                        <span className="tag tag-neutral">no answer found</span>
+                      </div>
+                    )}
+                  </td>
+                  <td className="nowrap">
+                    <span className={`tag ${e.governed ? 'tag-green' : 'tag-orange'}`}>
+                      Tier {e.tier} &middot; {TIER_LABEL[e.tier] ?? e.tier_name}
+                    </span>
+                  </td>
+                  <td className="num">
+                    {e.facts_used === 0 ? (
+                      <span className="dim">-</span>
+                    ) : (
+                      <>
+                        {fmtNum(e.facts_used)}
+                        {e.ids_truncated && (
+                          <span className="dim" title="Only the first 200 ids were stored.">
+                            {' '}
+                            (capped)
+                          </span>
+                        )}
+                        <div style={{ marginTop: 3 }}>
+                          {e.assertion_ids.slice(0, 3).map((id) => (
+                            <button
+                              key={id}
+                              type="button"
+                              className="link-button mono"
+                              style={{ fontSize: 11, display: 'block' }}
+                              onClick={() => onInspect(id)}
+                            >
+                              {id}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="hint">
+            A recorded question is not a copy of the answer: it is who asked, which tier answered,
+            and the facts the answer rested on. That is what makes an answer defensible after the
+            underlying facts have moved on.
+          </p>
+        </div>
+      )}
+    </>
+  )
+}
+
+/** Plain language for the tier numbers, matching src/query/resolver.py :: Tier. */
+const TIER_LABEL: Record<number, string> = {
+  1: 'approved metric',
+  2: 'knowledge graph',
+  3: 'passages and graph',
+  4: 'AI-written query',
 }
 
 /** Plain language for the stored action names. */

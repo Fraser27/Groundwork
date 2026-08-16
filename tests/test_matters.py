@@ -153,20 +153,20 @@ class TestBulkLinking:
         s.graph = graph
         return s
 
-    def _queue_with(self, ctx, *facts):
+    def _queue_with(self, ctx, *facts, store=None):
         from src.documents.review import ReviewQueue
 
-        queue = ReviewQueue()
+        queue = ReviewQueue(store=store)
         if facts:
             queue.stage(ctx, list(facts))
         return queue
 
-    def _fact(self, document_id: str, matter: str | None):
+    def _fact(self, document_id: str, matter: str | None, subject: str = "counsel:us"):
         from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
 
         return build_assertion(
             tenant_id=TENANT,
-            subject_id=f"counsel:us-{document_id}",
+            subject_id=f"{subject}-{document_id}",
             predicate="REPRESENTS",
             object_id="party:calder",
             epistemic_class=EpistemicClass.EXTRACTED_MODEL,
@@ -242,6 +242,27 @@ class TestBulkLinking:
         report = link_documents(services, ctx, NTL, ["doc-a"])
         assert any("not recorded" in e for e in report.errors)
 
+    def test_the_relinked_ids_come_back_from_the_graph(self, store, ctx, graph):
+        """The ids, not a count. `matter_id` is absent from the hash that identifies a fact, so the
+        ids survive the move and the audit can say *which* facts changed hands.
+
+        Against a live graph because the returning shape is the Cypher's, and a double would
+        accept a query that still returned only `count`."""
+        from src.graph.assertion_store import GraphAssertionStore
+
+        store.create(ctx, NTL, "Northwind")
+        graph_store = GraphAssertionStore(graph=graph)
+        graph_store.drop_tenant(TENANT)
+        try:
+            facts = [self._fact("doc-a", None), self._fact("doc-a", None, subject="counsel:uk")]
+            queue = self._queue_with(ctx, *facts, store=graph_store)
+            report = link_documents(self._services(graph, queue), ctx, NTL, ["doc-a"])
+
+            assert set(report.assertion_ids) == {f.assertion_id for f in facts}
+            assert report.assertions_relinked == 2
+        finally:
+            graph_store.drop_tenant(TENANT)
+
     def test_a_screened_target_matter_is_refused(self, store, ctx, graph):
         """A wall that holds for reads but not for filing is not a wall: moving a document into a
         screened matter would be a way to hide it from its own team."""
@@ -255,6 +276,71 @@ class TestBulkLinking:
 
         with pytest.raises(ScopeViolation):
             link_documents(services, screened, NTL, ["doc-a"])
+
+
+class TestALinkIsAuditedAsAffectingTheFactsItMoved:
+    """The regression that shipped: a link that moved 28 assertions was logged as affecting 0.
+
+    `_audit_link` put a count in `detail` and left `assertion_ids` empty, and `affected` is
+    derived from `assertion_ids` -- so the Audit page showed an access change that touched
+    nothing. Moving a document between matters changes who can read its facts, which is the only
+    reason this operation is audited, so under-reporting it to zero is a misleading audit trail.
+
+    No live graph here, deliberately: this is about what reaches the audit log, and it has to fail
+    in CI. The Cypher's returning shape is covered against a real Neo4j in `TestBulkLinking`.
+    """
+
+    def _services(self, ids: list[str], audit):
+        from src.graph import matter_queries as q
+
+        class FakeGraph:
+            def query(self, cypher, params=None):
+                if cypher is q.GET_MATTER:
+                    return [{"m": {"matter_id": NTL, "name": "Northwind"}}]
+                if cypher is q.RELINK_DOCUMENT_ASSERTIONS:
+                    return [{"assertion_ids": list(ids)}]
+                raise AssertionError(f"unexpected query: {cypher}")
+
+        class Queue:
+            def visible(self, ctx):
+                return []
+
+        class Services:
+            review_queue = Queue()
+            graph_audit = audit
+
+        s = Services()
+        s.graph = FakeGraph()
+        return s
+
+    def test_moving_n_assertions_is_audited_as_affecting_n(self, ctx):
+        ids = [f"a-{i}" for i in range(28)]
+        audit = InMemoryGraphAudit()
+
+        report = link_documents(self._services(ids, audit), ctx, NTL, ["doc-a"])
+
+        event = audit.events(TENANT)[0]
+        assert event.action == LINK_DOCUMENTS
+        assert event.affected == 28
+        assert report.assertions_relinked == 28
+
+    def test_the_ids_are_recorded_so_the_facts_that_moved_are_named(self, ctx):
+        """A count says something moved; the ids answer "did this move the fact I am asking
+        about", which is the question a conflict check turns into."""
+        audit = InMemoryGraphAudit()
+
+        link_documents(self._services(["a-1", "a-2"], audit), ctx, NTL, ["doc-a"])
+
+        assert audit.events(TENANT)[0].assertion_ids == ("a-1", "a-2")
+
+    def test_a_link_that_moved_nothing_is_still_audited_as_zero(self, ctx):
+        """The honest zero, which the bug made indistinguishable from a real move: filing a
+        document whose facts have not been extracted yet moves no assertions."""
+        audit = InMemoryGraphAudit()
+
+        link_documents(self._services([], audit), ctx, NTL, ["doc-a"])
+
+        assert audit.events(TENANT)[0].affected == 0
 
 
 class TestTheUploadRequiresARealMatter:

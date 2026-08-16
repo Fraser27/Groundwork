@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState, type CSSProperties } from 'react'
+import { Link } from 'react-router-dom'
 import {
   api,
   type Matter,
@@ -132,6 +133,12 @@ export default function QueryBuilder() {
   const rows = result ? asRows(result.answer) : null
   const hits = result ? asHits(result.answer) : []
   const passages = result ? asPassages(result.answer) : []
+  // `assertions_used` is the recorded audit trail and the thing worth deep-linking; it is
+  // empty for tiers 1 and 4, and the hits are the same ids for 2 and 3, so fall back rather
+  // than lose the action if the field ever arrives absent.
+  const usedIds = result?.assertions_used?.length
+    ? result.assertions_used
+    : hits.map((h) => h.assertion_id)
 
   return (
     <>
@@ -368,7 +375,18 @@ export default function QueryBuilder() {
                     {result.tier === 3 ? 'Related facts in the graph' : 'Facts that answer this'}
                     <FieldHelp text="Each row is an assertion the read was willing to trust: it cleared the confidence floor and its review state allows it to be used. The matched terms say why it came back, so a surprising result traces to the word that pulled it in." />
                   </h3>
-                  <span className="card-note">{hits.length}</span>
+                  <div className="card-header-actions">
+                    <span className="card-note">{hits.length}</span>
+                    {usedIds.length > 0 && (
+                      <Link
+                        to={`/graph?highlight=${usedIds.map(encodeURIComponent).join(',')}`}
+                        className="btn btn-ghost btn-sm"
+                        title="Open these assertions in the graph, drawn against the surrounding facts"
+                      >
+                        See in graph
+                      </Link>
+                    )}
+                  </div>
                 </div>
                 <div className="path-chain">
                   {hits.map((h) => (

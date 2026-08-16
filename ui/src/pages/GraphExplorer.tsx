@@ -7,9 +7,14 @@
  * predicted ones dashed, because a guess must not look like a finding.
  *
  * Clicking an edge opens its provenance.
+ *
+ * `?highlight=<assertion_id>,...` emphasises named assertions and focuses on them — how an
+ * answer from Ask is audited as a subgraph. The rest of the graph stays drawn: a traversal is
+ * only checkable against the facts it did not use.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, type EpistemicClass, type GraphEdge, type GraphNode, type Matter } from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC, EPISTEMIC_ORDER, HELP } from '../epistemic'
@@ -58,6 +63,7 @@ function cssVar(name: string): string {
 
 export default function GraphExplorer() {
   const tenant = getTenantId()
+  const [searchParams, setSearchParams] = useSearchParams()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const nodesRef = useRef<SimNode[]>([])
@@ -101,6 +107,16 @@ export default function GraphExplorer() {
     tenant,
     selectedEdge?.assertion_id ?? null,
   )
+
+  const highlighted = useMemo(() => {
+    const raw = searchParams.get('highlight')
+    return new Set(
+      (raw ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    )
+  }, [searchParams])
 
   const [matterFilter, setMatterFilter] = useState('__all__')
   const [visibleClasses, setVisibleClasses] = useState<Set<EpistemicClass>>(
@@ -146,6 +162,10 @@ export default function GraphExplorer() {
   const visibleEdges = useMemo(
     () =>
       edges.filter((e) => {
+        // A highlighted edge ignores the filters. It was named in the link because an answer
+        // rested on it, and a filter silently dropping it would read as the answer citing a
+        // fact that is not in the graph.
+        if (highlighted.has(e.assertion_id)) return true
         if (!visibleClasses.has(e.epistemic_class)) return false
         if (e.confidence < minConf) return false
         if (!includePending && e.review_state === 'PENDING') return false
@@ -161,7 +181,28 @@ export default function GraphExplorer() {
         }
         return true
       }),
-    [edges, visibleClasses, minConf, includePending, governingOnly, matterFilter],
+    [edges, visibleClasses, minConf, includePending, governingOnly, matterFilter, highlighted],
+  )
+
+  const highlightEdges = useMemo(
+    () => visibleEdges.filter((e) => highlighted.has(e.assertion_id)),
+    [visibleEdges, highlighted],
+  )
+
+  /** Endpoints of the highlighted edges — the nodes the traversal actually passed through. */
+  const highlightNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const e of highlightEdges) {
+      ids.add(e.source)
+      ids.add(e.target)
+    }
+    return ids
+  }, [highlightEdges])
+
+  /** Named in the link but absent from the loaded graph — the overview is capped, so say so. */
+  const missingHighlights = useMemo(
+    () => [...highlighted].filter((id) => !edges.some((e) => e.assertion_id === id)),
+    [highlighted, edges],
   )
 
   const visibleNodeIds = useMemo(() => {
@@ -264,6 +305,8 @@ export default function GraphExplorer() {
 
     const labelColour = cssVar('--graph-label') || '#1a1d2e'
     const dimColour = cssVar('--text-dim') || '#6b7085'
+    const haloColour = cssVar('--highlight-border') || 'rgba(217, 119, 6, 0.55)'
+    const auditing = highlighted.size > 0
 
     // Edges, in epistemic-class colour. Line weight tracks confidence, opacity
     // tracks review state, and PREDICTED is dashed.
@@ -274,15 +317,40 @@ export default function GraphExplorer() {
       const colour = cssVar(EPISTEMIC[e.epistemic_class].colour.replace('var(', '').replace(')', ''))
       const isHovered = hovered?.kind === 'edge' && hovered.id === e.assertion_id
       const isSelected = selectedEdge?.assertion_id === e.assertion_id
+      const isHighlit = highlighted.has(e.assertion_id)
       const touchesHoveredNode =
         hovered?.kind === 'node' && (e.source === hovered.id || e.target === hovered.id)
 
       ctx.save()
+      // A halo under the stroke, not a recolour: the epistemic colour is the vocabulary a
+      // reader has already learnt, and overwriting it to mean "used by this answer" would
+      // hide how the fact was reached at the moment they are checking it.
+      if (isHighlit) {
+        ctx.strokeStyle = haloColour
+        ctx.lineWidth = (7 + e.confidence * 2) / z
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.moveTo(a.x, a.y)
+        ctx.lineTo(b.x, b.y)
+        ctx.stroke()
+        ctx.lineCap = 'butt'
+      }
+
       ctx.strokeStyle = colour || dimColour
-      ctx.globalAlpha =
-        isSelected || isHovered ? 1 : e.review_state === 'PENDING' ? 0.42 : e.governing ? 0.85 : 0.5
+      const baseAlpha =
+        isSelected || isHovered || isHighlit
+          ? 1
+          : e.review_state === 'PENDING'
+            ? 0.42
+            : e.governing
+              ? 0.85
+              : 0.5
+      // Context is kept, only pushed back. Filtering it away would remove the facts the
+      // traversal declined to use, which is half of what makes it auditable.
+      const pushedBack = auditing && !isHighlit && !isSelected && !isHovered
+      ctx.globalAlpha = pushedBack ? baseAlpha * 0.3 : baseAlpha
       ctx.lineWidth =
-        ((isSelected ? 3.4 : isHovered ? 3 : 1) + e.confidence * 1.7) / z
+        ((isSelected ? 3.4 : isHovered ? 3 : isHighlit ? 2.4 : 1) + e.confidence * 1.7) / z
       if (e.epistemic_class === 'PREDICTED') ctx.setLineDash([5 / z, 4 / z])
       ctx.beginPath()
       ctx.moveTo(a.x, a.y)
@@ -305,13 +373,16 @@ export default function GraphExplorer() {
       ctx.fill()
       ctx.restore()
 
-      if (z >= 1.15 || isHovered || isSelected || touchesHoveredNode) {
+      if (z >= 1.15 || isHovered || isSelected || isHighlit || touchesHoveredNode) {
+        const emphasis = isSelected || isHovered || isHighlit
         const mx = (a.x + b.x) / 2
         const my = (a.y + b.y) / 2
-        ctx.fillStyle = isSelected || isHovered ? labelColour : dimColour
-        ctx.font = `${(isSelected || isHovered ? 10.5 : 9) / Math.max(z, 0.6)}px Inter, system-ui, sans-serif`
+        ctx.fillStyle = emphasis ? labelColour : dimColour
+        ctx.globalAlpha = auditing && !emphasis ? 0.4 : 1
+        ctx.font = `${(emphasis ? 10.5 : 9) / Math.max(z, 0.6)}px Inter, system-ui, sans-serif`
         ctx.textAlign = 'center'
         ctx.fillText(e.predicate, mx, my - 5 / z)
+        ctx.globalAlpha = 1
       }
     }
 
@@ -321,7 +392,16 @@ export default function GraphExplorer() {
       const radius = NODE_RADIUS[n.type] || 8
       const isHovered = hovered?.kind === 'node' && hovered.id === n.id
       const isSelected = selectedNode === n.id
+      const onPath = highlightNodeIds.has(n.id)
 
+      ctx.globalAlpha = auditing && !onPath && !isHovered && !isSelected ? 0.4 : 1
+      if (onPath) {
+        ctx.beginPath()
+        ctx.arc(n.x, n.y, radius + 4.5 / Math.max(z, 0.6), 0, Math.PI * 2)
+        ctx.strokeStyle = haloColour
+        ctx.lineWidth = 2.5 / z
+        ctx.stroke()
+      }
       if (isHovered || isSelected) {
         ctx.shadowColor = colour
         ctx.shadowBlur = 13
@@ -341,10 +421,19 @@ export default function GraphExplorer() {
       ctx.font = `${(n.type === 'Topic' ? 9.5 : 11) / Math.max(z * 0.85, 0.75)}px Inter, system-ui, sans-serif`
       ctx.textAlign = 'center'
       ctx.fillText(n.label, n.x, n.y + radius + 13 / Math.max(z * 0.85, 0.75))
+      ctx.globalAlpha = 1
     }
 
     ctx.restore()
-  }, [visibleEdges, visibleNodeIds, hovered, selectedNode, selectedEdge])
+  }, [
+    visibleEdges,
+    visibleNodeIds,
+    hovered,
+    selectedNode,
+    selectedEdge,
+    highlighted,
+    highlightNodeIds,
+  ])
 
   // Force simulation. Sleeps when settled; wakeSim() restarts it.
   useEffect(() => {
@@ -435,17 +524,29 @@ export default function GraphExplorer() {
     }
   }, [nodes, visibleEdges, visibleNodeIds, draw])
 
+  /** What the view fits to: the highlighted subgraph plus one hop, so the facts the answer
+   *  did not use are on screen next to the ones it did. */
+  const focusNodeIds = useMemo(() => {
+    if (highlightNodeIds.size === 0) return visibleNodeIds
+    const ids = new Set(highlightNodeIds)
+    for (const e of visibleEdges) {
+      if (highlightNodeIds.has(e.source)) ids.add(e.target)
+      if (highlightNodeIds.has(e.target)) ids.add(e.source)
+    }
+    return ids
+  }, [highlightNodeIds, visibleNodeIds, visibleEdges])
+
   // Re-heat and auto-fit when the filters change the visible set.
   useEffect(() => {
     if (visibleNodeIds.size === 0) return
     alphaRef.current = 0.7
     wakeSim(0.7)
     const t = setTimeout(
-      () => fitToNodes(nodesRef.current.filter((n) => visibleNodeIds.has(n.id))),
+      () => fitToNodes(nodesRef.current.filter((n) => focusNodeIds.has(n.id))),
       650,
     )
     return () => clearTimeout(t)
-  }, [visibleNodeIds, fitToNodes, wakeSim])
+  }, [visibleNodeIds, focusNodeIds, fitToNodes, wakeSim])
 
   useEffect(() => {
     draw()
@@ -573,6 +674,12 @@ export default function GraphExplorer() {
     setReloadKey((k) => k + 1)
   }
 
+  const clearHighlight = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('highlight')
+    setSearchParams(next, { replace: true })
+  }
+
   if (loading) return <Spinner />
   if (error)
     return (
@@ -599,6 +706,32 @@ export default function GraphExplorer() {
             Every edge is an assertion, coloured by how it was reached and weighted by how confident
             the system is. Click an edge to see why it is believed.
           </p>
+        </div>
+      )}
+
+      {highlighted.size > 0 && !fullscreen && (
+        <div className="banner banner-info graph-audit-banner">
+          <span>
+            <strong>Auditing an answer.</strong> {highlightEdges.length} of {highlighted.size}{' '}
+            {highlighted.size === 1 ? 'assertion' : 'assertions'} the answer used{' '}
+            {highlightEdges.length === 1 ? 'is' : 'are'} ringed and drawn over the rest of the
+            graph, which stays visible so you can see what the traversal did not use. Click one for
+            its provenance.
+            {missingHighlights.length > 0 && (
+              <>
+                {' '}
+                {missingHighlights.length} did not come back in this view; the overview is
+                capped, so open {missingHighlights.length === 1 ? 'it' : 'them'} from Audit.
+              </>
+            )}
+          </span>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ marginLeft: 'auto' }}
+            onClick={clearHighlight}
+          >
+            Clear
+          </button>
         </div>
       )}
 
@@ -709,6 +842,22 @@ export default function GraphExplorer() {
               </button>
             )
           })}
+          {highlightEdges.length > 0 && (
+            <>
+              <div className="graph-legend-title" style={{ marginTop: 11 }}>
+                This answer
+              </div>
+              <button
+                className="graph-legend-row"
+                onClick={() => fitToNodes(nodesRef.current.filter((n) => focusNodeIds.has(n.id)))}
+                title="Recentre on the assertions this answer used"
+              >
+                <span className="graph-legend-line highlit" />
+                <span style={{ flex: 1 }}>Used by the answer</span>
+                <span>{highlightEdges.length}</span>
+              </button>
+            </>
+          )}
           <div className="graph-legend-title" style={{ marginTop: 11 }}>
             Entities
           </div>
@@ -740,7 +889,7 @@ export default function GraphExplorer() {
             −
           </button>
           <button
-            onClick={() => fitToNodes(nodesRef.current.filter((n) => visibleNodeIds.has(n.id)))}
+            onClick={() => fitToNodes(nodesRef.current.filter((n) => focusNodeIds.has(n.id)))}
             title="Fit to view"
           >
             ⤢

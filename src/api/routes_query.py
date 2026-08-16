@@ -15,6 +15,7 @@ from src.api.deps import ServicesDep, TenantDep, build_metric_matcher
 from src.query.planner import Planner
 from src.query.resolver import QueryBlocked, Tier
 from src.query.vector_search import VectorSearch
+from src.query_audit import event_for
 
 router = APIRouter(tags=["query"])
 
@@ -84,7 +85,19 @@ async def run_query(
         # 403, not 400: the request was well-formed and deliberately refused.
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from e
 
-    return resolution.to_dict()
+    # A read that leaves no trace cannot answer "what did we tell the client, and on what
+    # basis?". Refusals are not recorded here: `record_blocked` above already has them, and a
+    # refusal produced no answer, so it is a backlog signal rather than a basis for advice.
+    recorded = services.record_question(
+        event_for(ctx.tenant_id, ctx.user_id, body.query, resolution)
+    )
+    out = resolution.to_dict()
+    if not recorded:
+        out["warnings"] = [
+            *out["warnings"],
+            "This question was answered but not recorded in the audit trail.",
+        ]
+    return out
 
 
 class ComposeRequest(BaseModel):

@@ -57,15 +57,22 @@ RETURN m
 #:
 #: `matter_id` is deliberately absent from the assertion hash (`_compute_id`), so this is a
 #: property update and not a new assertion. Re-filing a document does not fork its facts.
+#:
+#: Returns the ids rather than a count, because the audit event records *which* facts changed
+#: hands, and a count alone cannot answer "did this move the fact I am asking about". Bounded by
+#: one document's assertions, and `graph_audit.MAX_STORED_IDS` clips the stored list.
+#:
+#: OPTIONAL on the edge match: an assertion whose edge is missing still had its matter changed, and
+#: a plain MATCH drops it from the result, so the audit would under-report a move that happened.
 RELINK_DOCUMENT_ASSERTIONS = """
 MATCH (a:Assertion {tenant_id: $tenant_id})
 WHERE a.document_id = $document_id
 SET a.matter_id = $matter_id
 WITH collect(a.assertion_id) AS ids
 UNWIND ids AS aid
-MATCH ()-[r {tenant_id: $tenant_id, assertion_id: aid}]->()
+OPTIONAL MATCH ()-[r {tenant_id: $tenant_id, assertion_id: aid}]->()
 SET r.matter_id = $matter_id
-RETURN count(DISTINCT aid) AS updated
+RETURN collect(DISTINCT aid) AS assertion_ids
 """
 
 #: How many facts a document contributed, so a link can report what it moved.

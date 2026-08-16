@@ -182,6 +182,23 @@ export interface GraphAuditEvent {
   detail: Record<string, unknown>
 }
 
+/** One row of the question log: what was asked, which tier answered, on what basis. */
+export interface QueryAuditEvent {
+  at: string
+  actor: string
+  question: string
+  tier: number
+  tier_name: string
+  governed: boolean
+  /** A tier can be reached, find nothing, and the empty answer is still recorded. */
+  answered: boolean
+  sql?: string | null
+  assertion_ids: string[]
+  document_ids: string[]
+  facts_used: number
+  ids_truncated: boolean
+}
+
 export interface ProvenanceEvent {
   event_id: string
   timestamp: string
@@ -1065,6 +1082,27 @@ export const api = {
     request<{ events: GraphAuditEvent[]; count: number; note: string }>(
       `/tenants/${tenant}/audit/graph?limit=${limit}`,
     ).then((r) => r.events ?? []),
+
+  /**
+   * What was asked and on what basis, newest first.
+   *
+   * `assertionId` inverts it: which questions rested on one fact. `scanned` is how many rows the
+   * server read, and it is returned rather than dropped because the answer is exact only within
+   * that window -- there is no index on a citation.
+   */
+  questionAudit: (tenant: string, opts?: { limit?: number; assertionId?: string }) =>
+    request<{
+      questions: QueryAuditEvent[]
+      count: number
+      scanned: number
+      assertion_id: string | null
+      note: string
+    }>(
+      `/tenants/${tenant}/audit/questions${q({
+        limit: opts?.limit ?? 100,
+        assertion_id: opts?.assertionId,
+      })}`,
+    ),
 
   getProvenance: (tenant: string, id: string) =>
     request<Provenance>(`/tenants/${tenant}/assertions/${id}/provenance`),
