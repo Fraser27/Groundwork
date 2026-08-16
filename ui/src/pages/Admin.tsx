@@ -402,7 +402,10 @@ export default function Admin() {
             <label>Minimum confidence</label>
             <input
               type="range"
-              min={0.5}
+              // The floor must stay strictly above the model cap, so the slider starts one step
+              // above it rather than at an arbitrary 0.5. Offering a range that is mostly invalid
+              // and rejecting the result is a worse explanation than not offering it.
+              min={Math.round((settings.model_confidence_cap + 0.01) * 100) / 100}
               max={0.99}
               step={0.01}
               value={settings.min_confidence}
@@ -429,6 +432,12 @@ export default function Admin() {
               Facts below the floor stay visible in the review queue and the audit trail but never
               shape an answer. Raising it makes the system more likely to say it does not know, which
               is usually the safer failure.
+            </p>
+            <p className="hint">
+              It cannot go below {(settings.model_confidence_cap + 0.01).toFixed(2)}. An unreviewed
+              model claim is capped at {settings.model_confidence_cap.toFixed(2)}, and the floor
+              staying above that is what keeps one out of an answer even if the review gate were
+              bypassed.
             </p>
           </div>
         </div>

@@ -747,6 +747,11 @@ export interface TenantSettings {
   ontology_domain: string
   /** Retrieval trust floor — assertions below this never shape an answer. */
   min_confidence: number
+  /**
+   * The ceiling on any unreviewed model claim. The floor must stay strictly above it, so this is
+   * the floor control's lower bound rather than a number anyone edits here.
+   */
+  model_confidence_cap: number
   block_ungoverned_queries: boolean
   extraction_model: string
   synthesis_model: string

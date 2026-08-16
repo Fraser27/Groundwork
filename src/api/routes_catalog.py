@@ -409,6 +409,10 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
         "name": ctx.tenant_id,
         "ontology_domain": services.ontology.domain,
         "min_confidence": settings.min_confidence_floor,
+        # Sent so the floor control can respect its own lower bound. The floor must stay above
+        # the cap, and without this the UI offered a range that was mostly invalid: dragging to
+        # 0.65 produced a rejection explaining an invariant the screen had never mentioned.
+        "model_confidence_cap": settings.model_confidence_cap,
         "block_ungoverned_queries": settings.block_ungoverned_queries,
         "extraction_model": settings.extraction_model or models.extraction_model,
         "synthesis_model": models.synthesis_model,

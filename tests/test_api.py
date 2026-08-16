@@ -222,6 +222,16 @@ class TestGovernance:
         assert r.status_code == 422
         assert "must stay below" in r.json()["detail"]
 
+    def test_settings_expose_the_cap_so_the_floor_control_has_a_lower_bound(self, client):
+        """The floor slider cannot respect a limit it was never told.
+
+        It offered 0.50 to 0.99 while anything at or below the cap is refused, so most of the range
+        produced a rejection citing an invariant the screen had never mentioned. The refusal was
+        right and the control was wrong.
+        """
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        assert body["model_confidence_cap"] < body["min_confidence"]
+
     def test_embedding_model_change_warns_about_migration(self, client):
         r = client.patch(
             f"/api/tenants/{TENANT}/governance", json={"embedding_model": "other-model"}
