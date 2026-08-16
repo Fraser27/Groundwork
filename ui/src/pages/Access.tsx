@@ -106,7 +106,16 @@ export default function Access() {
   useEffect(() => {
     let cancelled = false
     const id = view === 'matter' ? matterId : userId
-    if (!id) return
+    if (!id) {
+      // Resolved, not skipped. The spinner is driven by `loadedKey !== wantKey`, so returning
+      // early left it spinning forever on a tenant with no matters -- an empty state rendered
+      // as though it were still loading, which reads as broken rather than empty.
+      setLoadedKey(wantKey)
+      setMatterAccess(null)
+      setUserAccess(null)
+      setDetailError('')
+      return
+    }
     const p =
       view === 'matter'
         ? api.getMatterAccess(tenant, id).then((d) => {
