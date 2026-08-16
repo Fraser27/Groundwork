@@ -42,7 +42,9 @@ export default function Matters() {
     Promise.all([
       api.listMatters(tenant),
       api.listDocuments(tenant),
-      api.listAssertions(tenant, { limit: 200 }),
+      // review_state null, not omitted: the endpoint defaults to PENDING, so omitting it loaded
+      // only unreviewed facts -- which is why a matter with ten approved facts showed zero.
+      api.listAssertions(tenant, { review_state: 'ALL', limit: 500 }),
     ])
       .then(([m, d, a]) => {
         setMatters(m.matters)
@@ -78,6 +80,10 @@ export default function Matters() {
   if (selected) {
     const matterDocs = docs.filter((d) => d.matter_id === selected.matter_id)
     const matterAssertions = assertions.filter((a) => a.matter_id === selected.matter_id)
+    // Derived from the facts actually loaded rather than a `counts` object the API never sent.
+    // Every stat card read `selected.counts?...`, which was always undefined, so each silently
+    // fell through to a default -- and one of those defaults was a hardcoded zero.
+    const matterPending = matterAssertions.filter((a) => a.review_state === 'PENDING').length
     return (
       <>
         <button className="back-link btn-ghost" style={{ border: 'none', background: 'none', cursor: 'pointer' }} onClick={() => setSelectedId(null)}>
@@ -113,22 +119,24 @@ export default function Matters() {
         <div className="stats-grid">
           <div className="stat-card">
             <div className="label">Documents</div>
-            <div className="value accent">{fmtNum(selected.counts?.documents ?? matterDocs.length)}</div>
+            <div className="value accent">{fmtNum(matterDocs.length)}</div>
           </div>
           <div className="stat-card">
             <div className="label">
               Facts
               <FieldHelp text={HELP.epistemicClass} />
             </div>
-            <div className="value purple">{fmtNum(selected.counts?.assertions ?? matterAssertions.length)}</div>
+            <div className="value purple">
+              {fmtNum(selected.assertion_count ?? matterAssertions.length)}
+            </div>
           </div>
           <div className="stat-card">
             <div className="label">
               Pending review
               <FieldHelp text={HELP.reviewState} />
             </div>
-            <div className={`value ${(selected.counts?.pending_review ?? 0) > 0 ? 'orange' : 'green'}`}>
-              {fmtNum(selected.counts?.pending_review ?? 0)}
+            <div className={`value ${matterPending > 0 ? 'orange' : 'green'}`}>
+              {fmtNum(matterPending)}
             </div>
             <div className="sub">
               <Link to="/review">Review queue</Link>
@@ -385,7 +393,7 @@ export default function Matters() {
                     {m.status}
                   </span>
                 </td>
-                <td className="num">{fmtNum(m.counts?.documents)}</td>
+                <td className="num">{fmtNum(docs.filter((d) => d.matter_id === m.matter_id).length)}</td>
                 <td className="num">{fmtNum(m.counts?.assertions)}</td>
                 <td className="num">
                   {m.counts?.pending_review ? (

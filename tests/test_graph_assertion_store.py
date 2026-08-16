@@ -28,6 +28,7 @@ from src.graph.assertion_queries import UnsafeRelationshipType, safe_type
 from src.graph.assertion_store import GraphAssertionStore
 from src.graph.assertions import EpistemicClass, ReviewState, SourceLocator, build_assertion
 from src.graph.client import GraphClient
+from src.graph.scope import AuthContext
 
 TENANT = "t-assertion-store"
 OTHER = "t-other-firm"
@@ -275,3 +276,73 @@ class TestRelationshipTypeSafety:
 
     def test_a_normal_predicate_passes(self):
         assert safe_type("REPRESENTS") == "REPRESENTS"
+
+
+class TestRecordFieldsSurviveTheRoundTrip:
+    """`job_id` is load-bearing, not informational.
+
+    `promote(job_id=...)` filters on it, so a store that dropped it made every scoped promotion a
+    silent no-op. Seven auto-asserted facts sat STAGED in production because of this: nothing else
+    promotes, and nothing approves what needs no approval, so they were unreachable forever.
+
+    The rest are the record's own fields rather than the assertion's -- the review note, the
+    retraction reason and who withdrew it, and the id a correction replaces. All of them are what
+    the Audit page reads, so losing them loses the explanation rather than the fact.
+    """
+
+    def test_the_job_id_survives(self, store):
+        a = _assertion()
+        store.put(AssertionRecord(assertion=a, job_id="doc-7"))
+        assert store.get(TENANT, a.assertion_id).job_id == "doc-7"
+
+    def test_a_scoped_promotion_finds_the_record(self, store, graph):
+        """The end-to-end shape of the bug: stage under a job, promote that job, expect it live."""
+        from src.documents.review import ReviewQueue
+
+        queue = ReviewQueue(store)
+        ctx = AuthContext(user_id="sys", tenant_id=TENANT)
+        a = build_assertion(
+            tenant_id=TENANT,
+            subject_id="document:d1",
+            predicate="MENTIONS",
+            object_id="party:calder",
+            # EXTRACTED_DET on a presence predicate is AUTO_ASSERTED: a check confirmed the words
+            # are there, so no person is needed and nothing will ever approve it.
+            epistemic_class=EpistemicClass.EXTRACTED_DET,
+            method="llm:test+verify:quote@v1",
+            confidence=0.95,
+            source_locator=SourceLocator(
+                document_id="d1", filename="f.pdf", page=1, quote="Calder"
+            ),
+        )
+        queue.stage(ctx, [a], job_id="doc-d1")
+
+        assert queue.promote(ctx, job_id="doc-d1") == [a.assertion_id]
+        assert [r.assertion_id for r in queue.live_assertions(ctx)] == [a.assertion_id]
+
+    def test_the_review_note_survives(self, store):
+        a = _assertion()
+        record = AssertionRecord(assertion=a)
+        record.review_note = "the letter names Calder as the adverse party"
+        store.put(record)
+        assert "adverse party" in (store.get(TENANT, a.assertion_id).review_note or "")
+
+    def test_the_withdrawal_reason_and_actor_survive(self, store):
+        """What the Audit page shows beside a withdrawn fact. Losing these leaves a fact that is
+        gone with no recorded reason, which is the shape of an unexplained deletion."""
+        a = _assertion()
+        record = AssertionRecord(assertion=a)
+        record.retracted_reason = "re-extracting with a corrected model"
+        record.retracted_by = "partner@firm.example"
+        store.put(record)
+
+        got = store.get(TENANT, a.assertion_id)
+        assert got.retracted_by == "partner@firm.example"
+        assert "corrected model" in (got.retracted_reason or "")
+
+    def test_the_correction_link_survives(self, store):
+        a = _assertion()
+        record = AssertionRecord(assertion=a)
+        record.corrects = "some-earlier-assertion-id"
+        store.put(record)
+        assert store.get(TENANT, a.assertion_id).corrects == "some-earlier-assertion-id"

@@ -80,6 +80,15 @@ def _to_item(record: AssertionRecord) -> dict[str, Any]:
         "recorded_at": a.recorded_at,
         "superseded_at": a.superseded_at,
         "lifecycle": record.lifecycle.value,
+        # Record-level fields, not assertion fields. `job_id` is load-bearing rather than
+        # informational: `promote(job_id=...)` filters on it, so a store that dropped it made
+        # every scoped promotion a no-op -- seven auto-asserted facts sat STAGED in production,
+        # unpromotable, because nothing else promotes and nothing approves what needs no approval.
+        "job_id": record.job_id,
+        "review_note": record.review_note,
+        "retracted_reason": record.retracted_reason,
+        "retracted_by": record.retracted_by,
+        "corrects": record.corrects,
         "source_locator_json": json.dumps(loc.to_dict()),
         "premises_json": json.dumps(list(a.premises)),
         "document_id": loc.document_id,
@@ -126,6 +135,11 @@ def _from_node(node: dict[str, Any]) -> AssertionRecord:
     return AssertionRecord(
         assertion=assertion,
         lifecycle=Lifecycle(node.get("lifecycle") or Lifecycle.STAGED.value),
+        job_id=node.get("job_id"),
+        review_note=node.get("review_note"),
+        retracted_reason=node.get("retracted_reason"),
+        retracted_by=node.get("retracted_by"),
+        corrects=node.get("corrects"),
     )
 
 
@@ -230,6 +244,15 @@ class GraphAssertionStore:
                 "reviewed_by": a.reviewed_by,
                 "reviewed_at": a.reviewed_at,
                 "lifecycle": record.lifecycle.value,
+        # Record-level fields, not assertion fields. `job_id` is load-bearing rather than
+        # informational: `promote(job_id=...)` filters on it, so a store that dropped it made
+        # every scoped promotion a no-op -- seven auto-asserted facts sat STAGED in production,
+        # unpromotable, because nothing else promotes and nothing approves what needs no approval.
+        "job_id": record.job_id,
+        "review_note": record.review_note,
+        "retracted_reason": record.retracted_reason,
+        "retracted_by": record.retracted_by,
+        "corrects": record.corrects,
             },
         )
 

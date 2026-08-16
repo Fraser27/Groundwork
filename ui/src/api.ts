@@ -715,10 +715,21 @@ export interface TenantSettings {
 
 // ── Calls ────────────────────────────────────────────────────────────────────
 
+/**
+ * Send a parameter with a deliberately empty value.
+ *
+ * `q()` drops empty strings, which is right for a blank search box and wrong for a filter where
+ * empty *means* something. The assertions endpoint filters on `review_state` only when it is
+ * truthy, so `review_state=` is how a caller asks for every state -- and omitting it instead lets
+ * the server apply its PENDING default, which is what made a matter's approved facts count zero.
+ */
+export const EMPTY = '\u0000'
+
 const q = (params: Record<string, string | number | boolean | undefined>) => {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== '') sp.set(k, String(v))
+    if (v === EMPTY) sp.set(k, '')
+    else if (v !== undefined && v !== '') sp.set(k, String(v))
   }
   const s = sp.toString()
   return s ? `?${s}` : ''
@@ -932,7 +943,12 @@ export const api = {
   listAssertions: (
     tenant: string,
     opts: {
-      review_state?: ReviewState
+      /** Defaults to PENDING *on the server*, so omitting it loads only unreviewed facts --
+       *  which is why a matter with ten approved facts counted zero. Pass 'ALL' for every state.
+       *
+       *  Not '': `q()` strips empty values, so an empty string never reaches the server and the
+       *  default applies again. 'ALL' is translated below into the empty value the API wants. */
+      review_state?: ReviewState | 'ALL'
       epistemic_class?: EpistemicClass
       matter_id?: string
       document_id?: string
@@ -945,7 +961,16 @@ export const api = {
   ) =>
     // The endpoint returns {assertions, total, confidence_floor}. Typing it as a bare array
     // made `.filter` a runtime crash that the compiler could not see.
-    request<{ assertions: Assertion[] }>(`/tenants/${tenant}/assertions${q(opts)}`).then(
+    //
+    // 'ALL' becomes an explicitly empty `review_state=`, which is how the API says "every state":
+    // it filters only when the parameter is truthy. It has to be sent rather than omitted, because
+    // omitting it lets the server apply its PENDING default.
+    request<{ assertions: Assertion[] }>(
+      `/tenants/${tenant}/assertions${q({
+        ...opts,
+        review_state: opts.review_state === 'ALL' ? EMPTY : opts.review_state,
+      })}`,
+    ).then(
       (r) => r.assertions ?? [],
     ),
 
