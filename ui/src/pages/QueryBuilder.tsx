@@ -8,7 +8,17 @@
  */
 
 import { useEffect, useState, type CSSProperties } from 'react'
-import { api, type Matter, type QueryResult, type ResolutionTier, type TenantSettings } from '../api'
+import {
+  api,
+  type Matter,
+  type QueryAnswer,
+  type QueryHit,
+  type QueryPassage,
+  type QueryResult,
+  type QueryRows,
+  type ResolutionTier,
+  type TenantSettings,
+} from '../api'
 import { getTenantId } from '../auth'
 import { HELP, TIERS } from '../epistemic'
 import { useProvenance } from '../useProvenance'
@@ -19,6 +29,36 @@ import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
 import { ErrorState, Spinner, TierBadge } from '../components/Shared'
 import { epiStyle } from '../format'
+
+/**
+ * `answer` is shaped by whichever tier answered, so it is narrowed rather than rendered.
+ *
+ * Rendering it directly is what blanked this page: tier 2 puts a list of assertions there, and a
+ * list of objects as a React child throws. Narrowing in one place beats guessing at each use.
+ */
+function asRows(answer: QueryAnswer): QueryRows | null {
+  if (answer && typeof answer === 'object' && 'columns' in answer && Array.isArray(answer.rows)) {
+    return answer as QueryRows
+  }
+  return null
+}
+
+function asHits(answer: QueryAnswer): QueryHit[] {
+  if (Array.isArray(answer)) return answer
+  if (answer && typeof answer === 'object' && 'related' in answer) return answer.related ?? []
+  return []
+}
+
+function asPassages(answer: QueryAnswer): QueryPassage[] {
+  if (answer && typeof answer === 'object' && 'passages' in answer) return answer.passages ?? []
+  return []
+}
+
+/** Entity ids are `kind:slug`. The slug is what a reader recognises; the kind is noise here. */
+function entityLabel(id: string): string {
+  const slug = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id
+  return slug.replace(/[-_]/g, ' ')
+}
 
 /** The tier is what each example is meant to demonstrate, not a promise about the answer. */
 const EXAMPLES: { q: string; tier: ResolutionTier }[] = [
@@ -89,6 +129,9 @@ export default function QueryBuilder() {
   }
 
   const tierMeta = result ? TIERS[result.tier] : null
+  const rows = result ? asRows(result.answer) : null
+  const hits = result ? asHits(result.answer) : []
+  const passages = result ? asPassages(result.answer) : []
 
   return (
     <>
@@ -222,215 +265,266 @@ export default function QueryBuilder() {
 
       {result && tierMeta && (
         <>
-          {result.blocked ? (
-            <div className="banner banner-warn" style={{ marginTop: 16 }}>
-              <span>
-                <strong>Refused.</strong> {result.blocked_reason} No approved governed metric covers
-                this question, and this tenant is configured to refuse rather than fall back to
-                model-generated SQL. The question has been logged, it is a candidate for a new
-                governed metric.
-              </span>
-            </div>
-          ) : (
-            <>
-              <div
-                className="tier-banner"
-                style={{ marginTop: 16, '--tier-colour': tierMeta.colour } as CSSProperties}
-              >
-                <div className="tier-num">{result.tier}</div>
-                <div className="tier-text">
-                  <h4>
-                    {tierMeta.label}
-                    <FieldHelp text={HELP.resolutionTier} />
-                    {result.metric_id && (
-                      <span className="tag tag-blue tag-mono">{result.metric_id}</span>
-                    )}
-                  </h4>
-                  <p>{result.tier_reason}</p>
-                  <p style={{ color: tierMeta.colour, fontWeight: 550 }}>{tierMeta.llm}</p>
-                </div>
+            <div
+              className="tier-banner"
+              style={{ marginTop: 16, '--tier-colour': tierMeta.colour } as CSSProperties}
+            >
+              <div className="tier-num">{result.tier}</div>
+              <div className="tier-text">
+                <h4>
+                  {tierMeta.label}
+                  <FieldHelp text={HELP.resolutionTier} />
+                  <span className={`tag ${result.governed ? 'tag-green' : 'tag-orange'}`}>
+                    {result.governed ? 'governed' : 'ungoverned'}
+                  </span>
+                </h4>
+                <p>{result.explanation}</p>
+                <p style={{ color: tierMeta.colour, fontWeight: 550 }}>{tierMeta.llm}</p>
               </div>
+            </div>
 
+            {result.warnings.length > 0 && (
+              <div className="banner banner-warn" style={{ marginTop: 16 }}>
+                <span>{result.warnings.join(' ')}</span>
+              </div>
+            )}
+
+            {rows && (
               <div className="card">
                 <div className="card-header">
-                  <h3>Answer</h3>
+                  <h3>Result</h3>
+                  <span className="card-note">
+                    {rows.rows.length} row{rows.rows.length === 1 ? '' : 's'}
+                  </span>
                 </div>
-                <div className="answer-block">{result.answer}</div>
-              </div>
-
-              {result.rows && (
-                <div className="card">
-                  <div className="card-header">
-                    <h3>Result</h3>
-                    <span className="card-note">{result.rows.rows.length} rows</span>
-                  </div>
-                  <div style={{ overflowX: 'auto' }}>
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          {result.rows.columns.map((c) => (
-                            <th key={c}>{c}</th>
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        {rows.columns.map((c) => (
+                          <th key={c}>{c}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.rows.map((r, i) => (
+                        <tr key={i}>
+                          {r.map((v, j) => (
+                            <td key={j} className={typeof v === 'number' ? 'num' : ''}>
+                              {typeof v === 'number' ? v.toLocaleString() : (v ?? '-')}
+                            </td>
                           ))}
                         </tr>
-                      </thead>
-                      <tbody>
-                        {result.rows.rows.map((r, i) => (
-                          <tr key={i}>
-                            {r.map((v, j) => (
-                              <td key={j} className={typeof v === 'number' ? 'num' : ''}>
-                                {typeof v === 'number' ? v.toLocaleString() : (v ?? '-')}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              )}
+              </div>
+            )}
 
-              {result.path && result.path.length > 0 && (
-                <div className="card">
-                  <div className="card-header">
-                    <h3>
-                      How the graph was walked
-                      <FieldHelp text="Each hop is an assertion the traversal was willing to trust. Expansion follows only edges that clear the trust floor, so the route itself is defensible." />
-                    </h3>
-                  </div>
-                  <div className="path-chain">
-                    {result.path.map((h, i) => (
-                      <div key={h.assertion_id + i} className="path-hop" style={epiStyle(h.epistemic_class)}>
-                        <span className="path-hop-index">{i + 1}</span>
-                        <EpistemicBadge
-                          epistemicClass={h.epistemic_class}
-                          size="sm"
-                          showLabel={false}
-                        />
-                        <span>
-                          <strong>{h.subject_label}</strong>{' '}
-                          <span className="prov-pred">{h.predicate}</span>{' '}
-                          <strong>{h.object_label}</strong>
-                        </span>
-                        <ConfidenceBar value={h.confidence} floor={floor} width={54} />
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          style={{ marginLeft: 'auto' }}
-                          onClick={() => setOpenProvenance(h.assertion_id)}
-                        >
-                          Why?
-                        </button>
+            {passages.length > 0 && (
+              <div className="card">
+                <div className="card-header">
+                  <h3>
+                    Passages found
+                    <FieldHelp text="Retrieved by meaning rather than keyword, so a passage can match without sharing a word with the question. Each one is a span of a real document, which is why it can be opened at the page." />
+                  </h3>
+                  <span className="card-note">{passages.length}</span>
+                </div>
+                {passages.map((p, i) => (
+                  <div className="citation" key={`${p.document_id}-${p.char_start ?? i}`}>
+                    <span className="citation-num">[{i + 1}]</span>
+                    <div className="citation-body">
+                      {p.text && <div className="citation-quote">{p.text}</div>}
+                      <div className="citation-loc">
+                        {p.filename ?? p.document_id}
+                        {p.page != null ? ` · page ${p.page}` : ''}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {result.sql && (
-                <div className="card">
-                  <div className="card-header">
-                    <h3>
-                      {result.tier === 4 ? 'Generated SQL' : 'Compiled SQL'}
-                      <FieldHelp
-                        text={
-                          result.tier === 4
-                            ? 'Written by a language model against the real schema, then checked by the query firewall. It is shown in full because you should read it before relying on the figure.'
-                            : 'Compiled from the governed metric definition. Deterministic: the same definition always produces this query, with no model involved.'
-                        }
-                      />
-                    </h3>
-                    <span className={`tag ${result.tier === 4 ? 'tag-orange' : 'tag-green'}`}>
-                      {result.tier === 4 ? 'model-written' : 'deterministic'}
-                    </span>
-                  </div>
-                  <pre className="code-block">{result.sql}</pre>
-                </div>
-              )}
-
-              {result.citations.length > 0 && (
-                <div className="card">
-                  <div className="card-header">
-                    <h3>
-                      Citations
-                      <FieldHelp text={HELP.sourceLocator} />
-                    </h3>
-                  </div>
-                  {result.citations.map((c, i) => (
-                    <div className="citation" key={c.assertion_id}>
-                      <span className="citation-num">[{i + 1}]</span>
-                      <div className="citation-body">
-                        <div
-                          style={{
-                            display: 'flex',
-                            gap: 9,
-                            alignItems: 'center',
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <strong>{c.label}</strong>
-                          <EpistemicBadge
-                            epistemicClass={c.epistemic_class}
-                            size="sm"
-                            tipPlacement="above"
-                          />
-                          <ConfidenceBar value={c.confidence} floor={floor} width={54} />
-                        </div>
-                        {c.quote && <div className="citation-quote">{c.quote}</div>}
-                        <div className="citation-loc">
-                          {c.document_id
-                            ? `${c.filename ?? c.document_id} · page ${c.page}`
-                            : 'structured source'}
-                        </div>
-                      </div>
-                      {c.document_id && c.page != null && (
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() =>
-                            setOpenDocument({
-                              documentId: c.document_id as string,
-                              filename: c.filename || (c.document_id as string),
-                              page: c.page as number,
-                              quote: c.quote ?? null,
-                            })
-                          }
-                        >
-                          Open at page {c.page}
-                        </button>
-                      )}
+                    </div>
+                    {p.page != null && (
                       <button
                         className="btn btn-ghost btn-sm"
-                        onClick={() => setOpenProvenance(c.assertion_id)}
+                        onClick={() =>
+                          setOpenDocument({
+                            documentId: p.document_id,
+                            filename: p.filename || p.document_id,
+                            page: p.page as number,
+                            quote: p.text ?? null,
+                          })
+                        }
+                      >
+                        Open at page {p.page}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {hits.length > 0 && (
+              <div className="card">
+                <div className="card-header">
+                  <h3>
+                    {result.tier === 3 ? 'Related facts in the graph' : 'Facts that answer this'}
+                    <FieldHelp text="Each row is an assertion the read was willing to trust: it cleared the confidence floor and its review state allows it to be used. The matched terms say why it came back, so a surprising result traces to the word that pulled it in." />
+                  </h3>
+                  <span className="card-note">{hits.length}</span>
+                </div>
+                <div className="path-chain">
+                  {hits.map((h) => (
+                    <div
+                      key={h.assertion_id}
+                      className="path-hop"
+                      style={epiStyle(h.epistemic_class)}
+                    >
+                      <EpistemicBadge
+                        epistemicClass={h.epistemic_class}
+                        size="sm"
+                        showLabel={false}
+                      />
+                      <span>
+                        <strong>{entityLabel(h.subject_id)}</strong>{' '}
+                        <span className="prov-pred">{h.predicate}</span>{' '}
+                        <strong>{entityLabel(h.object_id)}</strong>
+                        <span className="dim" style={{ display: 'block', fontSize: 11.5 }}>
+                          {h.matched_on.length > 0 && `matched on ${h.matched_on.join(', ')}`}
+                          {h.source.filename
+                            ? `${h.matched_on.length > 0 ? ' · ' : ''}${h.source.filename}${
+                                h.source.page != null ? `, page ${h.source.page}` : ''
+                              }`
+                            : ''}
+                        </span>
+                      </span>
+                      <ConfidenceBar value={h.confidence} floor={floor} width={54} />
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ marginLeft: 'auto' }}
+                        onClick={() => setOpenProvenance(h.assertion_id)}
                       >
                         Why?
                       </button>
                     </div>
                   ))}
                 </div>
-              )}
+              </div>
+            )}
 
+            {!rows && hits.length === 0 && passages.length === 0 && (
+              <div className="card">
+                <div className="card-header">
+                  <h3>Answer</h3>
+                </div>
+                <div className="answer-block">
+                  Nothing came back. The question reached {tierMeta.label.toLowerCase()}, but no
+                  row, fact or passage cleared the trust floor of {floor.toFixed(2)}.
+                </div>
+              </div>
+            )}
+
+            {result.sql && (
               <div className="card">
                 <div className="card-header">
                   <h3>
-                    The four routes
-                    <FieldHelp text={HELP.resolutionTier} />
+                    {result.tier === 4 ? 'Generated SQL' : 'Compiled SQL'}
+                    <FieldHelp
+                      text={
+                        result.tier === 4
+                          ? 'Written by a language model against the real schema, then checked by the query firewall. It is shown in full because you should read it before relying on the figure.'
+                          : 'Compiled from the governed metric definition. Deterministic: the same definition always produces this query, with no model involved.'
+                      }
+                    />
+                  </h3>
+                  <span className={`tag ${result.tier === 4 ? 'tag-orange' : 'tag-green'}`}>
+                    {result.tier === 4 ? 'model-written' : 'deterministic'}
+                  </span>
+                </div>
+                <pre className="code-block">{result.sql}</pre>
+              </div>
+            )}
+
+            {result.citations.length > 0 && (
+              <div className="card">
+                <div className="card-header">
+                  <h3>
+                    Citations
+                    <FieldHelp text={HELP.sourceLocator} />
                   </h3>
                 </div>
-                <div className="tier-ladder">
-                  {([1, 2, 3, 4] as const).map((t) => (
-                    <div
-                      key={t}
-                      className={`tier-ladder-row${result.tier === t ? ' active' : ''}`}
-                      style={{ '--tier-colour': TIERS[t].colour } as CSSProperties}
-                    >
-                      <span className="tier-ladder-num">{t}</span>
-                      <span>
-                        <strong>{TIERS[t].label}.</strong> {TIERS[t].detail}
-                      </span>
+                {result.citations.map((c, i) => (
+                  <div className="citation" key={c.assertion_id}>
+                    <span className="citation-num">[{i + 1}]</span>
+                    <div className="citation-body">
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: 9,
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <strong>{c.label}</strong>
+                        <EpistemicBadge
+                          epistemicClass={c.epistemic_class}
+                          size="sm"
+                          tipPlacement="above"
+                        />
+                        <ConfidenceBar value={c.confidence} floor={floor} width={54} />
+                      </div>
+                      {c.quote && <div className="citation-quote">{c.quote}</div>}
+                      <div className="citation-loc">
+                        {c.document_id
+                          ? `${c.filename ?? c.document_id} · page ${c.page}`
+                          : 'structured source'}
+                      </div>
                     </div>
-                  ))}
-                </div>
+                    {c.document_id && c.page != null && (
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() =>
+                          setOpenDocument({
+                            documentId: c.document_id as string,
+                            filename: c.filename || (c.document_id as string),
+                            page: c.page as number,
+                            quote: c.quote ?? null,
+                          })
+                        }
+                      >
+                        Open at page {c.page}
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setOpenProvenance(c.assertion_id)}
+                    >
+                      Why?
+                    </button>
+                  </div>
+                ))}
               </div>
-            </>
-          )}
+            )}
+
+            <div className="card">
+              <div className="card-header">
+                <h3>
+                  The four routes
+                  <FieldHelp text={HELP.resolutionTier} />
+                </h3>
+              </div>
+              <div className="tier-ladder">
+                {([1, 2, 3, 4] as const).map((t) => (
+                  <div
+                    key={t}
+                    className={`tier-ladder-row${result.tier === t ? ' active' : ''}`}
+                    style={{ '--tier-colour': TIERS[t].colour } as CSSProperties}
+                  >
+                    <span className="tier-ladder-num">{t}</span>
+                    <span>
+                      <strong>{TIERS[t].label}.</strong> {TIERS[t].detail}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
         </>
       )}
 

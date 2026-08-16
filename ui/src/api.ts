@@ -445,27 +445,61 @@ export interface QueryCitation {
   quote?: string | null
 }
 
+/** One assertion an answer rests on, with the terms that matched it. */
+export interface QueryHit {
+  assertion_id: string
+  subject_id: string
+  predicate: string
+  object_id: string
+  epistemic_class: EpistemicClass
+  confidence: number
+  matter_id?: string | null
+  matched_on: string[]
+  source: SourceLocator
+}
+
+/** A passage the vector search returned, before the graph expanded around it. */
+export interface QueryPassage {
+  document_id: string
+  filename?: string | null
+  page?: number | null
+  text?: string | null
+  score?: number | null
+  char_start?: number | null
+  char_end?: number | null
+}
+
+export interface QueryRows {
+  columns: string[]
+  rows: (string | number | null)[][]
+}
+
+/**
+ * Shaped by whichever tier answered, so a union rather than a string.
+ *
+ * It was declared `string` and rendered straight as a React child, which blanked the whole page
+ * the moment tier 2 answered — the graph tier puts a list of assertions here, not prose. `tsc` was
+ * clean throughout, because a type is a claim about the response and nothing checks it against one.
+ */
+export type QueryAnswer =
+  | QueryRows
+  | QueryHit[]
+  | { passages: QueryPassage[]; related: QueryHit[] }
+  | null
+
 export interface QueryResult {
-  question: string
   tier: ResolutionTier
-  tier_reason: string
-  answer: string
-  /** Present for tiers 1, 3 and 4. Tier 1 SQL is compiled, not generated. */
+  tier_name: string
+  /** False only for tier 4, the one that lets a model write the SQL. */
+  governed: boolean
+  explanation: string
+  answer: QueryAnswer
+  /** Present for tiers 1 and 4. Tier 1 SQL is compiled, never generated. */
   sql?: string | null
-  metric_id?: string | null
-  /** Present for tiers 2 and 3 — the assertions the traversal walked. */
-  path?: {
-    subject_label: string
-    predicate: string
-    object_label: string
-    assertion_id: string
-    epistemic_class: EpistemicClass
-    confidence: number
-  }[]
   citations: QueryCitation[]
-  rows?: { columns: string[]; rows: (string | number | null)[][] } | null
-  blocked?: boolean
-  blocked_reason?: string | null
+  assertions_used: string[]
+  tiers_attempted: ResolutionTier[]
+  warnings: string[]
 }
 
 // ── Graph ────────────────────────────────────────────────────────────────────
