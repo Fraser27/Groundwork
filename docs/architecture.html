@@ -137,7 +137,27 @@ rather than the <code>data</code> stack because it names the application's task 
 attaches policy to the stack owning the role.</li>
 <li><strong>Standby replicas are enabled</strong> because with a minimum capacity of zero there is no
 floor to double, so an idle collection bills nothing either way and the redundancy is free.</li>
+<li><strong>The collection is reached over public DNS, not a private endpoint</strong>, and that is a
+constraint of this collection generation rather than a preference. A next-generation collection's
+hostname sits in a domain the private zone attached by the service's VPC endpoint does not cover, so
+inside the network it resolves to a public address and the network policy refuses the request as
+coming from the internet. There is no configuration in which the private endpoint works for it. The
+alternative is the older collection type, which resolves privately but carries a two-unit capacity
+floor, roughly $350 a month while idle against scaling to zero.</li>
 </ul>
+
+<div class="note warn">
+<div class="note-title">What that costs, stated plainly</div>
+<p>One layer fewer than the design intended. Reaching the collection over the public internet is not
+the same as being able to read it: the data access policy still names a single principal, every
+request is signed, indexes are one per firm so a scoping mistake fails closed rather than open, and
+the interactive dashboard is deliberately absent from the policy so there is no browsable read path
+to privileged text.</p>
+<p>But defence in depth means not relying on any single one of those, and this removed the outermost.
+It should be revisited if the private zone ever covers the newer domain, and it is the reason the
+failure took five attempts to diagnose: the refusal arrives as a bare authentication error with no
+body, which sends you to look at credentials and permissions that were correct the whole time.</p>
+</div>
 
 <p>Embeddings are written here, one index per tenant, named so that a mistake fails closed with
 "index not found" rather than returning another firm's documents. The matter wall is applied as a
