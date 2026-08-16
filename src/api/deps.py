@@ -28,6 +28,7 @@ from src.documents.runner import IngestLimiter
 from src.governance import GovernanceSettings
 from src.governance_store import GovernanceStore, InMemoryGovernanceStore
 from src.graph.scope import AuthContext, ScopeViolation
+from src.graph_audit import GraphAudit, InMemoryGraphAudit
 from src.metrics.loader import load_metrics
 from src.metrics.models import StaticCatalog
 from src.ontology.loader import Ontology, load_ontology
@@ -68,6 +69,11 @@ class Services:
     """Where settings live. DynamoDB when a tenant table is configured, memory otherwise.
     Without this an Admin change was lost on the next deploy, which for the ungoverned-query
     kill switch means a firm believing questions are refused while they are being answered."""
+
+    graph_audit: Any | None = None
+    """Append-only record of who changed what the system believes: a reviewer overriding a model,
+    an administrator wiping a document. Distinct from the access audit, which answers who could
+    *read* what."""
 
     blocked_queries: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     """Refused questions per tenant, newest last.
@@ -287,6 +293,19 @@ def _build_job_store(cfg: LexGraphConfig) -> InMemoryJobStore | DynamoJobStore:
     return DynamoJobStore(cfg.tables.jobs)
 
 
+def _build_graph_audit(cfg: LexGraphConfig) -> object:
+    """The grants table, which already holds the compliance artifact and is already RETAIN.
+
+    Falls back to memory rather than to nothing: a wipe that cannot be recorded still reports the
+    failure, and `wipe` says so in its report, so an unaudited deletion is never silent.
+    """
+    if not cfg.tables.grants:
+        logger.info("graph audit held in process (no grants table configured)")
+        return InMemoryGraphAudit()
+    logger.info("graph audit backed by DynamoDB table %s", cfg.tables.grants)
+    return GraphAudit(cfg.tables.grants)
+
+
 def _build_governance_store(cfg: LexGraphConfig) -> object:
     """DynamoDB when a tenant table is configured, memory otherwise.
 
@@ -337,6 +356,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
     tenants = _build_tenant_directory(cfg)
 
     governance_store = _build_governance_store(cfg)
+    graph_audit = _build_graph_audit(cfg)
 
     embedder: Embedder | None = None
     if cfg.vector.enabled:
@@ -361,6 +381,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
         ingest_limiter=IngestLimiter(cfg.documents.max_concurrent_ingests),
         tenant_directory=tenants,
         governance_store=governance_store,
+        graph_audit=graph_audit,
         user_admin=(
             UserAdmin(cfg.auth.user_pool_id, region=cfg.auth.region)
             if cfg.auth.user_pool_id

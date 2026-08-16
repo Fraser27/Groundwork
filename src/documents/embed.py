@@ -261,6 +261,20 @@ class Embedder:
         """
         return self.store.delete_tenant(f"tenant-{tenant_id}-chunks", tenant_id)
 
+    def forget_document(self, ctx: AuthContext, document_id: str) -> int:
+        """Drop one document's chunks, returning how many went.
+
+        Deleted outright rather than superseded, unlike an assertion. A vector is not a claim
+        about anything -- it is a derived index entry with no provenance to preserve -- so there
+        is no such thing as an audit trail of an embedding. Replaying the document rebuilds it.
+
+        Takes a `ctx` rather than a bare tenant id because this runs on a request path, and the
+        index name has to come from the caller's own scope.
+        """
+        dropped = self.store.delete_document(index_name(ctx), document_id)
+        logger.info("dropped %d vectors for %s", dropped, document_id)
+        return dropped
+
     def search(self, ctx: AuthContext, query: str, *, top_k: int = 10) -> list[SearchHit]:
         return self.store.search(
             index_name(ctx),

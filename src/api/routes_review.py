@@ -33,7 +33,7 @@ from src.documents.storage import (
     DocumentNotFound,
     storage_from_config,
 )
-from src.graph.assertions import EpistemicClass, ReviewState
+from src.graph.assertions import AssertionError_, EpistemicClass, ReviewState
 from src.graph.scope import AuthContext, ScopeViolation
 
 logger = logging.getLogger(__name__)
@@ -384,3 +384,103 @@ async def run_reasoner(services: ServicesDep, principal: TenantDep) -> dict[str,
         "rests on, so a reviewer can follow it back to the documents underneath."
     )
     return out
+
+
+class CorrectRequest(BaseModel):
+    predicate: str | None = None
+    subject_id: str | None = None
+    object_id: str | None = None
+    reason: str = Field(min_length=1, max_length=2000)
+    """Mandatory. A correction without a stated reason is an unexplained override of a model,
+    which is the one thing an audit trail cannot make sense of later."""
+
+
+@router.post("/tenants/{tenant}/assertions/{assertion_id}/correct")
+async def correct(
+    services: ServicesDep,
+    principal: TenantDep,
+    assertion_id: str,
+    body: Annotated[CorrectRequest, Body()],
+) -> dict[str, Any]:
+    """Record what a reviewer says instead, and close the model's version.
+
+    The third option beside approve and reject. A model that spots two parties and misjudges what
+    connects them has found something worth keeping, and neither accepting nor discarding it is
+    the right answer.
+
+    Never an edit: the correction is a new DECLARED assertion whose method names the reviewer, and
+    the original is superseded rather than rewritten, so an as-of read still shows what the model
+    said. Editing in place would leave the record claiming the model extracted something it did
+    not.
+    """
+    require_reviewer(principal)
+    ctx, _ = principal
+    floor = services.settings_for(ctx.tenant_id).min_confidence_floor
+
+    predicate = body.predicate
+    allowed = services.ontology.allowed_for(predicate) if predicate else None
+    if predicate and predicate in services.ontology.rule_conclusions:
+        # Only a rule may conclude these, and a reviewer correcting a claim into one would create
+        # a conflict flag with no premises -- exactly what the extractor is already barred from.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"{predicate} is drawn by a rule from other facts, so it cannot be asserted directly. "
+            "Correct the underlying relationships and the rule will draw it.",
+        )
+
+    try:
+        corrected, original = services.review_queue.supersede(
+            ctx,
+            assertion_id,
+            predicate=predicate,
+            subject_id=body.subject_id,
+            object_id=body.object_id,
+            reason=body.reason,
+            allowed_predicates=allowed,
+        )
+    except ScopeViolation as e:
+        raise scope_violation_to_http(e) from e
+    except AssertionNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
+    except ReviewError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+    except AssertionError_ as e:
+        # An invariant refused the corrected claim -- most likely a predicate outside the closed
+        # vocabulary. The message names which one, so it is passed through.
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+
+    _record_correction(services, ctx, original.assertion_id, corrected.assertion_id, body.reason)
+
+    return {
+        "corrected": _to_out(corrected, floor).model_dump(),
+        "superseded": _to_out(original, floor).model_dump(),
+        "note": (
+            "The reviewer's version is live and declared by them, not by a model. The original "
+            "is closed rather than deleted, so an as-of read before now still shows what the "
+            "model proposed and why it was overridden."
+        ),
+    }
+
+
+def _record_correction(
+    services: Any, ctx: Any, original_id: str, corrected_id: str, reason: str
+) -> None:
+    """Log the override. Best-effort: the correction itself already succeeded."""
+    audit = getattr(services, "graph_audit", None)
+    if audit is None:
+        return
+    from src.graph_audit import SUPERSEDE, GraphEvent
+
+    try:
+        audit.append(
+            GraphEvent(
+                tenant_id=ctx.tenant_id,
+                actor=ctx.user_id,
+                action=SUPERSEDE,
+                assertion_ids=(original_id, corrected_id),
+                reason=reason,
+                detail={"superseded": original_id, "corrected": corrected_id},
+            )
+        )
+    except Exception as e:
+        logger.warning("could not audit the correction of %s: %s", original_id, e)

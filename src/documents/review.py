@@ -30,10 +30,16 @@ from src.graph.assertions import (
     Assertion,
     EpistemicClass,
     ReviewState,
+    build_assertion,
 )
 from src.graph.scope import AuthContext, ScopeViolation
 
 logger = logging.getLogger(__name__)
+
+#: Confidence on a reviewer's correction. High, because a person reading the cited span is as
+#: certain as this system gets about what a document says -- but not 1.0, because the document
+#: itself can be wrong and nothing here should claim otherwise.
+REVIEWER_CONFIDENCE = 0.98
 
 
 def _now() -> str:
@@ -73,6 +79,13 @@ class AssertionRecord:
     review_note: str | None = None
     retracted_reason: str | None = None
     retracted_by: str | None = None
+    corrects: str | None = None
+    """The assertion this one replaces, when a reviewer corrected it.
+
+    Not `premises`: the contract refuses those on a DECLARED assertion, and correctly, because
+    premises mean "derived from" and a reviewer read the document rather than deriving anything
+    from the model's mistake. This records that a person overrode a specific extraction without
+    misstating how the new claim was reached."""
 
     @property
     def assertion_id(self) -> str:
@@ -294,6 +307,117 @@ class ReviewQueue:
         self.store.put(record)
         logger.info("%s approved %s, now live", ctx.user_id, assertion_id)
         return record
+
+    def supersede(
+        self,
+        ctx: AuthContext,
+        assertion_id: str,
+        *,
+        predicate: str | None = None,
+        subject_id: str | None = None,
+        object_id: str | None = None,
+        reason: str,
+        allowed_predicates: frozenset[str] | None = None,
+    ) -> tuple[AssertionRecord, AssertionRecord]:
+        """Correct a claim: record what the reviewer says instead, and close the original.
+
+        The third option a reviewer needs. Approve accepts a model's reading, reject discards it,
+        and neither fits "the relationship is real but this is the wrong predicate" -- which is
+        the common case, because a model that spots two parties and misjudges what connects them
+        has found something worth keeping.
+
+        **Never an edit.** An assertion says that a named method, at a named version, reading a
+        named span, produced this claim, and `assertion_id` is a hash over exactly that. Changing
+        the predicate in place would leave the record asserting that the model extracted something
+        it did not, so the provenance would be a lie that still looked authoritative. Instead:
+
+        - a **new DECLARED assertion** carries the reviewer's version. DECLARED because a person
+          asserted it, which is why it needs no second review -- and its `method` names the
+          reviewer, so "who says so" resolves to a human rather than a model;
+        - the original is **superseded, not deleted**, so an `as_of` read before this moment still
+          shows what the model said and what the file supported at the time.
+
+        The corrected assertion keeps the original's `source_locator`, deliberately: the reviewer
+        is re-reading the same span, and a correction with no citation would be an opinion.
+
+        It does **not** name the original as a premise, and the contract is right to refuse that:
+        premises mean "derived from", and this claim is not derived from the model's mistake -- the
+        reviewer read the document. The link is recorded as `corrects` on the record instead, so
+        the trail still shows a person overrode a specific extraction without misstating how the
+        new claim was reached.
+
+        Returns `(corrected, original)`.
+        """
+        if not reason:
+            raise ReviewError("a correction must carry a reason: it is the record of why")
+
+        record = self.fetch(ctx, assertion_id)
+        if not record.is_current:
+            raise ReviewError(
+                f"{assertion_id} was withdrawn at {record.assertion.superseded_at}; "
+                "correcting it would revive a retracted claim"
+            )
+
+        original = record.assertion
+        new_predicate = predicate or original.predicate
+        new_subject = subject_id or original.subject_id
+        new_object = object_id or original.object_id
+        if (new_predicate, new_subject, new_object) == (
+            original.predicate,
+            original.subject_id,
+            original.object_id,
+        ):
+            raise ReviewError(
+                "a correction must change the subject, predicate or object; "
+                "to accept the claim as it stands, approve it"
+            )
+
+        at = _now()
+        corrected = build_assertion(
+            tenant_id=original.tenant_id,
+            subject_id=new_subject,
+            predicate=new_predicate,
+            object_id=new_object,
+            # DECLARED, not EXTRACTED_MODEL: a person asserted this, and the class is the axis
+            # that keeps "a lawyer says so" distinguishable from "a model read it".
+            epistemic_class=EpistemicClass.DECLARED,
+            method=f"reviewer:{ctx.user_id}",
+            # A reviewer correcting a claim is as certain as this system gets about a document.
+            # Not 1.0: the underlying document could still be wrong.
+            confidence=REVIEWER_CONFIDENCE,
+            source_locator=original.source_locator,
+            matter_id=original.matter_id,
+            valid_from=original.valid_from,
+            allowed_predicates=allowed_predicates,
+        )
+
+        original.superseded_at = at
+        record.retracted_reason = f"corrected by {ctx.user_id}: {reason}"
+        record.retracted_by = ctx.user_id
+        # Review state records that a person dealt with it. Not APPROVED -- they did not accept
+        # the claim -- and not REJECTED, because the extraction found something real.
+        original.review_state = ReviewState.REJECTED
+        original.reviewed_by = ctx.user_id
+        original.reviewed_at = at
+        if record.lifecycle is Lifecycle.STAGED:
+            record.lifecycle = Lifecycle.DISCARDED
+        self.store.put(record)
+
+        new_record = AssertionRecord(
+            assertion=corrected, lifecycle=Lifecycle.LIVE, job_id=record.job_id
+        )
+        new_record.review_note = reason
+        new_record.corrects = original.assertion_id
+        self.store.put(new_record)
+
+        logger.info(
+            "%s corrected %s: %s -> %s",
+            ctx.user_id,
+            assertion_id,
+            original.predicate,
+            new_predicate,
+        )
+        return new_record, record
 
     def reject(self, ctx: AuthContext, assertion_id: str, *, reason: str) -> AssertionRecord:
         """Reject a claim. The reason is mandatory — it is the training signal.

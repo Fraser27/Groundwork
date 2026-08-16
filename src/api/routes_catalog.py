@@ -16,11 +16,12 @@ from fastapi import APIRouter, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.admin_ops import ResetScope, replay, reset_derived
-from src.api.deps import ServicesDep, TenantDep, require_admin
+from src.api.deps import ServicesDep, TenantDep, require_admin, scope_violation_to_http
 from src.discovery.catalog_store import CatalogTable
 from src.discovery.glue_scanner import scan_catalog
 from src.documents.models import JobState
 from src.graph.assertions import EpistemicClass, ReviewState
+from src.graph.scope import ScopeViolation
 from src.ontology.loader import ONTOLOGY_DIR, load_ontology
 from src.sample_data import load_sample_data
 
@@ -579,3 +580,114 @@ async def replay_route(
     require_admin(principal)
     ctx, _ = principal
     return replay(services, ctx, run_model_extraction=run_model_extraction).to_dict()
+
+
+class WipeRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+    """Mandatory. The reason is the point of the audit entry: a deletion nobody can explain
+    later is indistinguishable from data loss."""
+
+    drop_vectors: bool = True
+    drop_jobs: bool = True
+
+
+@router.post("/tenants/{tenant}/documents/{document_id}/wipe")
+async def wipe_document_facts(
+    services: ServicesDep,
+    principal: TenantDep,
+    document_id: str,
+    body: Annotated[WipeRequest, Body()],
+) -> dict[str, Any]:
+    """Withdraw everything derived from one document, so it can be re-read cleanly.
+
+    Soft: assertions are closed rather than deleted, so an as-of read before now still shows them
+    and the Audit page records who withdrew them. The document itself stays in S3 -- it is the
+    source of truth and the only thing here that cannot be rebuilt -- so a replay reconstructs
+    the facts with whatever the extractor now produces.
+
+    Inferences drawn from these facts are left standing, deliberately. They were true when drawn
+    and their premises remain resolvable; retracting them would assert the firm never held a
+    belief it did hold.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+
+    from src.documents.wipe import wipe_document
+
+    try:
+        report = wipe_document(
+            services,
+            ctx,
+            document_id,
+            reason=body.reason,
+            drop_vectors=body.drop_vectors,
+            drop_jobs=body.drop_jobs,
+        )
+    except ScopeViolation as e:
+        raise scope_violation_to_http(e) from e
+    except ValueError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    return report.to_dict()
+
+
+@router.post("/tenants/{tenant}/matters/{matter_id}/wipe")
+async def wipe_matter_facts(
+    services: ServicesDep,
+    principal: TenantDep,
+    matter_id: str,
+    body: Annotated[WipeRequest, Body()],
+) -> dict[str, Any]:
+    """The same, for every document on one matter.
+
+    Scoped through the caller's own grants, so a matter they are screened from is not wipeable by
+    them: an ethical wall that holds for reads and not for deletions is not a wall.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+
+    from src.documents.wipe import wipe_matter
+
+    try:
+        report = wipe_matter(
+            services,
+            ctx,
+            matter_id,
+            reason=body.reason,
+            drop_vectors=body.drop_vectors,
+            drop_jobs=body.drop_jobs,
+        )
+    except ScopeViolation as e:
+        raise scope_violation_to_http(e) from e
+    except ValueError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    return report.to_dict()
+
+
+@router.get("/tenants/{tenant}/audit/graph")
+async def graph_audit_log(
+    services: ServicesDep,
+    principal: TenantDep,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict[str, Any]:
+    """Who changed what the system believes, newest first.
+
+    The trace back for a soft delete: a fact withdrawn from the current graph is still recorded
+    here with who withdrew it and when, which is what makes the deletion auditable rather than a
+    gap in the record.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+
+    audit = services.graph_audit
+    if audit is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no graph audit log is configured")
+    events = audit.events(ctx.tenant_id, limit=limit)
+    return {
+        "events": [e.to_dict() for e in events],
+        "count": len(events),
+        "note": (
+            "Append-only. Nothing here is edited or removed, and neither are the facts it "
+            "describes: they are closed rather than deleted, so an as-of read before an entry "
+            "still reconstructs what the graph held."
+        ),
+    }

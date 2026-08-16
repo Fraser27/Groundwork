@@ -120,6 +120,9 @@ class InMemoryJobStore:
             reverse=True,
         )
 
+    def drop_job(self, tenant_id: str, job_id: str) -> bool:
+        return self._jobs.pop((tenant_id, job_id), None) is not None
+
     def drop_tenant(self, tenant_id: str) -> int:
         doomed = [k for k in self._jobs if k[0] == tenant_id]
         for key in doomed:
@@ -200,6 +203,16 @@ class DynamoJobStore:
         )
         jobs = [_to_job(i) for i in got.get("Items", [])]
         return sorted(jobs, key=lambda j: j.created_at, reverse=True)
+
+    def drop_job(self, tenant_id: str, job_id: str) -> bool:
+        """Delete one job row.
+
+        Deleted rather than superseded: a job is bookkeeping about a pipeline run, not a claim
+        about the world, so there is no belief here to preserve. What the run *concluded* lives in
+        the assertions, which are superseded rather than removed.
+        """
+        self.table.delete_item(Key={"PK": tenant_pk(tenant_id), "SK": f"{JOB}{job_id}"})
+        return True
 
     def drop_tenant(self, tenant_id: str) -> int:
         """Delete every job row for a tenant.
