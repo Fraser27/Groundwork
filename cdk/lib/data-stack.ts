@@ -13,7 +13,6 @@ export interface DataStackProps extends cdk.StackProps {
   readonly config: LexGraphConfig;
   readonly vpc: ec2.IVpc;
   readonly neptuneSg: ec2.ISecurityGroup;
-  readonly vectorSg: ec2.ISecurityGroup;
 }
 
 /**
@@ -43,7 +42,7 @@ export class DataStack extends cdk.Stack {
     super(scope, id, props);
     tagStack(this, 'data');
 
-    const { config, vpc, neptuneSg, vectorSg } = props;
+    const { config, vpc, neptuneSg } = props;
 
     this.documentKey = this.buildDocumentKey();
     this.documentBucket = this.buildDocumentBucket();
@@ -53,7 +52,7 @@ export class DataStack extends cdk.Stack {
     this.neptuneCluster = cluster;
     this.neptuneEndpoint = endpoint;
 
-    const { collection, endpoint: vectorEndpoint } = this.buildVectorStore(config, vpc, vectorSg);
+    const { collection, endpoint: vectorEndpoint } = this.buildVectorStore(config);
     this.vectorCollection = collection;
     this.vectorCollectionEndpoint = vectorEndpoint;
 
@@ -238,8 +237,6 @@ export class DataStack extends cdk.Stack {
    */
   private buildVectorStore(
     config: LexGraphConfig,
-    _vpc: ec2.IVpc,
-    _vectorSg: ec2.ISecurityGroup,
   ): { collection: aoss.CfnCollection; endpoint: string } {
     const collectionName = `${PROJECT}-vectors`;
 
@@ -273,9 +270,10 @@ export class DataStack extends cdk.Stack {
     // left in place because an endpoint that no traffic can use still bills hourly and reads,
     // to anyone auditing this stack, as a private path that does not exist.
     //
-    // `vectorSg` is consequently unused for the collection. Kept as a parameter because the
-    // moment this becomes a CLASSIC collection, or the private zone starts covering the
-    // NextGen domain, the endpoint comes back and needs it.
+    // The vector security group is consequently not passed in at all. It still exists in the
+    // network stack, unattached: keeping the *prop* would keep a CloudFormation import alive,
+    // and an import blocks deleting the export it points at, which fails the network deploy
+    // with "Cannot delete export ... as it is in use".
 
     // `AllowFromPublic: true`, and the reason is a NextGen constraint rather than a
     // preference.

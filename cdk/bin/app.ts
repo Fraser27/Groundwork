@@ -42,7 +42,6 @@ const data = new DataStack(app, `${prefix}Data`, {
   config,
   vpc: network.vpc,
   neptuneSg: network.neptuneSg,
-  vectorSg: network.vectorSg,
   description: 'LexGraph — Neptune, OpenSearch Serverless, DynamoDB, S3',
 });
 
