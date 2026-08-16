@@ -1,0 +1,11 @@
+matter_id,matter_name,client_id,adverse_party,practice_area,opened_date,status,lead_partner
+NTL-2026-0114,Northwind Trading Limited v Calder Shipping AG,CL-001,Calder Shipping AG,Commercial litigation,2026-03-12,open,Perrine Duval
+MBC-2024-0431,Meridian Bulk Carriers SA: secured revolving facility,CL-002,,Banking & finance,2024-09-11,open,James Trelawney
+HAL-2025-0092,Halveston Chartering Limited: charterparty know-how,CL-003,,Shipping advisory,2025-09-02,open,Sian Aldridge
+KBA-2025-0210,Kestrel Bank AG: facility restructure,CL-004,,Banking & finance,2025-02-10,open,James Trelawney
+ARD-2024-0055,Ardenwood Estates: portfolio acquisition,CL-005,,Real estate,2024-05-06,closed,Miriam Fenwick
+PHG-2023-0311,Pemberton Hale: supply dispute,CL-006,Vantage Logistics BV,Commercial litigation,2023-03-11,closed,Perrine Duval
+SRL-2026-0007,Saltmarsh Renewables: offshore lease,CL-007,,Energy,2026-01-07,open,Miriam Fenwick
+VLB-2025-0188,Vantage Logistics: carriage terms,CL-008,Pemberton Hale Group,Commercial litigation,2025-08-18,open,Sian Aldridge
+BPI-2025-0402,Brightlinger Pharma: licensing,CL-009,,Life sciences,2025-04-02,open,Miriam Fenwick
+COR-2024-0126,Corviston Aggregates: quarry lease renewal,CL-010,,Real estate,2024-01-26,closed,Miriam Fenwick

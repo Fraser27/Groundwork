@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Loading the demo data — LexGraph documentation</title>
-<meta name="description" content="Five interlocking matters that go through the real ingest pipeline, and how to wipe them again.">
+<meta name="description" content="Five interlocking matters that go through the real ingest pipeline, the Athena practice data that corroborates them, and how to wipe it all again.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="assets/docs.css">
 <script src="assets/nav.js"></script>
@@ -114,10 +114,48 @@ answer to <em>why does the system believe this</em> in its concrete form.</p>
 
 <div class="note example">
 <div class="note-title">A question worth asking first</div>
-<p>Ask <em>"are there any conflicts on the Northern Trade matter?"</em> before loading the fifth
+<p>Ask <em>"are there any conflicts on the Northwind matter?"</em> before loading the fifth
 document, then again afterwards. The answer changes, and the citation shows which document changed
 it.</p>
 </div>
+
+<h2 id="structured">The other half: practice data in Athena</h2>
+
+<p>The documents are only half the demo. LexGraph governs structured data too, and the questions
+worth asking are the ones that need both — <em>who is the adverse party</em> comes from a page,
+<em>what have we billed them</em> comes from a warehouse. Until there are rows somewhere, half the
+product has nothing to stand on.</p>
+
+<pre><code>./sample/glue/load_firm_metadata.sh</code></pre>
+
+<p>That creates a Glue database called <code>lexgraph_legal</code> with three Iceberg tables —
+<code>clients</code>, <code>matters</code> and <code>time_entries</code> — holding ten clients, ten
+matters and twenty-four time entries. Then in <strong>Admin</strong>, <strong>Scan catalog</strong>,
+tick <code>lexgraph_legal</code>. Only the schema enters the graph; the rows stay in S3 and are
+queried in place.</p>
+
+<p>The data is not arbitrary. It uses the names, references, partners and charge-out rates the PDFs
+actually contain: <code>NTL-2026-0114</code> is led by Perrine Duval and opened 12 March 2026 in both
+places, and the rates are the ones the engagement letter quotes. That correlation is the point,
+because a row and an extracted fact that describe the same engagement can be joined, and two that
+differ by a character cannot.</p>
+
+<div class="note example">
+<div class="note-title">The most interesting row is the one that is missing</div>
+<p><strong>Calder Shipping AG is deliberately absent from <code>clients</code></strong>, because the
+conflict memorandum states the firm has never acted for it. It appears only as the adverse party on
+<code>NTL-2026-0114</code>. So <em>"is Calder Shipping a client of ours?"</em> returns no rows, and
+that emptiness is the conflict analysis being confirmed rather than a gap in the data — Meridian is
+a client <em>and</em> a shareholder in Calder; Calder itself is not a client. Adding a row for Calder
+would contradict the document and quietly make the whole demo incoherent.</p>
+</div>
+
+<p>Matters live in <code>sample/glue/matters.csv</code> rather than inside the script, because the
+same ten records are also the matters you file documents under. One list, read twice.</p>
+
+<p>Re-running the script converges instead of duplicating: the tables are Iceberg, so it clears each
+one and reloads it. That is the reason for Iceberg here rather than a crawler over CSV — a demo you
+cannot re-run without clearing S3 by hand is a demo people stop running.</p>
 
 <h2 id="starting-again">Starting again</h2>
 

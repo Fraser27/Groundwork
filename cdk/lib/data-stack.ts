@@ -143,7 +143,11 @@ export class DataStack extends cdk.Stack {
       // Nothing here is a source of truth, so it is disposable by design.
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
-      lifecycleRules: [{ expiration: cdk.Duration.days(14) }],
+      // Scoped to the results prefix, not the bucket. The same bucket holds the Iceberg
+      // warehouse for the demo dataset, and an unprefixed expiry deleted declared tables
+      // out from under Glue -- the metadata survived, so the failure looked like corruption
+      // rather than a lifecycle rule doing exactly what it said.
+      lifecycleRules: [{ prefix: 'athena-results/', expiration: cdk.Duration.days(14) }],
     });
   }
 
