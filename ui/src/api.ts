@@ -235,6 +235,17 @@ export interface WithheldMatter {
   contact?: string | null
 }
 
+/** What a bulk link moved. Assertion ids are unchanged: a matter is not part of a fact's identity. */
+export interface LinkReport {
+  matter_id: string
+  documents: string[]
+  assertions_relinked: number
+  previous_matters: Record<string, string | null>
+  errors: string[]
+  at: string
+  note: string
+}
+
 export interface MattersResponse {
   matters: Matter[]
   withheld: WithheldMatter[]
@@ -751,6 +762,25 @@ export const api = {
       `/tenants/${tenant}/users/${encodeURIComponent(email)}`,
       { method: 'DELETE' },
     ),
+  /** Create a matter, or rename an existing one. It then exists before any document is filed. */
+  createMatter: (tenant: string, matterId: string, name: string) =>
+    request<Matter>(`/tenants/${tenant}/matters`, {
+      method: 'POST',
+      body: JSON.stringify({ matter_id: matterId, name }),
+    }),
+
+  /** File several documents under a matter, or move them there. Audited. */
+  linkDocumentsToMatter: (
+    tenant: string,
+    matterId: string,
+    documentIds: string[],
+    reason?: string,
+  ) =>
+    request<LinkReport>(`/tenants/${tenant}/matters/${encodeURIComponent(matterId)}/documents`, {
+      method: 'POST',
+      body: JSON.stringify({ document_ids: documentIds, reason: reason || undefined }),
+    }),
+
   createSource: (tenant: string, s: Partial<Source>) =>
     request<Source>(`/tenants/${tenant}/sources`, { method: 'POST', body: JSON.stringify(s) }),
   listTables: (tenant: string) => request<TableSummary[]>(`/tenants/${tenant}/tables`),
@@ -770,7 +800,7 @@ export const api = {
   uploadDocument: async (
     tenant: string,
     file: File,
-    matterId?: string,
+    matterId: string,
   ): Promise<DocumentSummary> => {
     const form = new FormData()
     form.append('file', file)
@@ -802,20 +832,22 @@ export const api = {
    * Resolves once S3 has the object. Ingestion is still running at that point — poll
    * `documentJobs`, or subscribe with `subscribeIngestEvents`.
    */
-  presignUpload: (tenant: string, filename: string, mediaType?: string, matterId?: string) =>
+  /** `matterId` is required: the API refuses an upload that names no matter, because facts with
+   *  no matter are unattributable and both the Matters and Access pages group by it. */
+  presignUpload: (tenant: string, filename: string, mediaType: string | undefined, matterId: string) =>
     request<UploadTicket>(`/tenants/${tenant}/documents/presign`, {
       method: 'POST',
       body: JSON.stringify({
         filename,
         media_type: mediaType || undefined,
-        matter_id: matterId || undefined,
+        matter_id: matterId,
       }),
     }),
 
   uploadViaPresignedPost: async (
     tenant: string,
     file: File,
-    matterId?: string,
+    matterId: string,
     onProgress?: (fraction: number) => void,
   ): Promise<UploadTicket> => {
     const ticket = await api.presignUpload(tenant, file.name, file.type, matterId)

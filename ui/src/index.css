@@ -1339,6 +1339,9 @@ code, pre { font-family: var(--mono); }
   cursor: pointer;
 }
 .dropzone.over { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+/* No matter chosen. Visibly inert rather than merely ignoring a click, because a drop zone that
+   silently does nothing reads as broken; the text alongside says what is missing. */
+.dropzone.disabled { cursor: not-allowed; opacity: 0.55; border-style: dotted; }
 .dropzone strong { display: block; color: var(--text); font-size: 13.5px; margin-bottom: 4px; }
 
 /* Bytes leaving the browser, not pages being read. The file goes straight to S3, so this

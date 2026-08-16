@@ -14,6 +14,7 @@ import DocumentViewer from '../components/DocumentViewer'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import { SourceSpan } from '../components/ProvenancePanel'
+import { CreateMatterDialog, LinkDocumentsDialog } from '../components/MatterDialog'
 import WipeDialog from '../components/WipeDialog'
 import { EmptyState, ErrorState, IngestPill, Pipeline, Spinner, Toast } from '../components/Shared'
 import { fmtBytes, fmtDateTime, fmtNum } from '../format'
@@ -56,6 +57,11 @@ export default function Documents() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [wiping, setWiping] = useState<DocumentDetail | null>(null)
   const [wipingBusy, setWipingBusy] = useState(false)
+  const [creatingMatter, setCreatingMatter] = useState(false)
+  const [linking, setLinking] = useState(false)
+  const [creatingBusy, setCreatingBusy] = useState(false)
+  const [linkingBusy, setLinkingBusy] = useState(false)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [uploadMatter, setUploadMatter] = useState('')
@@ -161,12 +167,19 @@ export default function Documents() {
    */
   const upload = async (files: FileList | null) => {
     if (!files || files.length === 0) return
+    if (!uploadMatter) {
+      // Guarded here as well as by the disabled drop zone, because a drag-and-drop can reach this
+      // without the button. An upload with no matter produced facts nobody could attribute, and
+      // it failed silently: the pipeline ran and the facts were simply unusable afterwards.
+      showToast('Choose a matter first. A document has to be filed under one.', 'error')
+      return
+    }
     setUploading(true)
     const list = Array.from(files)
     try {
       for (const f of list) {
         setProgress({ name: f.name, fraction: 0 })
-        await api.uploadViaPresignedPost(tenant, f, uploadMatter || undefined, (fraction) =>
+        await api.uploadViaPresignedPost(tenant, f, uploadMatter, (fraction) =>
           setProgress({ name: f.name, fraction }),
         )
         setActive((prev) => [...prev, { filename: f.name, state: 'REGISTERED', at: Date.now() }])
@@ -213,31 +226,34 @@ export default function Documents() {
           <div className="toolbar-field" style={{ marginBottom: 0 }}>
             <label>
               Attach to matter
-              <FieldHelp text={HELP.matterWall} align="right" />
+              <FieldHelp text="Required. Every fact read out of this document inherits the matter, and both the Matters and Access pages group facts by it - so a document filed under nothing produces facts nobody can attribute or staff." />
             </label>
-            {/* A list, plus free text. Matters are derived from the documents filed under
-                them, so the first document of a new matter has nothing to select: a pure
-                dropdown would force it in unassigned, and a matter cannot be corrected
-                afterwards without re-ingesting. */}
-            <input
-              list="upload-matter-options"
-              value={uploadMatter}
-              onChange={(e) => setUploadMatter(e.target.value)}
-              placeholder="Unassigned, or type a new reference"
-            />
-            <datalist id="upload-matter-options">
+            {/* A real list, not free text. A matter is a record now, and the API refuses an
+                upload naming one that does not exist: a mistyped reference would otherwise become
+                a second matter that nothing queries, and a conflict check split across the two
+                returns half its rows while looking perfectly clean. */}
+            <select value={uploadMatter} onChange={(e) => setUploadMatter(e.target.value)}>
+              <option value="">Choose a matter…</option>
               {matters
                 .filter((m) => !m.walled)
                 .map((m) => (
                   <option key={m.matter_id} value={m.matter_id}>
-                    {m.name}
+                    {m.matter_id}
+                    {m.name && m.name !== m.matter_id ? ` - ${m.name}` : ''}
                   </option>
                 ))}
-            </datalist>
+            </select>
           </div>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ alignSelf: 'end' }}
+            onClick={() => setCreatingMatter(true)}
+          >
+            New matter
+          </button>
         </div>
         <div
-          className={`dropzone${dragOver ? ' over' : ''}`}
+          className={`dropzone${dragOver ? ' over' : ''}${uploadMatter ? '' : ' disabled'}`}
           onDragOver={(e) => {
             e.preventDefault()
             setDragOver(true)
@@ -248,16 +264,32 @@ export default function Documents() {
             setDragOver(false)
             upload(e.dataTransfer.files)
           }}
-          onClick={() => fileInput.current?.click()}
+          onClick={() => uploadMatter && fileInput.current?.click()}
           role="button"
           tabIndex={0}
+          aria-disabled={!uploadMatter}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') fileInput.current?.click()
           }}
         >
-          <strong>{uploading ? 'Uploading…' : 'Drop files here, or click to choose'}</strong>
-          PDF, DOCX or TIFF. Verbatim text becomes searchable as soon as it is parsed; anything a
-          model reads into it is held back until someone reviews it.
+          <strong>
+            {uploading
+              ? 'Uploading…'
+              : uploadMatter
+                ? 'Drop files here, or click to choose'
+                : 'Choose a matter first'}
+          </strong>
+          {uploadMatter ? (
+            <>
+              PDF, DOCX or TIFF. Verbatim text becomes searchable as soon as it is parsed; anything
+              a model reads into it is held back until someone reviews it.
+            </>
+          ) : (
+            <>
+              Every fact read out of a document inherits its matter. Filing under nothing produces
+              facts that cannot be grouped, staffed or screened, so a matter is required.
+            </>
+          )}
           <input
             ref={fileInput}
             type="file"
@@ -379,9 +411,34 @@ export default function Documents() {
       </div>
 
       <div className="card">
+        {picked.size > 0 && (
+          <div className="bulk-bar">
+            <span>
+              {picked.size} document{picked.size === 1 ? '' : 's'} selected
+            </span>
+            <button className="btn btn-primary btn-sm" onClick={() => setLinking(true)}>
+              File under a matter
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setPicked(new Set())}>
+              Clear
+            </button>
+          </div>
+        )}
         <table className="data-table data-table-hover">
           <thead>
             <tr>
+              <th style={{ width: 30 }}>
+                <input
+                  type="checkbox"
+                  aria-label="Select all shown"
+                  checked={filtered.length > 0 && picked.size === filtered.length}
+                  onChange={(e) =>
+                    setPicked(
+                      e.target.checked ? new Set(filtered.map((d) => d.document_id)) : new Set(),
+                    )
+                  }
+                />
+              </th>
               <th>File</th>
               <th>Matter</th>
               <th>
@@ -401,6 +458,20 @@ export default function Documents() {
           <tbody>
             {filtered.map((d) => (
               <tr key={d.document_id} onClick={() => openDetail(d.document_id)}>
+                {/* stopPropagation: the row opens the detail panel, and ticking a box must not. */}
+                <td onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${d.filename}`}
+                    checked={picked.has(d.document_id)}
+                    onChange={(e) => {
+                      const next = new Set(picked)
+                      if (e.target.checked) next.add(d.document_id)
+                      else next.delete(d.document_id)
+                      setPicked(next)
+                    }}
+                  />
+                </td>
                 <td>
                   <strong>{d.filename}</strong>
                   <div className="dim" style={{ fontSize: 11.5 }}>
@@ -431,7 +502,7 @@ export default function Documents() {
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8}>
+                <td colSpan={9}>
                   <EmptyState title={docs.length === 0 ? 'No documents yet' : 'No documents match'}>
                     {docs.length === 0
                       ? 'Upload a file above to start the pipeline.'
@@ -617,6 +688,60 @@ export default function Documents() {
             )}
           </div>
         </div>
+      )}
+
+      {creatingMatter && (
+        <CreateMatterDialog
+          busy={creatingBusy}
+          onCancel={() => setCreatingMatter(false)}
+          onSubmit={async (matterId, name) => {
+            setCreatingBusy(true)
+            try {
+              const m = await api.createMatter(tenant, matterId, name)
+              showToast(`${m.matter_id} created. Documents can now be filed under it.`)
+              setCreatingMatter(false)
+              // Selected immediately: the reason somebody creates a matter here is to upload
+              // into it, so making them pick it again would be pointless.
+              setUploadMatter(m.matter_id)
+              load()
+            } catch (e) {
+              showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
+            } finally {
+              setCreatingBusy(false)
+            }
+          }}
+        />
+      )}
+
+      {linking && (
+        <LinkDocumentsDialog
+          count={picked.size}
+          matters={matters.filter((m) => !m.walled)}
+          busy={linkingBusy}
+          onCancel={() => setLinking(false)}
+          onSubmit={async (matterId, reason) => {
+            setLinkingBusy(true)
+            try {
+              const r = await api.linkDocumentsToMatter(
+                tenant,
+                matterId,
+                [...picked],
+                reason,
+              )
+              showToast(
+                `${r.documents.length} document(s) filed under ${matterId}, ` +
+                  `${r.assertions_relinked} facts moved with them.`,
+              )
+              setLinking(false)
+              setPicked(new Set())
+              load()
+            } catch (e) {
+              showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
+            } finally {
+              setLinkingBusy(false)
+            }
+          }}
+        />
       )}
 
       {wiping && (
