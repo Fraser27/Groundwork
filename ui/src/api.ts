@@ -434,15 +434,20 @@ export interface Metric {
 /** Which tier of the read path answered. Tier 1 is the only LLM-free one. */
 export type ResolutionTier = 1 | 2 | 3 | 4
 
+/**
+ * A document span the answer rests on. Only tier 3 sends any.
+ *
+ * Deliberately this narrow: it is built from the retrieved passage, so there is no assertion
+ * behind it and nothing to label it with. It previously also declared `assertion_id`, `label`,
+ * `epistemic_class` and `confidence`, none of which the resolver has ever sent — reading
+ * `epistemic_class` off one of these throws before it can render.
+ */
 export interface QueryCitation {
-  assertion_id: string
-  label: string
-  epistemic_class: EpistemicClass
-  confidence: number
-  document_id?: string | null
-  filename?: string | null
+  document_id: string
   page?: number | null
-  quote?: string | null
+  /** Debug only. Offsets into the extracted text, not into the file. */
+  char_start?: number | null
+  char_end?: number | null
 }
 
 /** One assertion an answer rests on, with the terms that matched it. */

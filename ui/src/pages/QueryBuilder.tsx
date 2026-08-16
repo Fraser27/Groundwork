@@ -326,8 +326,8 @@ export default function QueryBuilder() {
               <div className="card">
                 <div className="card-header">
                   <h3>
-                    Passages found
-                    <FieldHelp text="Retrieved by meaning rather than keyword, so a passage can match without sharing a word with the question. Each one is a span of a real document, which is why it can be opened at the page." />
+                    Passages cited
+                    <FieldHelp text={HELP.sourceLocator} />
                   </h3>
                   <span className="card-note">{passages.length}</span>
                 </div>
@@ -439,67 +439,6 @@ export default function QueryBuilder() {
                   </span>
                 </div>
                 <pre className="code-block">{result.sql}</pre>
-              </div>
-            )}
-
-            {result.citations.length > 0 && (
-              <div className="card">
-                <div className="card-header">
-                  <h3>
-                    Citations
-                    <FieldHelp text={HELP.sourceLocator} />
-                  </h3>
-                </div>
-                {result.citations.map((c, i) => (
-                  <div className="citation" key={c.assertion_id}>
-                    <span className="citation-num">[{i + 1}]</span>
-                    <div className="citation-body">
-                      <div
-                        style={{
-                          display: 'flex',
-                          gap: 9,
-                          alignItems: 'center',
-                          flexWrap: 'wrap',
-                        }}
-                      >
-                        <strong>{c.label}</strong>
-                        <EpistemicBadge
-                          epistemicClass={c.epistemic_class}
-                          size="sm"
-                          tipPlacement="above"
-                        />
-                        <ConfidenceBar value={c.confidence} floor={floor} width={54} />
-                      </div>
-                      {c.quote && <div className="citation-quote">{c.quote}</div>}
-                      <div className="citation-loc">
-                        {c.document_id
-                          ? `${c.filename ?? c.document_id} · page ${c.page}`
-                          : 'structured source'}
-                      </div>
-                    </div>
-                    {c.document_id && c.page != null && (
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() =>
-                          setOpenDocument({
-                            documentId: c.document_id as string,
-                            filename: c.filename || (c.document_id as string),
-                            page: c.page as number,
-                            quote: c.quote ?? null,
-                          })
-                        }
-                      >
-                        Open at page {c.page}
-                      </button>
-                    )}
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => setOpenProvenance(c.assertion_id)}
-                    >
-                      Why?
-                    </button>
-                  </div>
-                ))}
               </div>
             )}
 
