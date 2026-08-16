@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Assertion, type EpistemicClass, type Matter } from '../api'
+import { api, type Assertion, type EpistemicClass, type Matter, type Ontology } from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC, HELP } from '../epistemic'
 import { useProvenance } from '../useProvenance'
@@ -20,7 +20,7 @@ import ProvenancePanel, { SourceSpan } from '../components/ProvenancePanel'
 import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { epiStyle, fmtDateTime } from '../format'
 
-type Decision = 'approved' | 'rejected'
+type Decision = 'approved' | 'rejected' | 'corrected'
 
 export default function ReviewQueue() {
   const tenant = getTenantId()
@@ -42,6 +42,9 @@ export default function ReviewQueue() {
   const [busy, setBusy] = useState<Record<string, boolean>>({})
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [inspecting, setInspecting] = useState<Assertion | null>(null)
+  /** The claim being corrected, plus the reviewer's replacement. Null when the dialogue is shut. */
+  const [correcting, setCorrecting] = useState<Assertion | null>(null)
+  const [ontology, setOntology] = useState<Ontology | null>(null)
   const [openingDoc, setOpeningDoc] = useState<Assertion | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
@@ -61,7 +64,12 @@ export default function ReviewQueue() {
         setMatters(m.matters)
         setFloor(s.min_confidence)
         setError('')
+        // The vocabulary a correction may choose from. Fetched after settings because it needs
+        // the tenant's active pack, and failing to load it only disables Correct rather than
+        // the page: approve and reject do not need it.
+        return api.ontology(s.ontology_domain)
       })
+      .then((o) => setOntology(o ?? null))
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
   }, [tenant, reloadKey])
@@ -106,6 +114,27 @@ export default function ReviewQueue() {
         'error',
       )
       return false
+    } finally {
+      setBusy((b) => ({ ...b, [a.assertion_id]: false }))
+    }
+  }
+
+  /** Record the reviewer's version. Their claim goes live; the model's is closed, not deleted. */
+  const correct = async (
+    a: Assertion,
+    body: { predicate?: string; subject_id?: string; object_id?: string; reason: string },
+  ) => {
+    setBusy((b) => ({ ...b, [a.assertion_id]: true }))
+    try {
+      const r = await api.correctAssertion(tenant, a.assertion_id, body)
+      setDecided((d) => ({ ...d, [a.assertion_id]: 'corrected' }))
+      setCorrecting(null)
+      showToast(
+        `Recorded as ${r.corrected.predicate}, declared by you. The model's version is closed ` +
+          'and still readable on the Audit page.',
+      )
+    } catch (e) {
+      showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
     } finally {
       setBusy((b) => ({ ...b, [a.assertion_id]: false }))
     }
@@ -394,7 +423,12 @@ export default function ReviewQueue() {
                       className={`tag ${decision === 'approved' ? 'tag-green' : 'tag-red'}`}
                       style={{ fontSize: 12 }}
                     >
-                      {decision === 'approved' ? 'Approved' : 'Rejected'} by you
+                      {decision === 'approved'
+                        ? 'Approved'
+                        : decision === 'corrected'
+                          ? 'Corrected'
+                          : 'Rejected'}{' '}
+                      by you
                     </span>
                   ) : (
                     <>
@@ -418,6 +452,18 @@ export default function ReviewQueue() {
                       >
                         Reject
                       </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        disabled={busy[a.assertion_id] || !ontology}
+                        title={
+                          ontology
+                            ? 'The relationship is real but this is the wrong reading of it'
+                            : 'The vocabulary could not be loaded, so a correction cannot be checked'
+                        }
+                        onClick={() => setCorrecting(a)}
+                      >
+                        Correct
+                      </button>
                     </>
                   )}
                   <span
@@ -425,9 +471,11 @@ export default function ReviewQueue() {
                     title="Approving records your name and the time against this fact, and lets it start shaping answers. Rejecting withdraws it and retracts anything inferred from it."
                     style={{ fontSize: 11.5 }}
                   >
-                    {decision
-                      ? 'Recorded on the audit trail.'
-                      : 'Your decision is recorded against this fact.'}
+                    {decision === 'corrected'
+                      ? 'Your version is live; the model\u2019s is closed and still readable.'
+                      : decision
+                        ? 'Recorded on the audit trail.'
+                        : 'Your decision is recorded against this fact.'}
                   </span>
                   <div className="review-actions-right">
                     <button className="btn btn-ghost btn-sm" onClick={() => setInspecting(a)}>
@@ -493,8 +541,161 @@ export default function ReviewQueue() {
         />
       )}
 
+      {correcting && ontology && (
+        <CorrectionDialog
+          assertion={correcting}
+          ontology={ontology}
+          busy={!!busy[correcting.assertion_id]}
+          onCancel={() => setCorrecting(null)}
+          onSubmit={(body) => correct(correcting, body)}
+        />
+      )}
+
       <Toast toast={toast} />
     </>
+  )
+}
+
+/**
+ * Record what the reviewer says instead.
+ *
+ * A dialogue rather than an inline edit, because this is not an edit: the model's claim is closed
+ * and the reviewer's becomes a separate fact declared by them. Saying so on the form matters --
+ * a reviewer who believes they are fixing a typo would be surprised to find both versions in the
+ * audit trail, and the two-record shape is the thing that makes the trail honest.
+ *
+ * Predicates a rule concludes are absent from the picker: only a rule may draw those, and a
+ * hand-asserted conflict would carry no premises. The API refuses them anyway, but offering an
+ * option that is always rejected is worse than not offering it.
+ */
+function CorrectionDialog({
+  assertion,
+  ontology,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  assertion: Assertion
+  ontology: Ontology
+  busy: boolean
+  onCancel: () => void
+  onSubmit: (body: {
+    predicate?: string
+    subject_id?: string
+    object_id?: string
+    reason: string
+  }) => void
+}) {
+  const [predicate, setPredicate] = useState(assertion.predicate)
+  const [subjectId, setSubjectId] = useState(assertion.subject_id)
+  const [objectId, setObjectId] = useState(assertion.object_id)
+  const [reason, setReason] = useState('')
+
+  const ruleConclusions = useMemo(
+    () => new Set(ontology.rules.map((r) => r.then.match(/\[:([A-Z_]+)\]/)?.[1]).filter(Boolean)),
+    [ontology],
+  )
+  const options = useMemo(() => {
+    const all = [...ontology.governing_predicates, ...ontology.descriptive_predicates]
+    return all.filter((p) => !ruleConclusions.has(p.id)).sort((a, b) => a.id.localeCompare(b.id))
+  }, [ontology, ruleConclusions])
+
+  const changed =
+    predicate !== assertion.predicate ||
+    subjectId !== assertion.subject_id ||
+    objectId !== assertion.object_id
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Record what this should say</h3>
+        <p className="modal-sub">
+          This does not edit the model's claim. Yours is recorded as a separate fact, declared by
+          you rather than extracted, and the model's is closed but still readable. The trail then
+          shows a person overrode a specific reading, rather than that the model said something it
+          did not.
+        </p>
+
+        <div className="consequence">
+          <div className="consequence-title">What gets recorded</div>
+          <ul>
+            <li>
+              A new fact: <strong>{subjectId}</strong> {predicate} <strong>{objectId}</strong>,
+              declared by you, citing the same page and sentence.
+            </li>
+            <li>
+              The model's version is closed, not deleted. An as-of read before now still shows it.
+            </li>
+            <li>Your reason is kept and shown on the Audit page beside your name.</li>
+          </ul>
+        </div>
+
+        <div className="form-group">
+          <label>
+            Relationship
+            <FieldHelp text="The closed vocabulary this tenant uses. Relationships a rule concludes are absent on purpose: only a rule may draw those, from facts that carry it as premises, so one asserted by hand would defend nothing." />
+          </label>
+          <select value={predicate} onChange={(e) => setPredicate(e.target.value)}>
+            {options.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.id}
+                {p.governing ? ' (governing)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="form-row">
+          <div className="toolbar-field" style={{ flex: 1, minWidth: 200 }}>
+            <label>From</label>
+            <input value={subjectId} onChange={(e) => setSubjectId(e.target.value)} />
+          </div>
+          <div className="toolbar-field" style={{ flex: 1, minWidth: 200 }}>
+            <label>To</label>
+            <input value={objectId} onChange={(e) => setObjectId(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label>
+            Reason, required
+            <FieldHelp text="Written for whoever reads the file in a year. Say what the document actually supports: “the letter names Calder as the adverse party” explains itself, “model was wrong” does not." />
+          </label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="The engagement letter names Calder as the adverse party, not the client."
+            autoFocus
+          />
+          {!changed && (
+            <p className="hint">
+              Nothing has changed yet. To accept the claim as the model read it, close this and
+              approve instead.
+            </p>
+          )}
+        </div>
+
+        <div className="modal-actions">
+          <button className="btn btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            className="btn btn-primary"
+            disabled={busy || !reason.trim() || !changed}
+            onClick={() =>
+              onSubmit({
+                predicate,
+                subject_id: subjectId,
+                object_id: objectId,
+                reason: reason.trim(),
+              })
+            }
+          >
+            {busy ? 'Recording…' : 'Record correction'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

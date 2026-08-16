@@ -14,6 +14,7 @@ import DocumentViewer from '../components/DocumentViewer'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import { SourceSpan } from '../components/ProvenancePanel'
+import WipeDialog from '../components/WipeDialog'
 import { EmptyState, ErrorState, IngestPill, Pipeline, Spinner, Toast } from '../components/Shared'
 import { fmtBytes, fmtDateTime, fmtNum } from '../format'
 
@@ -53,6 +54,8 @@ export default function Documents() {
   const [matterFilter, setMatterFilter] = useState('__all__')
   const [detail, setDetail] = useState<DocumentDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [wiping, setWiping] = useState<DocumentDetail | null>(null)
+  const [wipingBusy, setWipingBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [uploadMatter, setUploadMatter] = useState('')
@@ -599,6 +602,13 @@ export default function Documents() {
                       Review {detail.pending_review_count} pending
                     </Link>
                   )}
+                  <button
+                    className="btn btn-danger btn-sm"
+                    onClick={() => setWiping(detail)}
+                    title="Withdraw the facts read out of this document, so it can be read again"
+                  >
+                    Withdraw facts
+                  </button>
                   <button className="btn btn-ghost" onClick={() => setDetail(null)}>
                     Close
                   </button>
@@ -607,6 +617,33 @@ export default function Documents() {
             )}
           </div>
         </div>
+      )}
+
+      {wiping && (
+        <WipeDialog
+          scope="document"
+          target={wiping.filename}
+          count={wiping.assertion_count}
+          busy={wipingBusy}
+          onCancel={() => setWiping(null)}
+          onSubmit={async (reason) => {
+            setWipingBusy(true)
+            try {
+              const r = await api.wipeDocument(tenant, wiping.document_id, reason)
+              showToast(
+                `${r.assertions_superseded} facts withdrawn and ${r.vectors_deleted} passages ` +
+                  'removed from search. Replay the document to read it again.',
+              )
+              setWiping(null)
+              setDetail(null)
+              load()
+            } catch (e) {
+              showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
+            } finally {
+              setWipingBusy(false)
+            }
+          }}
+        />
       )}
 
       {viewing && detail && (

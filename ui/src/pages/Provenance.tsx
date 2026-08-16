@@ -7,7 +7,13 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Assertion, type EpistemicClass, type ReviewState } from '../api'
+import {
+  api,
+  type Assertion,
+  type EpistemicClass,
+  type GraphAuditEvent,
+  type ReviewState,
+} from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC_ORDER, HELP, REVIEW_STATE_LABEL } from '../epistemic'
 import { useProvenance } from '../useProvenance'
@@ -16,7 +22,7 @@ import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
 import { EmptyState, ErrorState, Spinner } from '../components/Shared'
-import { fmtDateTime } from '../format'
+import { fmtDateTime, fmtNum } from '../format'
 
 export default function Provenance() {
   const tenant = getTenantId()
@@ -25,6 +31,9 @@ export default function Provenance() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
+  /** Facts is the default: "what does the graph hold, including what it once held" is the question
+   *  asked most. Graph changes answers the narrower one, "who altered it". */
+  const [tab, setTab] = useState<'facts' | 'changes'>('facts')
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState<EpistemicClass | '__all__'>('__all__')
   const [stateFilter, setStateFilter] = useState<ReviewState | '__all__' | 'RETRACTED'>('__all__')
@@ -97,6 +106,21 @@ export default function Provenance() {
         </div>
       </div>
 
+      <div className="access-tabs">
+        <button
+          className={`access-tab${tab === 'facts' ? ' active' : ''}`}
+          onClick={() => setTab('facts')}
+        >
+          Facts
+        </button>
+        <button
+          className={`access-tab${tab === 'changes' ? ' active' : ''}`}
+          onClick={() => setTab('changes')}
+        >
+          Graph changes
+        </button>
+      </div>
+
       {error && (
         <ErrorState
           title="Could not load the audit trail"
@@ -105,6 +129,10 @@ export default function Provenance() {
         />
       )}
 
+      {tab === 'changes' && <GraphChanges tenant={tenant} />}
+
+      {tab === 'facts' && (
+        <>
       <div className="toolbar">
         <div className="toolbar-field" style={{ flex: 1, minWidth: 260 }}>
           <label>Search</label>
@@ -262,6 +290,9 @@ export default function Provenance() {
         </table>
       </div>
 
+        </>
+      )}
+
       {selected && (
         <div className="modal-overlay" onClick={() => setSelected(null)}>
           <div
@@ -287,4 +318,97 @@ export default function Provenance() {
       )}
     </>
   )
+}
+
+/**
+ * Who changed what the system believes.
+ *
+ * Separate from the fact list because it answers a different question. That one asks what the
+ * graph holds; this one asks who altered it -- a reviewer overriding a model, an administrator
+ * withdrawing a document. It is the trace back that makes a soft delete auditable rather than a
+ * gap: the facts are closed, and this says who closed them and why.
+ */
+function GraphChanges({ tenant }: { tenant: string }) {
+  const [events, setEvents] = useState<GraphAuditEvent[] | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api
+      .graphAudit(tenant)
+      .then((e) => {
+        setEvents(e)
+        setError('')
+      })
+      .catch((e: Error) => {
+        setEvents([])
+        setError(e.message)
+      })
+  }, [tenant])
+
+  if (error) return <ErrorState title="Could not load the change log" detail={error} />
+  if (events === null) return <Spinner />
+
+  if (events.length === 0) {
+    return (
+      <div className="card">
+        <EmptyState title="No changes recorded">
+          Nothing has been corrected or withdrawn yet. When a reviewer overrides a model, or an
+          administrator withdraws a document, it is recorded here and never removed.
+        </EmptyState>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <h3>Graph changes</h3>
+        <span className="card-note">
+          Append-only &middot; newest first &middot; the facts described are closed, not deleted
+        </span>
+      </div>
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Who</th>
+            <th>What</th>
+            <th>Subject</th>
+            <th className="num">Facts</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((e, i) => (
+            <tr key={`${e.at}-${i}`}>
+              <td className="nowrap dim">{fmtDateTime(e.at)}</td>
+              <td className="nowrap">{e.actor}</td>
+              <td>
+                <span className={`tag ${e.action === 'SUPERSEDE' ? 'tag-orange' : 'tag-red'}`}>
+                  {ACTION_LABEL[e.action] ?? e.action}
+                </span>
+              </td>
+              <td className="mono" style={{ fontSize: 12 }}>
+                {e.matter_id || e.document_id || '-'}
+              </td>
+              <td className="num">{fmtNum(e.affected)}</td>
+              <td>{e.reason || <span className="dim">no reason recorded</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="hint">
+        A withdrawal removes facts from the current graph and nothing else: a dated read from
+        before the entry still reconstructs them, and conclusions drawn earlier are left standing
+        because they were true when drawn.
+      </p>
+    </div>
+  )
+}
+
+/** Plain language for the stored action names. */
+const ACTION_LABEL: Record<string, string> = {
+  SUPERSEDE: 'Corrected by a reviewer',
+  WIPE_DOCUMENT: 'Document facts withdrawn',
+  WIPE_MATTER: 'Matter facts withdrawn',
 }

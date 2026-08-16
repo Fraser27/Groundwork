@@ -149,6 +149,39 @@ export interface DocumentDownload {
   expires_at?: string | null
 }
 
+/** A reviewer's correction: their version, and the model's now closed. */
+export interface CorrectionResult {
+  corrected: Assertion
+  superseded: Assertion
+  note: string
+}
+
+/** What a wipe withdrew. Soft: these facts are closed, not deleted. */
+export interface WipeReport {
+  scope: 'document' | 'matter'
+  target: string
+  assertions_superseded: number
+  vectors_deleted: number
+  jobs_dropped: number
+  documents: string[]
+  errors: string[]
+  at: string
+  note: string
+}
+
+/** One row of the graph audit log: who changed what the system believes. */
+export interface GraphAuditEvent {
+  at: string
+  actor: string
+  action: 'SUPERSEDE' | 'WIPE_DOCUMENT' | 'WIPE_MATTER'
+  document_id?: string | null
+  matter_id?: string | null
+  assertion_ids: string[]
+  affected: number
+  reason?: string | null
+  detail: Record<string, unknown>
+}
+
 export interface ProvenanceEvent {
   event_id: string
   timestamp: string
@@ -894,6 +927,40 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ note }),
     }),
+  /**
+   * Record what a reviewer says instead. Never an edit: the response carries the reviewer's new
+   * DECLARED assertion and the original, now closed, so the caller can show both.
+   */
+  correctAssertion: (
+    tenant: string,
+    id: string,
+    body: { predicate?: string; subject_id?: string; object_id?: string; reason: string },
+  ) =>
+    request<CorrectionResult>(`/tenants/${tenant}/assertions/${id}/correct`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /** Withdraw everything derived from one document. Soft, audited, and needs a reason. */
+  wipeDocument: (tenant: string, documentId: string, reason: string) =>
+    request<WipeReport>(`/tenants/${tenant}/documents/${documentId}/wipe`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+
+  /** The same for every document on a matter. */
+  wipeMatter: (tenant: string, matterId: string, reason: string) =>
+    request<WipeReport>(`/tenants/${tenant}/matters/${encodeURIComponent(matterId)}/wipe`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
+
+  /** Who changed what the system believes, newest first. */
+  graphAudit: (tenant: string, limit = 100) =>
+    request<{ events: GraphAuditEvent[]; count: number; note: string }>(
+      `/tenants/${tenant}/audit/graph?limit=${limit}`,
+    ).then((r) => r.events ?? []),
+
   getProvenance: (tenant: string, id: string) =>
     request<Provenance>(`/tenants/${tenant}/assertions/${id}/provenance`),
 

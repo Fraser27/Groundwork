@@ -12,7 +12,8 @@ import { HELP } from '../epistemic'
 import ConfidenceBar from '../components/ConfidenceBar'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
-import { EmptyState, ErrorState, IngestPill, Spinner } from '../components/Shared'
+import { EmptyState, ErrorState, IngestPill, Spinner, Toast } from '../components/Shared'
+import WipeDialog from '../components/WipeDialog'
 import { fmtDate, fmtNum } from '../format'
 
 export default function Matters() {
@@ -28,6 +29,14 @@ export default function Matters() {
   const [reloadKey, setReloadKey] = useState(0)
   const [filter, setFilter] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [wiping, setWiping] = useState<string | null>(null)
+  const [wipingBusy, setWipingBusy] = useState(false)
+  const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
+
+  const showToast = (msg: string, type = 'success') => {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 5000)
+  }
 
   useEffect(() => {
     Promise.all([
@@ -84,9 +93,20 @@ export default function Matters() {
                 {selected.client && ` · ${selected.client}`}
               </p>
             </div>
-            <span className={`tag ${selected.status === 'open' ? 'tag-green' : 'tag-neutral'}`}>
-              {selected.status}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {selected.status && (
+                <span className={`tag ${selected.status === 'open' ? 'tag-green' : 'tag-neutral'}`}>
+                  {selected.status}
+                </span>
+              )}
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={() => setWiping(selected.matter_id)}
+                title="Withdraw every fact read out of this matter's documents"
+              >
+                Withdraw facts
+              </button>
+            </div>
           </div>
         </div>
 
@@ -223,6 +243,34 @@ export default function Matters() {
             </tbody>
           </table>
         </div>
+
+        {wiping && (
+          <WipeDialog
+            scope="matter"
+            target={wiping}
+            count={matterAssertions.length}
+            busy={wipingBusy}
+            onCancel={() => setWiping(null)}
+            onSubmit={async (reason) => {
+              setWipingBusy(true)
+              try {
+                const r = await api.wipeMatter(tenant, wiping, reason)
+                showToast(
+                  `${r.assertions_superseded} facts withdrawn across ${r.documents.length} ` +
+                    'documents. The Audit page records who withdrew them and why.',
+                )
+                setWiping(null)
+                retry()
+              } catch (e) {
+                showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
+              } finally {
+                setWipingBusy(false)
+              }
+            }}
+          />
+        )}
+
+        <Toast toast={toast} />
       </>
     )
   }
