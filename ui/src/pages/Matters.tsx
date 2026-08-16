@@ -64,11 +64,46 @@ export default function Matters() {
     // filed under it, so there is no record carrying a name until something names it, and
     // `m.name.toLowerCase()` threw the moment anyone typed in this box.
     return matters.filter((m) =>
-      [m.matter_id, m.name, m.client].some((v) => (v ?? '').toLowerCase().includes(q)),
+      [m.matter_id, m.name].some((v) => (v ?? '').toLowerCase().includes(q)),
     )
   }, [matters, filter])
 
   const selected = matters.find((m) => m.matter_id === selectedId) ?? null
+
+  /**
+   * Per-matter counts, derived from the documents and facts already loaded.
+   *
+   * The detail panel was fixed to do this and the list row was not, so a matter with a document
+   * and ten approved facts still read 0 and "-" across every column: the row was reading
+   * `m.counts?.assertions`, and `counts` is not a field this API has ever sent. Same lying-type
+   * bug as the detail panel had, one component lower.
+   */
+  const countsFor = useMemo(() => {
+    const byMatter = new Map<
+      string,
+      { documents: number; assertions: number; pending: number; conflicts: number }
+    >()
+    const bump = (id: string | null | undefined) => {
+      if (!id) return null
+      let c = byMatter.get(id)
+      if (!c) {
+        c = { documents: 0, assertions: 0, pending: 0, conflicts: 0 }
+        byMatter.set(id, c)
+      }
+      return c
+    }
+    for (const d of docs) bump(d.matter_id)!.documents += 1
+    for (const a of assertions) {
+      const c = bump(a.matter_id)
+      if (!c) continue
+      c.assertions += 1
+      if (a.review_state === 'PENDING') c.pending += 1
+      // The predicate is the conflict, not a separate flag: the ontology names the conclusion a
+      // rule draws, so counting it here needs no extra field on the response.
+      if (a.predicate === 'POTENTIAL_CONFLICT') c.conflicts += 1
+    }
+    return byMatter
+  }, [docs, assertions])
 
   const retry = () => {
     setLoading(true)
@@ -84,6 +119,11 @@ export default function Matters() {
     // Every stat card read `selected.counts?...`, which was always undefined, so each silently
     // fell through to a default -- and one of those defaults was a hardcoded zero.
     const matterPending = matterAssertions.filter((a) => a.review_state === 'PENDING').length
+    // Was `selected.counts?.conflicts ?? 0` -- a field the API does not send, so this card read a
+    // hardcoded zero and a matter with a live conflict displayed green.
+    const matterConflicts = matterAssertions.filter(
+      (a) => a.predicate === 'POTENTIAL_CONFLICT',
+    ).length
     return (
       <>
         <button className="back-link btn-ghost" style={{ border: 'none', background: 'none', cursor: 'pointer' }} onClick={() => setSelectedId(null)}>
@@ -96,15 +136,10 @@ export default function Matters() {
               <h2>{selected.name || selected.matter_id}</h2>
               <p>
                 <code>{selected.matter_id}</code>
-                {selected.client && ` · ${selected.client}`}
+                {selected.created_by && ` · opened by ${selected.created_by}`}
               </p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {selected.status && (
-                <span className={`tag ${selected.status === 'open' ? 'tag-green' : 'tag-neutral'}`}>
-                  {selected.status}
-                </span>
-              )}
               <button
                 className="btn btn-danger btn-sm"
                 onClick={() => setWiping(selected.matter_id)}
@@ -147,8 +182,8 @@ export default function Matters() {
               Potential conflicts
               <FieldHelp text="Inferred where the firm both acts for and opposes the same party. Fires only on facts declared by a system of record or confirmed by a check, a conflict flag resting on a model's guess would be worse than none." />
             </div>
-            <div className={`value ${(selected.counts?.conflicts ?? 0) > 0 ? 'red' : 'green'}`}>
-              {fmtNum(selected.counts?.conflicts ?? 0)}
+            <div className={`value ${matterConflicts > 0 ? 'red' : 'green'}`}>
+              {fmtNum(matterConflicts)}
             </div>
           </div>
         </div>
@@ -364,9 +399,11 @@ export default function Matters() {
         <table className="data-table data-table-hover">
           <thead>
             <tr>
+              {/* No Client or Status column. A matter record carries a reference, a name and its
+                  timestamps -- nothing sends either of those, so both rendered as an empty tag and
+                  a dash on every row. A column that can never hold a value is worse than absent:
+                  it reads as missing data rather than as a field that does not exist. */}
               <th>Matter</th>
-              <th>Client</th>
-              <th>Status</th>
               <th className="num">Documents</th>
               <th className="num">Facts</th>
               <th className="num">
@@ -374,7 +411,7 @@ export default function Matters() {
                 <FieldHelp text={HELP.reviewState} align="right" />
               </th>
               <th className="num">Conflicts</th>
-              <th>Opened</th>
+              <th>Created</th>
             </tr>
           </thead>
           <tbody>
@@ -387,34 +424,30 @@ export default function Matters() {
                     <code>{m.matter_id}</code>
                   </div>
                 </td>
-                <td className="dim">{m.client || '-'}</td>
-                <td>
-                  <span className={`tag ${m.status === 'open' ? 'tag-green' : 'tag-neutral'}`}>
-                    {m.status}
-                  </span>
-                </td>
-                <td className="num">{fmtNum(docs.filter((d) => d.matter_id === m.matter_id).length)}</td>
-                <td className="num">{fmtNum(m.counts?.assertions)}</td>
+                <td className="num">{fmtNum(countsFor.get(m.matter_id)?.documents ?? 0)}</td>
                 <td className="num">
-                  {m.counts?.pending_review ? (
-                    <span className="tag tag-orange">{m.counts.pending_review}</span>
+                  {fmtNum(m.assertion_count ?? countsFor.get(m.matter_id)?.assertions ?? 0)}
+                </td>
+                <td className="num">
+                  {countsFor.get(m.matter_id)?.pending ? (
+                    <span className="tag tag-orange">{countsFor.get(m.matter_id)!.pending}</span>
                   ) : (
                     '-'
                   )}
                 </td>
                 <td className="num">
-                  {m.counts?.conflicts ? (
-                    <span className="tag tag-red">{m.counts.conflicts}</span>
+                  {countsFor.get(m.matter_id)?.conflicts ? (
+                    <span className="tag tag-red">{countsFor.get(m.matter_id)!.conflicts}</span>
                   ) : (
                     '-'
                   )}
                 </td>
-                <td className="nowrap dim">{fmtDate(m.opened_at)}</td>
+                <td className="nowrap dim">{fmtDate(m.created_at)}</td>
               </tr>
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8}>
+                <td colSpan={6}>
                   <EmptyState title={matters.length === 0 ? 'No matters yet' : 'No matters match'}>
                     {matters.length === 0
                       ? 'Matters arrive from the case management system as declared records. None have been loaded for this tenant.'

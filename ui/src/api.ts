@@ -200,26 +200,27 @@ export interface Tenant {
 }
 
 /**
- * Only `matter_id` and `assertion_count` are actually sent. A matter is not a record: it is
- * derived from the assertions filed under it, so nothing stores a name or a status until
- * something names one. The rest are optional so the compiler forces a guard at each use --
- * declaring `name: string` is what let `m.name.toLowerCase()` ship.
+ * A matter record, plus the count the route derives.
+ *
+ * This is the whole of it. `client`, `status`, `opened_at` and a `counts` object were all declared
+ * here and none has ever been sent: the Matters table read `m.counts?.assertions`, so a matter with
+ * a document and ten approved facts displayed 0 facts and a dash in every other column, and
+ * `status` rendered as an empty tag. Counts are derived in the page from the documents and
+ * assertions it already loads.
+ *
+ * `name` is optional because a matter can also be *inferred* from assertions referring to a
+ * reference no record names — after a reset, say. Those rows carry the reference as the name.
  */
 export interface Matter {
   matter_id: string
-  assertion_count?: number
   name?: string
-  client?: string | null
-  status?: string
-  opened_at?: string | null
+  assertion_count?: number
+  created_at?: string | null
+  created_by?: string | null
+  updated_at?: string | null
+  updated_by?: string | null
   /** Ethical wall: this matter is walled off from the calling user. */
   walled?: boolean
-  counts?: {
-    documents: number
-    assertions: number
-    pending_review: number
-    conflicts: number
-  }
 }
 
 /**
