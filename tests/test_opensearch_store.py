@@ -459,3 +459,42 @@ class TestTheSignerMatchesTheConnection:
             opensearchpy.OpenSearch = original
 
         assert captured["hosts"][0]["host"] == "x.aoss.us-east-1.on.aws"
+
+
+class TestServerlessQuirks:
+    """Three things Serverless refuses that a self-managed cluster accepts.
+
+    Each was found only by deploying, and each failed in a way that pointed somewhere else
+    first: a bare 401 that looked like authentication, a 400 naming a field, and a rejected
+    bulk item. Pinned here so they are not reintroduced by someone copying an OpenSearch
+    example that assumes a managed domain.
+    """
+
+    def test_a_write_does_not_request_a_refresh(self):
+        """ "true refresh policy is not supported" -- refresh timing is the service's to decide.
+        The cost is that a chunk is searchable a moment later, which the graph does not care
+        about because it answers "what came from this document"."""
+        client = FakeOpenSearch()
+
+        def strict_bulk(body: list[dict[str, Any]], **kw: Any) -> dict[str, Any]:
+            assert "refresh" not in kw, "Serverless rejects a refresh policy"
+            client.bulks.append(body)
+            return {"errors": False, "items": []}
+
+        client.bulk = strict_bulk  # type: ignore[method-assign]
+        store(client).upsert(INDEX, [record()])
+        assert len(client.bulks) == 1
+
+    def test_a_delete_does_not_request_a_refresh(self):
+        client = FakeOpenSearch(existing={INDEX})
+        client.delete_hits = [{"_id": "c1"}]
+        calls: list[dict[str, Any]] = []
+
+        def strict_bulk(body: list[dict[str, Any]], **kw: Any) -> dict[str, Any]:
+            assert "refresh" not in kw
+            calls.append({"body": body})
+            return {"errors": False, "items": []}
+
+        client.bulk = strict_bulk  # type: ignore[method-assign]
+        assert store(client).delete_document(INDEX, "doc-1") == 1
+        assert len(calls) == 1

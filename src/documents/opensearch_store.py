@@ -197,7 +197,12 @@ class OpenSearchVectorStore:
             )
 
         try:
-            response = client.bulk(body=actions, refresh=True)
+            # No `refresh`. Serverless rejects it -- "true refresh policy is not supported" --
+            # because refresh timing is the service's to decide. The consequence is that a write
+            # is not instantly searchable, which is fine here: the graph is what answers "what
+            # facts came from this document", and a chunk becoming searchable a second later is
+            # invisible to a user who is still reading the upload progress.
+            response = client.bulk(body=actions)
         except Exception as e:
             raise VectorStoreError(f"could not write {len(records)} vectors: {e}") from e
 
@@ -343,7 +348,7 @@ class OpenSearchVectorStore:
 
             actions = [{"delete": {"_index": index, "_id": doc_id}} for doc_id in ids]
             try:
-                client.bulk(body=actions, refresh=True)
+                client.bulk(body=actions)
             except Exception as e:
                 raise VectorStoreError(
                     f"could not delete {len(ids)} vectors from {index}: {e}"
