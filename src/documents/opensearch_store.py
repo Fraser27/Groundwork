@@ -40,6 +40,11 @@ VECTOR_FIELD = "embedding"
 #: because Serverless has no `_delete_by_query`, so a reset is inherently paged.
 DELETE_PAGE_SIZE = 500
 
+#: Long enough for a scale-to-zero collection to provision capacity on the first request after
+#: idling, short enough that a genuinely unreachable collection does not hold an ingest open.
+#: The default of 10s is not enough and fails as though the store were broken.
+REQUEST_TIMEOUT_SECONDS = 60
+
 #: HNSW with cosine similarity, matching `_cosine` in the in-memory store so a local result and
 #: a deployed one rank the same way. `l2` would rank differently for identical embeddings, which
 #: would make a local reproduction of a retrieval bug impossible.
@@ -118,6 +123,15 @@ def _client(endpoint: str, region: str) -> Any:
         verify_certs=True,
         connection_class=RequestsHttpConnection,
         pool_maxsize=20,
+        # The default 10s is too short for this collection. Its group has a minimum of 0 OCU,
+        # so the first request after an idle period pays for capacity being provisioned, and a
+        # read timeout there is indistinguishable from a broken store -- it surfaced as
+        # "embedding failed" on a document whose text was perfectly fine.
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        # Retried because a cold start is transient by definition. Bounded, so a genuinely
+        # unreachable collection still fails rather than holding an ingest open.
+        max_retries=3,
+        retry_on_timeout=True,
     )
 
 

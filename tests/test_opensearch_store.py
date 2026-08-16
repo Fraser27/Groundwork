@@ -498,3 +498,26 @@ class TestServerlessQuirks:
         client.bulk = strict_bulk  # type: ignore[method-assign]
         assert store(client).delete_document(INDEX, "doc-1") == 1
         assert len(calls) == 1
+
+
+class TestColdStarts:
+    def test_the_timeout_allows_for_scaling_from_zero(self, monkeypatch):
+        """The collection group has a 0-OCU minimum, so the first request after idling waits
+        for capacity. At the 10s default that surfaced as "embedding failed" on a document whose
+        text was fine, which points at the wrong thing entirely."""
+        import src.documents.opensearch_store as mod
+
+        captured: dict[str, Any] = {}
+
+        class FakeSession:
+            def get_credentials(self):
+                return object()
+
+        monkeypatch.setattr("boto3.Session", FakeSession)
+        monkeypatch.setattr("opensearchpy.OpenSearch", lambda **kw: captured.update(kw))
+        mod._client("https://x.aoss.us-east-1.on.aws", "us-east-1")
+
+        assert captured["timeout"] >= 30
+        assert captured["retry_on_timeout"] is True
+        # Bounded: an unreachable collection must still fail rather than hold an ingest open.
+        assert captured["max_retries"] <= 5
