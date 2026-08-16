@@ -693,14 +693,6 @@ export interface ReplayReport {
   note: string
 }
 
-export interface SampleDataReport {
-  documents_loaded: number
-  documents_skipped?: number
-  chunks: number
-  errors: string[]
-  note: string
-}
-
 export interface ScanReport {
   source_id: string
   tables_found: number
@@ -1121,12 +1113,6 @@ export const api = {
   replay: (tenant: string, runModelExtraction = false) =>
     request<ReplayReport>(
       `/tenants/${tenant}/admin/replay${q({ run_model_extraction: runModelExtraction })}`,
-      { method: 'POST' },
-    ),
-
-  loadSampleData: (tenant: string, runModelExtraction = false) =>
-    request<SampleDataReport>(
-      `/tenants/${tenant}/admin/sample-data${q({ run_model_extraction: runModelExtraction })}`,
       { method: 'POST' },
     ),
 

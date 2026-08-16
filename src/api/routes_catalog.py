@@ -23,7 +23,6 @@ from src.documents.models import JobState
 from src.graph.assertions import EpistemicClass, ReviewState
 from src.graph.scope import ScopeViolation
 from src.ontology.loader import ONTOLOGY_DIR, load_ontology
-from src.sample_data import load_sample_data
 
 logger = logging.getLogger(__name__)
 
@@ -559,27 +558,6 @@ async def scan_sources(
 # These demonstrate the architecture's central claim rather than merely asserting it: if
 # S3 and Glue are authoritative and everything else is derived, then the graph can be
 # thrown away and rebuilt. If that is ever untrue, these are where it shows.
-
-
-@router.post("/tenants/{tenant}/admin/sample-data")
-async def load_sample_data_route(
-    services: ServicesDep,
-    principal: TenantDep,
-    run_model_extraction: Annotated[bool, Query()] = True,
-) -> dict[str, Any]:
-    """Load the shipped legal documents through the real ingest pipeline.
-
-    Not a graph seed. The documents are uploaded and ingested exactly as an operator's
-    upload would be, so every assertion cites a page and a verbatim span that the
-    Provenance page can resolve. A seeded graph would look identical until somebody
-    clicked a citation.
-    """
-    require_admin(principal)
-    ctx, _ = principal
-    report = load_sample_data(services, ctx, run_model_extraction=run_model_extraction)
-    if report.errors and report.documents_loaded == 0:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "; ".join(report.errors[:3]))
-    return report.to_dict()
 
 
 class ResetRequest(BaseModel):

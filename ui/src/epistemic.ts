@@ -168,8 +168,6 @@ export const HELP = {
     'Deletes the derived data you tick, for this tenant only. Your uploaded documents are not touched, so anything removed here can be rebuilt by Replay or Scan catalog. The one exception is metric definitions, which were written in this app and have no original to rebuild from.',
   replay:
     'Re-runs the reading pipeline over every document still in S3: each page is transcribed, split into passages, indexed for search, and read for facts again. Use it after a reset, or after improving an extractor. It reads the same original files, so citations still point at the same page and the same sentence.',
-  loadSampleData:
-    'Uploads five example matters and ingests them the same way as a real upload. They interlock deliberately, so a conflict check and a stale-authority check both have something to find. Safe to run twice: keys are content-addressed, so a repeat converges instead of duplicating.',
   scanCatalog:
     'Reads table and column definitions from AWS Glue and records them as facts declared by a system of record. Schemas only, no rows are read, so it is cheap and safe to re-run. Rows stay in the warehouse and are queried in place when a question needs them.',
 } as const

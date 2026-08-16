@@ -668,23 +668,6 @@ export default function Admin() {
             <FieldHelp text={HELP.replay} />
           </span>
           <span className="btn-with-help">
-            <button
-              className="btn btn-ghost"
-              disabled={busy}
-              onClick={() =>
-                runOp(
-                  'sample',
-                  () => api.loadSampleData(tenant),
-                  (r) =>
-                    `Loaded ${fmtNum(r.documents_loaded)} example documents, ${fmtNum(r.chunks)} passages indexed`,
-                )
-              }
-            >
-              {running === 'sample' ? 'Loading…' : 'Load sample data'}
-            </button>
-            <FieldHelp text={HELP.loadSampleData} />
-          </span>
-          <span className="btn-with-help">
             <button className="btn btn-ghost" disabled={busy} onClick={() => setScanning(true)}>
               {running === 'scan' ? 'Scanning…' : 'Scan catalog'}
             </button>
@@ -692,8 +675,10 @@ export default function Admin() {
           </span>
         </div>
         <p className="hint">
-          Replay and sample loading run inline without model extraction, so they return a report
-          rather than a spinner. A large corpus is better replayed by re-uploading.{' '}
+          Replay runs inline without model extraction, so it returns a report rather than a
+          spinner. A large corpus is better replayed by re-uploading. The demo documents are in{' '}
+          <code>sample/legal-demo.zip</code> and are uploaded through Documents like any other
+          file.{' '}
           <a href="/docs/demo-data.html" target="_blank" rel="noreferrer">
             Read more about resetting and rebuilding
           </a>

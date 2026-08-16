@@ -37,14 +37,12 @@ the fifth arrives.</p>
 <p>Every filename begins with its matter reference, and that is what belongs in <strong>Attach to
 matter</strong>: <code>NTL-2026-0114</code> for the three <code>NTL-</code> files,
 <code>MBC-2024-0431</code> for the facility agreement, <code>HAL-2025-0092</code> for the authority
-note. The field accepts typed text as well as a selection, because a matter is derived from the
-documents filed under it and therefore has nothing to select until its first document is in.</p>
+note. The matter has to exist before its documents, so create those three with <strong>New
+matter</strong> first. A document cannot be filed without one, because matter access is how an
+ethical screen is enforced and an unfiled document sits outside it.</p>
 <p>Both things this data exists to show are <em>cross-matter</em>. Filing everything under one
-reference, or leaving it all unassigned, removes precisely what there is to look at.</p>
+reference removes precisely what there is to look at.</p>
 </div>
-
-<p>An administrator can load all five at once with <strong>Admin</strong>, then <strong>Load sample
-data</strong>, which reads the same zip from the server. The pipeline is identical either way.</p>
 
 <div class="note">
 <div class="note-title">They are not seeded facts</div>
@@ -150,8 +148,9 @@ a client <em>and</em> a shareholder in Calder; Calder itself is not a client. Ad
 would contradict the document and quietly make the whole demo incoherent.</p>
 </div>
 
-<p>Matters live in <code>sample/glue/matters.csv</code> rather than inside the script, because the
-same ten records are also the matters you file documents under. One list, read twice.</p>
+<p>Matters live in <code>sample/glue/matters.csv</code> rather than inside the script, so the
+references you type into <strong>New matter</strong> can be read off one file instead of copied out
+of SQL. The script writes rows to Athena; it does not create matter records in the graph.</p>
 
 <p>Re-running the script converges instead of duplicating: the tables are Iceberg, so it clears each
 one and reloads it. That is the reason for Iceberg here rather than a crawler over CSV — a demo you
