@@ -112,15 +112,37 @@ async def list_matters(services: ServicesDep, principal: TenantDep) -> dict[str,
     """
     ctx, _ = principal
     records = services.review_queue.visible(ctx)
+    counts: dict[str, int] = {}
+    for r in records:
+        mid = r.assertion.matter_id
+        if mid:
+            counts[mid] = counts.get(mid, 0) + 1
 
-    matter_ids = {r.assertion.matter_id for r in records if r.assertion.matter_id}
-    matters = [
-        {
-            "matter_id": mid,
-            "assertion_count": sum(1 for r in records if r.assertion.matter_id == mid),
-        }
-        for mid in sorted(matter_ids)
-    ]
+    # Records first, then anything only the data knows about. A matter now exists the moment
+    # somebody creates it, which is the order real work happens in: a team is staffed and a screen
+    # raised before the first document arrives. Grouping assertions alone could never express an
+    # empty matter, so a matter could not be created before a document was filed under it.
+    matters: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if services.graph is not None:
+        from src.matters import MatterStore
+
+        try:
+            for record in MatterStore(services.graph).list(ctx):
+                seen.add(record.matter_id)
+                matters.append(
+                    {**record.to_dict(), "assertion_count": counts.get(record.matter_id, 0)}
+                )
+        except Exception as e:
+            # Degrade to the derived list rather than failing the page: a matter with facts is
+            # still worth showing even if its record cannot be read.
+            logger.warning("could not read matter records: %s", e)
+
+    # Matters that facts refer to but no record names. Shown rather than hidden: these are either
+    # pre-existing data or a reset that dropped the records, and silently omitting a matter that
+    # holds facts would be worse than showing it without a name.
+    for mid in sorted(set(counts) - seen):
+        matters.append({"matter_id": mid, "name": mid, "assertion_count": counts[mid]})
 
     # A separate list, never a flag on a row in `matters`: no caller can then treat a
     # screened matter as readable by forgetting to check the flag. `visible()` has
@@ -691,3 +713,84 @@ async def graph_audit_log(
             "still reconstructs what the graph held."
         ),
     }
+
+
+class CreateMatterRequest(BaseModel):
+    matter_id: str = Field(min_length=1, max_length=128)
+    """The firm's own reference, e.g. NTL-2026-0114. Not generated here: a matter already has a
+    reference in the firm's systems, and inventing a second one guarantees they diverge."""
+
+    name: str = Field(min_length=1, max_length=300)
+
+
+@router.post("/tenants/{tenant}/matters", status_code=status.HTTP_201_CREATED)
+async def create_matter(
+    services: ServicesDep,
+    principal: TenantDep,
+    body: Annotated[CreateMatterRequest, Body()],
+) -> dict[str, Any]:
+    """Create a matter, which then exists before any document is filed under it.
+
+    That ordering is the point. A team is staffed and an ethical screen is raised before the first
+    document arrives, and neither is expressible against a matter that does not exist -- you
+    cannot screen a lawyer from something the system has never heard of.
+
+    Re-creating an existing reference renames it rather than failing: two people setting up the
+    same matter should converge on one record.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    if services.graph is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "no graph is reachable, so a matter cannot be recorded",
+        )
+
+    from src.matters import MatterError, MatterStore
+
+    try:
+        matter = MatterStore(services.graph).create(ctx, body.matter_id, body.name)
+    except MatterError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    return {**matter.to_dict(), "assertion_count": 0}
+
+
+class LinkDocumentsRequest(BaseModel):
+    document_ids: list[str] = Field(min_length=1)
+    reason: str | None = None
+    """Optional here, unlike a wipe. Filing a document is ordinary work rather than a
+    withdrawal, so a reason is useful and not mandatory -- but it is kept when given."""
+
+
+@router.post("/tenants/{tenant}/matters/{matter_id}/documents")
+async def link_documents_to_matter(
+    services: ServicesDep,
+    principal: TenantDep,
+    matter_id: str,
+    body: Annotated[LinkDocumentsRequest, Body()],
+) -> dict[str, Any]:
+    """File several documents under a matter, or move them there.
+
+    Audited, because this is an access change effected through a data operation: matter access is
+    allowlist-primary, so a document moved into a matter somebody is not on becomes invisible to
+    them, and moved out of a screened matter becomes visible.
+
+    Assertion ids do not change. `matter_id` is deliberately absent from the hash that identifies
+    a fact, so re-filing a document keeps every citation intact rather than forking it.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    if services.graph is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "no graph is reachable, so nothing can be linked"
+        )
+
+    from src.matters import MatterError, link_documents
+
+    try:
+        report = link_documents(services, ctx, matter_id, body.document_ids, reason=body.reason)
+    except ScopeViolation as e:
+        raise scope_violation_to_http(e) from e
+    except MatterError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from e
+    return report.to_dict()

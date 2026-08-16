@@ -506,7 +506,9 @@ class TestTheAuditLog:
             InMemoryGraphAudit().append(GraphEvent(tenant_id=TENANT, actor="me", action="TIDY_UP"))
 
     def test_the_known_actions_are_closed(self):
-        assert ACTIONS == {SUPERSEDE, WIPE_DOCUMENT, WIPE_MATTER}
+        from src.graph_audit import LINK_DOCUMENTS
+
+        assert ACTIONS == {SUPERSEDE, WIPE_DOCUMENT, WIPE_MATTER, LINK_DOCUMENTS}
 
     def test_newest_first(self):
         audit = InMemoryGraphAudit()

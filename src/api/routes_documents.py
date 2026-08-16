@@ -96,6 +96,36 @@ def _extraction_state(services: Services, tenant_id: str, requested: bool) -> st
     return None
 
 
+def _assert_matter_exists(services: Services, ctx: AuthContext, matter_id: str) -> None:
+    """Refuse an upload naming a matter that does not exist.
+
+    A matter must be created first. Accepting any string here is what let `NTL-2026-114` and
+    `NTL-2026-0114` become two matters with nothing noticing, and a conflict check split across
+    both returns half the rows while looking clean.
+    """
+    _assert_matter(ctx, matter_id)
+    if services.graph is None:
+        # Degraded rather than open: with no graph there are no records to check against, and
+        # refusing every upload because the graph is down would be worse than accepting one whose
+        # matter cannot be verified. The ingest path re-checks access regardless.
+        logger.warning("cannot verify matter %s: no graph reachable", matter_id)
+        return
+
+    from src.matters import MatterStore
+
+    try:
+        exists = MatterStore(services.graph).exists(ctx, matter_id)
+    except Exception as e:
+        logger.warning("could not verify matter %s (%s), allowing the upload", matter_id, e)
+        return
+    if not exists:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"no matter {matter_id!r}. Create the matter first, so its documents and facts are "
+            "attributable to it and a mistyped reference cannot become a second matter.",
+        )
+
+
 def _assert_matter(ctx: AuthContext, matter_id: str | None) -> None:
     if not matter_id:
         return
@@ -308,7 +338,16 @@ def _transcribe(
 class PresignUploadRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=512)
     media_type: str | None = None
-    matter_id: str | None = None
+    matter_id: str = Field(min_length=1, max_length=128)
+    """Required, and must name a matter that already exists.
+
+    Optional before, and every fact from those uploads carried no matter at all -- which made the
+    Matters and Access pages empty, since both group facts by matter. Worse, it is silent: the
+    upload succeeds, the pipeline runs, and the facts are simply unattributable afterwards.
+
+    Checked against real records rather than accepted as a string, because otherwise a typo
+    becomes a second matter that nothing queries -- and a conflict check that misses half its
+    facts looks exactly like a clean conflict check."""
 
 
 @router.post("/tenants/{tenant}/documents/presign")
@@ -326,8 +365,13 @@ async def presign_upload(
     The client is trusted with none of the things that matter. The key — and therefore
     the tenant prefix — is server-chosen, and the size cap is a signed policy condition
     that S3 itself enforces.
+
+    The matter is required and verified here rather than at ingest, because by then the bytes are
+    already in S3 and refusing costs the upload. Failing before the ticket is minted means the
+    user is told while they can still act on it.
     """
     ctx, _ = principal
+    _assert_matter_exists(services, ctx, body.matter_id)
     _assert_matter(ctx, body.matter_id)
     storage = _require_storage(services)
 

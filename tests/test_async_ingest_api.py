@@ -22,6 +22,11 @@ TENANT = "dev-tenant"
 BUCKET = "lexgraph-docs"
 SECRET = "test-internal-secret"
 
+#: An upload must name a matter. No graph is reachable in these tests, so verification degrades to
+#: allowing it -- refusing every upload because the graph is down would be worse than accepting one
+#: whose matter cannot be checked.
+MATTER = "NTL-2026-0114"
+
 
 class FakeS3:
     def __init__(self) -> None:
@@ -64,7 +69,10 @@ def client(s3: FakeS3):
 
 class TestPresignEndpoint:
     def test_returns_a_ticket_with_server_chosen_key(self, client):
-        res = client.post(f"/api/tenants/{TENANT}/documents/presign", json={"filename": "a.pdf"})
+        res = client.post(
+            f"/api/tenants/{TENANT}/documents/presign",
+            json={"filename": "a.pdf", "matter_id": MATTER},
+        )
         assert res.status_code == 200
         body = res.json()
         assert body["key"].startswith(f"raw/{TENANT}/")
@@ -72,16 +80,27 @@ class TestPresignEndpoint:
 
     def test_the_cap_is_reported_so_the_ui_can_precheck(self, client):
         body = client.post(
-            f"/api/tenants/{TENANT}/documents/presign", json={"filename": "a.pdf"}
+            f"/api/tenants/{TENANT}/documents/presign",
+            json={"filename": "a.pdf", "matter_id": MATTER},
         ).json()
         assert body["max_bytes"] > 0
 
     def test_a_filename_is_required(self, client):
-        res = client.post(f"/api/tenants/{TENANT}/documents/presign", json={})
+        res = client.post(f"/api/tenants/{TENANT}/documents/presign", json={"matter_id": MATTER})
+        assert res.status_code == 422
+
+    def test_a_matter_is_required(self, client):
+        """Optional before, and every fact from such an upload carried no matter -- which left the
+        Matters and Access pages empty, since both group facts by matter, and silently: the upload
+        succeeded and the facts were simply unattributable afterwards."""
+        res = client.post(f"/api/tenants/{TENANT}/documents/presign", json={"filename": "a.pdf"})
         assert res.status_code == 422
 
     def test_another_tenant_is_404(self, client):
-        res = client.post("/api/tenants/other-firm/documents/presign", json={"filename": "a.pdf"})
+        res = client.post(
+            "/api/tenants/other-firm/documents/presign",
+            json={"filename": "a.pdf", "matter_id": MATTER},
+        )
         assert res.status_code == 404
 
 

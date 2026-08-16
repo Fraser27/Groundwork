@@ -52,7 +52,16 @@ WIPE_DOCUMENT = "WIPE_DOCUMENT"
 WIPE_MATTER = "WIPE_MATTER"
 """The same, for every document on a matter."""
 
-ACTIONS = frozenset({SUPERSEDE, WIPE_DOCUMENT, WIPE_MATTER})
+LINK_DOCUMENTS = "LINK_DOCUMENTS"
+"""Documents were filed under a matter, or moved between matters.
+
+Audited because it is an access change effected through a data operation: matter access is
+allowlist-primary, so a document moved into a matter somebody is not on becomes invisible to them,
+and moved out of a screened matter becomes visible. The previous matter is recorded in `detail`
+because afterwards it is unrecoverable from the data, and "where did this document come from" is
+what somebody asks later."""
+
+ACTIONS = frozenset({SUPERSEDE, WIPE_DOCUMENT, WIPE_MATTER, LINK_DOCUMENTS})
 
 #: How many assertion ids to store on one event. A DynamoDB item is capped at 400KB and a wipe of
 #: a large matter would exceed it. `affected` stays exact, so the count is never wrong even when
