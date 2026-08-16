@@ -302,6 +302,61 @@ class TestGraphNeighbourhood:
         )
         assert r.status_code == 422
 
+    def test_no_node_returns_an_overview_rather_than_422(self, client):
+        """The explorer opens before anything is selected, so its first request names no node.
+        Requiring one meant that request was a 422 and the page never rendered -- which reads as
+        "the graph is empty" rather than "you have not picked a starting point"."""
+        _stage_model_assertion()
+        r = client.get(f"/api/tenants/{TENANT}/graph/neighbourhood")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["edges"]) >= 1
+        assert len(body["nodes"]) >= 1
+
+    def test_the_overview_is_capped(self, client):
+        """A firm's whole graph is not a diagram: drawing every edge is an unreadable hairball
+        that also freezes the browser."""
+        _stage_model_assertion()
+        r = client.get(f"/api/tenants/{TENANT}/graph/neighbourhood", params={"limit": 1})
+
+        body = r.json()
+        assert len(body["edges"]) == 1
+        assert body["total_edges"] >= 1
+
+    def test_the_overview_says_when_it_truncated(self, client):
+        """A silently truncated graph is worse than a small one, because the reader believes they
+        are looking at everything.
+
+        Distinct subjects, not repeated confidences: assertion ids are content-addressed, so the
+        same claim staged three times collapses to one edge and there is nothing to truncate.
+        """
+        services = get_services()
+        ctx = AuthContext(user_id="dev@localhost", tenant_id=TENANT)
+        for i in range(3):
+            services.review_queue.stage(
+                ctx,
+                [
+                    build_assertion(
+                        tenant_id=TENANT,
+                        subject_id=f"Doc-{i}",
+                        predicate="CONCERNS_TOPIC",
+                        object_id=f"Topic-{i}",
+                        epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+                        method="llm:test@v1",
+                        confidence=0.7,
+                        source_locator=SourceLocator(
+                            document_id=f"doc-{i}", filename="f.pdf", page=1, quote="a quote"
+                        ),
+                    )
+                ],
+            )
+        r = client.get(f"/api/tenants/{TENANT}/graph/neighbourhood", params={"limit": 1})
+
+        body = r.json()
+        assert body["truncated"] is True
+        assert body["total_edges"] >= 3
+
 
 SCREEN_REASON = "acted for the opposing party in 2024"
 SCREEN_CONTACT = "risk@firm.com"

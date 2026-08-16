@@ -439,6 +439,11 @@ export interface GraphEdge {
 export interface Neighbourhood {
   nodes: GraphNode[]
   edges: GraphEdge[]
+  /** Set when the overview hit its cap. A hairball is not a diagram, so the graph is capped
+   *  rather than drawn in full, and a truncated view should say so. */
+  truncated?: boolean
+  total_edges?: number
+  confidence_floor?: number
 }
 
 // ── Ontology ─────────────────────────────────────────────────────────────────

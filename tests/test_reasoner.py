@@ -664,3 +664,70 @@ class TestOnlyARuleMayConcludeAConclusion:
             )
         ]
         assert extractor.validate(claims, chunk=chunk) == []
+
+
+class TestApprovalMakesAFactLive:
+    """Approving is what makes a fact live. Separating the two hid every approval.
+
+    `promote()` is called only during ingest, when nothing has been approved yet, so a reviewer's
+    decision was never promoted by anything. Four approved facts sat at STAGED indefinitely: the
+    UI reported success, the graph stored APPROVED, and no read path returned them, because
+    `live_assertions` filters on lifecycle.
+    """
+
+    def test_an_approved_fact_becomes_live(self, ctx):
+        from src.documents.review import Lifecycle, ReviewQueue
+
+        queue = ReviewQueue()
+        fact_a = fact("counsel:us", "REPRESENTS", "party:acme", review_state=ReviewState.PENDING)
+        queue.stage(ctx, [fact_a])
+        record = queue.approve(ctx, fact_a.assertion_id)
+
+        assert record.lifecycle is Lifecycle.LIVE
+
+    def test_an_approved_fact_is_returned_by_the_live_read(self, ctx):
+        """The read the reasoner and the graph explorer both use."""
+        from src.documents.review import ReviewQueue
+
+        queue = ReviewQueue()
+        fact_a = fact("counsel:us", "REPRESENTS", "party:acme", review_state=ReviewState.PENDING)
+        queue.stage(ctx, [fact_a])
+        queue.approve(ctx, fact_a.assertion_id)
+
+        live = [r.assertion.assertion_id for r in queue.live_assertions(ctx)]
+        assert fact_a.assertion_id in live
+
+    def test_an_unapproved_fact_stays_out_of_the_live_read(self, ctx):
+        """The gate still holds: approving is what promotes, so not approving does not."""
+        from src.documents.review import ReviewQueue
+
+        queue = ReviewQueue()
+        fact_a = fact("counsel:us", "REPRESENTS", "party:acme", review_state=ReviewState.PENDING)
+        queue.stage(ctx, [fact_a])
+
+        assert queue.live_assertions(ctx) == []
+
+    def test_approving_both_premises_lets_the_reasoner_fire(self, ctx):
+        """End to end: this is the chain that was broken. Two facts approved through the queue,
+        then the reasoner over what is live."""
+        from src.documents.review import ReviewQueue
+
+        queue = ReviewQueue()
+        premises = [
+            fact("matter:" + NTL, "ADVERSE_TO", "party:calder", review_state=ReviewState.PENDING),
+            fact(
+                "counsel:us",
+                "REPRESENTS",
+                "party:calder",
+                matter=MBC,
+                review_state=ReviewState.PENDING,
+            ),
+        ]
+        queue.stage(ctx, premises)
+        for p in premises:
+            queue.approve(ctx, p.assertion_id)
+
+        live = [r.assertion for r in queue.live_assertions(ctx)]
+        report = Reasoner(load_ontology("legal")).run(ctx, live)
+        assert report.count == 1
+        assert report.inferences[0].assertion.predicate == "POTENTIAL_CONFLICT"

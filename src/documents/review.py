@@ -285,8 +285,14 @@ class ReviewQueue:
         record.assertion.reviewed_by = ctx.user_id
         record.assertion.reviewed_at = _now()
         record.review_note = note
+        # LIVE here, not in a later `promote` pass. Approving *is* the act that makes a fact live,
+        # and separating the two meant an approved fact sat STAGED forever: `promote` is only
+        # called during ingest, when nothing has been approved yet, so nothing ever promoted a
+        # reviewer's decision. The UI reported success, the store held APPROVED, and every read
+        # path filters on lifecycle -- so four approvals were invisible everywhere.
+        record.lifecycle = Lifecycle.LIVE
         self.store.put(record)
-        logger.info("%s approved %s", ctx.user_id, assertion_id)
+        logger.info("%s approved %s, now live", ctx.user_id, assertion_id)
         return record
 
     def reject(self, ctx: AuthContext, assertion_id: str, *, reason: str) -> AssertionRecord:

@@ -186,17 +186,27 @@ async def get_ontology(domain: str) -> dict[str, Any]:
 async def neighbourhood(
     services: ServicesDep,
     principal: TenantDep,
-    node_id: Annotated[str, Query()],
+    node_id: Annotated[str | None, Query()] = None,
     depth: Annotated[int, Query(ge=1, le=3)] = 2,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 400,
 ) -> dict[str, Any]:
-    """Edges around a node, for the graph explorer.
+    """Edges around a node, or an overview of the graph when no node is named.
 
-    Built from the assertion store rather than Cypher while the graph writer is
-    unfinished, so the shape is the same once it is swapped for a scoped read.
+    `node_id` is optional because the explorer opens before anything is selected -- there is no
+    node to centre on yet. Requiring it meant the page's first request was a 422 and the graph
+    never rendered at all, which read as "the graph is empty" rather than "you have not picked a
+    starting point".
+
+    The overview is capped: a firm's whole graph is not a diagram, and drawing ten thousand edges
+    produces an unreadable hairball that also freezes the browser. Governing edges are kept
+    first, because those are the ones a conflict check or a privilege wall reads.
     """
     ctx, _ = principal
     settings = services.settings_for(ctx.tenant_id)
     records = [r for r in services.review_queue.visible(ctx) if r.is_current]
+
+    if node_id is None:
+        return _graph_overview(services, ctx, records, settings, limit)
 
     frontier = {node_id}
     seen_nodes: set[str] = set()
@@ -238,6 +248,50 @@ async def neighbourhood(
     return {
         "nodes": [_node(n) for n in sorted(node_ids)],
         "edges": list(unique_edges.values()),
+        "confidence_floor": settings.min_confidence_floor,
+    }
+
+
+def _graph_overview(
+    services: Any,
+    ctx: Any,
+    records: list[Any],
+    settings: Any,
+    limit: int,
+) -> dict[str, Any]:
+    """The whole tenant graph, capped, for a first look with nothing selected.
+
+    Governing edges first: if the cap bites, the edges worth keeping are the ones that drive a
+    consequence, not the subject-matter tags. Sorted by confidence within that, so a truncated
+    view shows the firmest facts rather than an arbitrary slice.
+    """
+    edges: list[dict[str, Any]] = []
+    for r in records:
+        a = r.assertion
+        edges.append(
+            {
+                "assertion_id": a.assertion_id,
+                "source": a.subject_id,
+                "target": a.object_id,
+                "predicate": a.predicate,
+                "epistemic_class": a.epistemic_class.value,
+                "confidence": a.confidence,
+                "review_state": a.review_state.value,
+                "below_floor": a.confidence < settings.min_confidence_floor,
+                "governing": services.ontology.is_governing(a.predicate),
+                "matter_id": a.matter_id,
+            }
+        )
+
+    edges.sort(key=lambda e: (not e["governing"], -e["confidence"]))
+    kept = edges[:limit]
+    node_ids = {e["source"] for e in kept} | {e["target"] for e in kept}
+
+    return {
+        "nodes": [_node(n) for n in sorted(node_ids)],
+        "edges": kept,
+        "truncated": len(edges) > len(kept),
+        "total_edges": len(edges),
         "confidence_floor": settings.min_confidence_floor,
     }
 

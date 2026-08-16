@@ -265,13 +265,20 @@ class TestPromotion:
         assert q.promote(ctx(), job_id="job-1") == []
         assert q.fetch(ctx(), a.assertion_id).lifecycle is Lifecycle.STAGED
 
-    def test_approved_model_extraction_promotes(self):
+    def test_approved_model_extraction_becomes_live(self):
+        """Asserted on the outcome rather than on `promote`'s return value.
+
+        Approving now promotes, because separating the two hid every approval: `promote` is only
+        called during ingest, when nothing has been approved yet. So by the time this reaches
+        `promote` there is nothing left to promote, and what matters is that the fact is live.
+        """
         q = ReviewQueue()
         a = model()
         q.stage(ctx(), [a], job_id="job-1")
         q.approve(ctx(), a.assertion_id)
-        assert q.promote(ctx(), job_id="job-1") == [a.assertion_id]
+
         assert q.fetch(ctx(), a.assertion_id).lifecycle is Lifecycle.LIVE
+        assert [r.assertion_id for r in q.live_assertions(ctx())] == [a.assertion_id]
 
     def test_rejected_never_promotes(self):
         q = ReviewQueue()
@@ -293,14 +300,21 @@ class TestPromotion:
         assert len(q.promote(ctx(), job_id="job-1")) == 1
         assert len(q.live_assertions(ctx())) == 1
 
-    def test_mixed_batch_promotes_only_the_signed_off(self):
+    def test_only_the_signed_off_end_up_live(self):
+        """The gate, stated as an outcome: approved and auto-asserted go live, pending does not.
+
+        `auto` still needs `promote`, since nothing approves it -- it needed no person. `approved`
+        went live at the moment of approval. Both routes are exercised here because both exist.
+        """
         q = ReviewQueue()
         approved, pending, auto = model(object_id="a"), model(object_id="b"), det()
         q.stage(ctx(), [approved, pending, auto], job_id="job-1")
         q.approve(ctx(), approved.assertion_id)
-        promoted = set(q.promote(ctx(), job_id="job-1"))
-        assert promoted == {approved.assertion_id, auto.assertion_id}
-        assert pending.assertion_id not in promoted
+        q.promote(ctx(), job_id="job-1")
+
+        live = {r.assertion_id for r in q.live_assertions(ctx())}
+        assert live == {approved.assertion_id, auto.assertion_id}
+        assert pending.assertion_id not in live
 
     def test_another_tenant_cannot_promote_your_staging(self):
         q = ReviewQueue()
@@ -319,8 +333,10 @@ class TestPipelineShape:
         assert q.promote(ctx(), job_id="job-1") == [citation.assertion_id]
         assert q.pending_count(ctx()) == 1
 
+        # Approving is what makes it live -- no second promote pass, because nothing calls one
+        # after a review. That gap is what left four approved facts staged and invisible.
         q.approve(ctx(user="alice"), interpretation.assertion_id)
-        assert q.promote(ctx(), job_id="job-1") == [interpretation.assertion_id]
+        assert q.pending_count(ctx()) == 0
         assert {r.assertion_id for r in q.live_assertions(ctx())} == {
             citation.assertion_id,
             interpretation.assertion_id,
