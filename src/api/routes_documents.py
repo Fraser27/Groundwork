@@ -81,7 +81,9 @@ _PLAIN_TEXT_TYPES = frozenset({"text/plain", "text/markdown", "text/csv"})
 class IngestTextRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=512)
     text: str = Field(min_length=1)
-    matter_id: str | None = None
+    matter_id: str = Field(min_length=1, max_length=128)
+    """Required, same as every other ingest route. An unfiled chunk is tenant-wide in vector
+    search, so it stays readable by someone screened from the matter it belongs to."""
     run_model_extraction: bool = True
     """The only extraction path there is, so on by default. Off still chunks and
     embeds, which is what a machine with no Bedrock credentials can do."""
@@ -742,12 +744,18 @@ async def upload_document(
     services: ServicesDep,
     principal: TenantDep,
     file: Annotated[UploadFile, File()],
-    matter_id: Annotated[str | None, Form()] = None,
+    matter_id: Annotated[str, Form(min_length=1)],
     run_model_extraction: Annotated[bool, Form()] = True,
 ) -> dict[str, Any]:
-    """Store a file, transcribe it page by page, and run the pipeline over the text."""
+    """Store a file, transcribe it page by page, and run the pipeline over the text.
+
+    `matter_id` is required, as it is on `presign`. It was optional here, and an unfiled document
+    is not merely untidy: a chunk with no matter is deliberately tenant-wide in vector search, so
+    it stays retrievable by someone screened from the matter the document belongs to.
+    """
     ctx, _ = principal
     _assert_matter(ctx, matter_id)
+    _assert_matter_exists(services, ctx, matter_id)
     storage = _require_storage(services)
 
     filename = file.filename or "document"

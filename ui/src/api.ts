@@ -880,7 +880,10 @@ export const api = {
   ): Promise<DocumentSummary> => {
     const form = new FormData()
     form.append('file', file)
-    if (matterId) form.append('matter_id', matterId)
+    // Always sent, never conditionally. The guard turned an empty matter into an absent field, so
+    // the server saw an upload that named no matter rather than one naming a blank -- and it now
+    // refuses both, because an unfiled chunk is readable by somebody screened from the matter.
+    form.append('matter_id', matterId)
     const headers: Record<string, string> = {}
     if (isAuthEnabled()) {
       const token = getAccessToken()

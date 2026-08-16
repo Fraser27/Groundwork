@@ -76,6 +76,52 @@ class AssertionOut(BaseModel):
     the claim is not currently shaping any answer."""
 
 
+def _settle_document(services: Any, ctx: AuthContext, record: Any) -> None:
+    """Move a document off PENDING_REVIEW once nothing of its own is still pending.
+
+    The job state was only ever advanced during ingest, so a document whose facts were all
+    approved afterwards sat at "awaiting review" permanently -- on the Documents list, on the
+    matter, and everywhere else that reads the job. The review decision is the event that settles
+    it, so the reconciliation belongs here.
+
+    Judged on this job's own staged ids, not the tenant's pending count: `pending_review` is
+    tenant-wide, and using it would park every document behind one unreviewed claim somewhere
+    else. That exact bug is called out in `runner.py`.
+
+    Never raises. A stale badge is a bad outcome; failing an approval that already succeeded is a
+    worse one.
+    """
+    store = getattr(services, "job_store", None)
+    document_id = getattr(getattr(record, "assertion", None), "source_locator", None)
+    document_id = getattr(document_id, "document_id", None)
+    if store is None or not document_id:
+        return
+
+    try:
+        from src.documents.job_store import JobTracker
+        from src.documents.models import JobState
+
+        jobs = store.jobs_for_document(ctx.tenant_id, document_id)
+        pending_here = {
+            r.assertion.assertion_id
+            for r in services.review_queue.visible(ctx)
+            if r.assertion.review_state is ReviewState.PENDING
+        }
+        tracker = JobTracker(store)
+        for job in jobs:
+            if job.state is not JobState.PENDING_REVIEW:
+                continue
+            if pending_here & set(job.staged_assertion_ids or ()):
+                continue
+            tracker.advance(job, JobState.APPROVED)
+            tracker.advance(job, JobState.LIVE)
+            logger.info("document %s settled to LIVE: nothing of its own is pending", document_id)
+    # Broad on purpose: the review decision has already succeeded, and a stale badge is a far
+    # better outcome than failing an approval that went through.
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not settle the document state for %s: %s", document_id, e)
+
+
 def _to_out(record: Any, floor: float) -> AssertionOut:
     a = record.assertion
     return AssertionOut(
@@ -160,6 +206,7 @@ async def approve(
         # A state conflict: the claim exists but cannot move to APPROVED from where it
         # is — already rejected, retracted by a cascade, or auto-asserted.
         raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+    _settle_document(services, ctx, record)
     return _to_out(record, floor)
 
 
@@ -181,6 +228,9 @@ async def reject(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
     except ReviewError as e:
         raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+    # A rejection settles a document as much as an approval does: the reviewer is finished with
+    # it either way, and leaving it "awaiting review" would misdescribe a decision that was made.
+    _settle_document(services, ctx, record)
     return _to_out(record, floor)
 
 

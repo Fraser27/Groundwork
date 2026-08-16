@@ -62,13 +62,15 @@ def ctx() -> AuthContext:
     return AuthContext(user_id="dev@localhost", tenant_id=TENANT)
 
 
-def _stage_model_assertion(confidence: float = 0.7, matter_id: str = "M-1") -> str:
+def _stage_model_assertion(
+    confidence: float = 0.7, matter_id: str = "M-1", predicate: str = "CONCERNS_TOPIC"
+) -> str:
     services = get_services()
     ctx = AuthContext(user_id="dev@localhost", tenant_id=TENANT)
     a = build_assertion(
         tenant_id=TENANT,
         subject_id="Doc-1",
-        predicate="CONCERNS_TOPIC",
+        predicate=predicate,
         object_id="Topic-Antitrust",
         epistemic_class=EpistemicClass.EXTRACTED_MODEL,
         method="llm:claude-sonnet-5",
@@ -495,3 +497,111 @@ class TestScreenedRefusalIsNamed:
         assert r.status_code == 404
         assert "other-firm" not in r.json()["detail"]
         assert SCREENED_MATTER not in r.text
+
+
+class TestApprovingSettlesTheDocument:
+    """A reviewed document has to stop saying "awaiting review".
+
+    The job state was advanced only during ingest, so approving a document's facts afterwards left
+    the job at PENDING_REVIEW forever -- on the Documents list, on the matter, and anywhere else
+    that reads the job. Nothing in `review.py` or `routes_review.py` referenced the job state at
+    all, so there was no path from a review decision to the document that was reviewed.
+
+    Judged on the job's own staged ids rather than the tenant's pending count: `pending_review` is
+    tenant-wide, so using it would hold every document behind one unreviewed claim elsewhere.
+    """
+
+    def _job_for(self, document_id: str, assertion_ids: list[str]):
+        from src.api.deps import get_services
+        from src.documents.job_store import JobTracker
+        from src.documents.models import DocumentMeta, IngestJob, JobState
+
+        services = get_services()
+        doc = DocumentMeta(
+            document_id=document_id,
+            tenant_id=TENANT,
+            bucket="b",
+            key=f"processed/{document_id}",
+            filename="memorandum.pdf",
+            media_type="application/pdf",
+            content_sha256="a" * 64,
+            byte_size=10,
+            uploaded_by="dev@localhost",
+        )
+        job = IngestJob.for_document(doc)
+        job.staged_assertion_ids = list(assertion_ids)
+        tracker = JobTracker(services.job_store)
+        tracker.open(job)
+        for state in (
+            JobState.FETCHING,
+            JobState.PARSING,
+            JobState.CHUNKING,
+            JobState.EXTRACTING,
+            JobState.EMBEDDING,
+            JobState.GRAPH_STAGED,
+            JobState.PENDING_REVIEW,
+        ):
+            tracker.advance(job, state)
+        return job
+
+    def _state(self, job_id: str) -> str:
+        from src.api.deps import get_services
+
+        return get_services().job_store.get_job(TENANT, job_id).state.value
+
+    def test_approving_the_last_pending_fact_takes_the_document_live(self, client):
+        aid = _stage_model_assertion()
+        job = self._job_for("doc-1", [aid])
+        assert self._state(job.job_id) == "PENDING_REVIEW"
+
+        assert client.post(f"/api/tenants/{TENANT}/assertions/{aid}/approve").status_code == 200
+
+        assert self._state(job.job_id) == "LIVE"
+
+    def test_a_document_with_a_fact_still_pending_stays_in_review(self, client):
+        """The half-reviewed case. Settling on the first approval would call a document done while
+        a reviewer still had claims of its own to read.
+
+        The two facts differ by predicate, not confidence: confidence is absent from the hash that
+        identifies an assertion, so two claims that differ only in it are one fact and staging the
+        second is a no-op.
+        """
+        first = _stage_model_assertion()
+        second = _stage_model_assertion(predicate="MENTIONS")
+        assert first != second, "the two must be distinct facts or this proves nothing"
+        job = self._job_for("doc-1", [first, second])
+
+        client.post(f"/api/tenants/{TENANT}/assertions/{first}/approve")
+
+        assert self._state(job.job_id) == "PENDING_REVIEW"
+
+        client.post(f"/api/tenants/{TENANT}/assertions/{second}/approve")
+
+        assert self._state(job.job_id) == "LIVE"
+
+    def test_rejecting_also_settles_it(self, client):
+        """A rejection is a decision too. Leaving the document "awaiting review" would misdescribe
+        a reviewer who has finished with it."""
+        aid = _stage_model_assertion()
+        job = self._job_for("doc-1", [aid])
+
+        r = client.post(
+            f"/api/tenants/{TENANT}/assertions/{aid}/reject",
+            json={"reason": "the quote does not support the claim"},
+        )
+        assert r.status_code == 200
+
+        assert self._state(job.job_id) == "LIVE"
+
+    def test_another_documents_pending_fact_does_not_hold_this_one(self, client):
+        """The tenant-wide trap, stated as a test: `pending_review` counts every tenant claim, so
+        judging on it parked each document behind an unreviewed claim somewhere else."""
+        mine = _stage_model_assertion()
+        theirs = _stage_model_assertion(predicate="MENTIONS")  # never reviewed
+        # Only `mine` is staged against this job, so `theirs` is somebody else's problem.
+        assert mine != theirs
+        job = self._job_for("doc-1", [mine])
+
+        client.post(f"/api/tenants/{TENANT}/assertions/{mine}/approve")
+
+        assert self._state(job.job_id) == "LIVE"

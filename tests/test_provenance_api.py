@@ -353,10 +353,13 @@ class TestDownloadEndpointResponse:
 
 
 def _upload(client: TestClient, *, name: str = "motion.pdf", body: bytes = PDF, **data):
+    """`matter_id` is required on every ingest route, so it defaults here rather than being passed
+    per test: an unfiled chunk is tenant-wide in vector search, which leaves it readable by
+    somebody screened from the matter the document belongs to."""
     return client.post(
         f"/api/tenants/{TENANT}/documents",
         files={"file": (name, body, "application/pdf")},
-        data={"run_model_extraction": "false", **data},
+        data={"run_model_extraction": "false", "matter_id": "M-1", **data},
     )
 
 
@@ -483,7 +486,7 @@ class TestUploadTranscribesAndChunks:
         r = client.post(
             f"/api/tenants/{TENANT}/documents",
             files={"file": ("notes.txt", b"Held for the plaintiff.", declared)},
-            data={"run_model_extraction": "false"},
+            data={"run_model_extraction": "false", "matter_id": "M-1"},
         )
         assert r.status_code == 201
         assert r.json()["transcription"] == "text:inline@v1"
@@ -494,3 +497,38 @@ class TestUploadTranscribesAndChunks:
         assert body["state"] == "PARSE_FAILED"
         assert "page 3" in body["error"]
         assert s3.puts
+
+
+class TestEveryIngestRouteRequiresAMatter:
+    """A document with no matter is a retrieval leak, not untidiness.
+
+    A chunk carrying no `matter_id` is deliberately tenant-wide -- vector search admits it under
+    any allowlist, mirroring `edge_scope` -- so an unfiled document stays readable by somebody
+    screened from the matter it belongs to. `presign` already required a matter; the multipart and
+    text routes did not, so the same leak could still be created through either.
+    """
+
+    def test_a_multipart_upload_without_a_matter_is_refused(self, client):
+        r = client.post(
+            f"/api/tenants/{TENANT}/documents",
+            files={"file": ("motion.pdf", PDF, "application/pdf")},
+            data={"run_model_extraction": "false"},
+        )
+        assert r.status_code == 422
+
+    def test_an_empty_matter_is_refused_rather_than_treated_as_absent(self, client):
+        """The UI sent `if (matterId) form.append(...)`, so an empty string arrived as no field at
+        all. Refusing the empty string closes the same gap from the other side."""
+        r = client.post(
+            f"/api/tenants/{TENANT}/documents",
+            files={"file": ("motion.pdf", PDF, "application/pdf")},
+            data={"run_model_extraction": "false", "matter_id": ""},
+        )
+        assert r.status_code == 422
+
+    def test_a_text_ingest_without_a_matter_is_refused(self, client):
+        r = client.post(
+            f"/api/tenants/{TENANT}/documents/text",
+            json={"filename": "note.txt", "text": "Held for the plaintiff."},
+        )
+        assert r.status_code == 422
