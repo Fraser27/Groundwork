@@ -43,13 +43,17 @@ DELETE_PAGE_SIZE = 500
 #: HNSW with cosine similarity, matching `_cosine` in the in-memory store so a local result and
 #: a deployed one rank the same way. `l2` would rank differently for identical embeddings, which
 #: would make a local reproduction of a retrieval bug impossible.
+#:
+#: No `engine`. A NextGen collection rejects it outright -- "Field parameter 'engine' is not
+#: supported" -- because the engine is the service's choice, not the index's. Naming `faiss`
+#: here, as most OpenSearch examples do, fails index creation with a 400.
 _INDEX_SETTINGS: dict[str, Any] = {
     "settings": {"index": {"knn": True}},
     "mappings": {
         "properties": {
             VECTOR_FIELD: {
                 "type": "knn_vector",
-                "method": {"name": "hnsw", "space_type": "cosinesimil", "engine": "faiss"},
+                "method": {"name": "hnsw", "space_type": "cosinesimil"},
             },
             "tenant_id": {"type": "keyword"},
             "document_id": {"type": "keyword"},

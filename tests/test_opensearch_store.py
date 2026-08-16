@@ -136,6 +136,17 @@ class TestWriting:
         method = client.indices.created[0]["body"]["mappings"]["properties"][VECTOR_FIELD]["method"]
         assert method["space_type"] == "cosinesimil"
 
+    def test_the_mapping_does_not_name_an_engine(self):
+        """A NextGen collection rejects `engine` outright: "Field parameter 'engine' is not
+        supported". The engine is the service's choice, not the index's, and naming `faiss` --
+        as most OpenSearch examples do -- fails index creation with a 400."""
+        client = FakeOpenSearch()
+        store(client).upsert(INDEX, [record()])
+
+        method = client.indices.created[0]["body"]["mappings"]["properties"][VECTOR_FIELD]["method"]
+        assert "engine" not in method
+        assert method["name"] == "hnsw"
+
     def test_the_declared_dimension_is_the_configured_one(self):
         client = FakeOpenSearch()
         OpenSearchVectorStore(endpoint="x", client=client, dimensions=512).upsert(INDEX, [record()])
