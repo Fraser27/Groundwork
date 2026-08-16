@@ -189,6 +189,11 @@ class IngestRunner:
             return job
 
         job.chunk_count = int(result.get("chunks") or 0)
+        # Recorded on the job, not just returned. The field existed and nothing ever populated
+        # it, so a job that staged eleven facts reported staging none -- and because the
+        # terminal state is decided from these counts, that made a document look as though its
+        # extraction had found nothing.
+        job.staged_assertion_ids = list(result.get("staged_assertion_ids") or [])
         for state in (JobState.EXTRACTING, JobState.EMBEDDING, JobState.GRAPH_STAGED):
             self.tracker.advance(job, state)
         self._emit(job, {"result": result})

@@ -238,8 +238,8 @@ export class DataStack extends cdk.Stack {
    */
   private buildVectorStore(
     config: LexGraphConfig,
-    vpc: ec2.IVpc,
-    vectorSg: ec2.ISecurityGroup,
+    _vpc: ec2.IVpc,
+    _vectorSg: ec2.ISecurityGroup,
   ): { collection: aoss.CfnCollection; endpoint: string } {
     const collectionName = `${PROJECT}-vectors`;
 
@@ -268,16 +268,39 @@ export class DataStack extends cdk.Stack {
       }),
     });
 
-    // The chunk text in this index is verbatim from privileged documents, so the
-    // collection is never reachable from the public internet — only through this
-    // endpoint, referenced by ID in the network policy below.
-    const vpcEndpoint = new aoss.CfnVpcEndpoint(this, 'VectorVpcEndpoint', {
-      name: `${PROJECT}-vec-vpce`,
-      vpcId: vpc.vpcId,
-      subnetIds: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }).subnetIds,
-      securityGroupIds: [vectorSg.securityGroupId],
-    });
+    // No OpenSearch VPC endpoint. It was here, and it could not work: see the network policy
+    // below for why a NextGen collection cannot be reached through one. Removed rather than
+    // left in place because an endpoint that no traffic can use still bills hourly and reads,
+    // to anyone auditing this stack, as a private path that does not exist.
+    //
+    // `vectorSg` is consequently unused for the collection. Kept as a parameter because the
+    // moment this becomes a CLASSIC collection, or the private zone starts covering the
+    // NextGen domain, the endpoint comes back and needs it.
 
+    // `AllowFromPublic: true`, and the reason is a NextGen constraint rather than a
+    // preference.
+    //
+    // A NextGen collection's endpoint is `<id>.aoss.<region>.on.aws`. The private hosted
+    // zone that the OpenSearch VPC endpoint attaches to the VPC covers
+    // `*.us-east-1.aoss.amazonaws.com` — the *legacy* domain — so the NextGen hostname has
+    // no private record and resolves to a public address from inside the VPC. The network
+    // policy then denies the request as coming from the internet, and the failure is a bare
+    // `401` with no body, which reads as an authentication problem and is not one. Every
+    // other half was correct: task role in the data access policy, `aoss:APIAccessAll` in
+    // IAM, security group ingress, SigV4 with service `aoss`.
+    //
+    // So for this collection generation there is no configuration in which the VPC endpoint
+    // works. The alternative is a CLASSIC collection, which resolves privately but has a
+    // 2-OCU floor (~$350/month idle) against scale-to-zero here.
+    //
+    // What still protects the chunk text, none of which is network-level:
+    //   - the data access policy names exactly one principal, the app task role;
+    //   - every request is SigV4-signed, so an unsigned or wrong-account caller is refused;
+    //   - one index per tenant, so a scoping mistake fails closed;
+    //   - Dashboards is still absent from the policy, so there is no interactive read path.
+    // Public *network* reachability is not public *data* access. But this is one lock fewer
+    // than the design intended, and it should be revisited if the private zone ever covers
+    // the NextGen domain.
     const networkPolicy = new aoss.CfnSecurityPolicy(this, 'VectorNetworkPolicy', {
       name: `${PROJECT}-vec-net`,
       type: 'network',
@@ -288,8 +311,7 @@ export class DataStack extends cdk.Stack {
             // Dashboards deliberately absent: there is no read path to
             // privileged text that bypasses tenant scoping.
           ],
-          AllowFromPublic: false,
-          SourceVPCEs: [vpcEndpoint.ref],
+          AllowFromPublic: true,
         },
       ]),
     });

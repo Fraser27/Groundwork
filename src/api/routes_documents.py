@@ -264,6 +264,9 @@ def _run_pipeline(
         ),
         "extraction": extraction,
         "assertions_staged": len(staged),
+        # The ids as well as the count, so the job record can name what it staged rather than
+        # only how many, which is what makes a document's facts findable from its job.
+        "staged_assertion_ids": list(staged),
         "assertions_live": len(promoted),
         "pending_review": services.review_queue.pending_count(ctx),
         "note": (
