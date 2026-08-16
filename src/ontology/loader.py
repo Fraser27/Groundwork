@@ -74,6 +74,35 @@ class Ontology:
     def descriptive_predicates(self) -> frozenset[str]:
         return frozenset(p.id for p in self.predicates.values() if not p.governing)
 
+    @functools.cached_property
+    def rule_conclusions(self) -> frozenset[str]:
+        """Predicates only a rule may write.
+
+        Declaring the conclusions as governing predicates -- which they have to be, so
+        `build_assertion` accepts them and a typo in a rule fails at load -- also put them in the
+        list handed to the extractor's prompt. A model then proposed `POTENTIAL_CONFLICT`
+        directly, which is exactly the collapse the epistemic axis exists to prevent: a conflict
+        a model guessed at and one a rule derived from two signed-off facts became the same kind
+        of object, and only the second carries a proof tree.
+        """
+        from src.ontology.patterns import PatternError, parse_rule
+
+        out: set[str] = set()
+        for rule in self.rules:
+            try:
+                out.add(parse_rule(rule).conclusion.predicate)
+            except PatternError:
+                # An unparseable rule is reported by the reasoner. Here it simply contributes no
+                # conclusion, which errs toward letting an extractor propose it rather than
+                # silently forbidding a predicate for an unrelated reason.
+                continue
+        return frozenset(out)
+
+    @functools.cached_property
+    def extractable_predicates(self) -> frozenset[str]:
+        """What an extractor may propose: everything except what a rule concludes."""
+        return (self.governing_predicates | self.descriptive_predicates) - self.rule_conclusions
+
     def is_governing(self, predicate: str) -> bool:
         return predicate in self.governing_predicates
 

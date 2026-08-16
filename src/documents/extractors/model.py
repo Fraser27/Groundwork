@@ -257,9 +257,7 @@ class ModelExtractor:
             if factory is None:
                 import boto3
 
-                factory = lambda: boto3.client(
-                    "bedrock-runtime", region_name=self.region
-                )
+                factory = lambda: boto3.client("bedrock-runtime", region_name=self.region)
             self._bedrock = factory()
         return self._bedrock
 
@@ -294,9 +292,11 @@ class ModelExtractor:
         """
         prompt = build_prompt(
             chunk,
-            allowed_predicates=sorted(
-                self.ontology.governing_predicates | self.ontology.descriptive_predicates
-            ),
+            # Not every known predicate: a rule's conclusion is excluded, so a model cannot
+            # propose `POTENTIAL_CONFLICT` as though it had read one off a page. A conflict is
+            # derived from two signed-off facts and carries them as premises; one a model
+            # asserted directly would look identical and defend nothing.
+            allowed_predicates=sorted(self.ontology.extractable_predicates),
             entity_kinds=sorted(self.ontology.entities),
         )
         try:
@@ -354,6 +354,14 @@ class ModelExtractor:
                 logger.info("dropped ungroundable predicate %r", claim.predicate)
                 continue
 
+            if predicate in self.ontology.rule_conclusions:
+                # Refused here as well as omitted from the prompt, because a prompt is a request
+                # and this is the boundary. Only a rule may conclude these, and a conclusion
+                # without premises defends nothing -- letting a model assert one would make a
+                # guess indistinguishable from a derivation.
+                logger.info("dropped %s: only a rule may conclude it", predicate)
+                continue
+
             span = locate_quote(chunk, claim.quote)
             if span is None:
                 logger.info(
@@ -373,9 +381,7 @@ class ModelExtractor:
             verified = predicate in PRESENCE_PREDICATES
             # Collapse a symmetric predicate's endpoints, so "A adverse to B" and
             # "B adverse to A" are one fact rather than two competing edges.
-            subject, object_id = self.ontology.canonical_pair(
-                predicate, subject, claim.object_id
-            )
+            subject, object_id = self.ontology.canonical_pair(predicate, subject, claim.object_id)
 
             try:
                 assertion = build_assertion(

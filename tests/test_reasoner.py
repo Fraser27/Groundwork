@@ -604,3 +604,63 @@ class TestPackValidationHappensAtLoad:
     def test_the_shipped_packs_still_load(self):
         for domain in ("legal", "healthcare"):
             assert load_ontology(domain).rules
+
+
+class TestOnlyARuleMayConcludeAConclusion:
+    """The conclusions have to be governing predicates, and that had a consequence I missed.
+
+    Declaring them so that `build_assertion` accepts them, and so a typo in a rule fails at pack
+    load, also put them in the list handed to the extractor's prompt. Production showed the
+    result: five `POTENTIAL_CONFLICT` assertions with epistemic class EXTRACTED_MODEL -- a model
+    asserting a conflict it thought it read on a page, with no premises and nothing to defend.
+
+    That is precisely the collapse the epistemic axis exists to prevent. A conflict a rule
+    derived from two signed-off facts and one a model guessed at would be the same kind of
+    object, and only one of them can be followed back to a document.
+    """
+
+    def test_a_conclusion_is_not_offered_to_the_extractor(self):
+        onto = load_ontology("legal")
+        assert "POTENTIAL_CONFLICT" not in onto.extractable_predicates
+        assert "RELIES_ON_STALE_AUTHORITY" not in onto.extractable_predicates
+
+    def test_ordinary_predicates_are_still_offered(self):
+        onto = load_ontology("legal")
+        assert {"REPRESENTS", "ADVERSE_TO", "CITES", "MENTIONS"} <= onto.extractable_predicates
+
+    def test_the_healthcare_conclusion_is_excluded_too(self):
+        onto = load_ontology("healthcare")
+        assert "CONTRAINDICATION_ALERT" not in onto.extractable_predicates
+        assert "PRESCRIBED" in onto.extractable_predicates
+
+    def test_a_proposed_conclusion_is_refused_at_the_boundary(self):
+        """Not merely omitted from the prompt. A prompt is a request; this is the boundary, and a
+        model that proposes one anyway must be refused rather than trusted to have read the
+        instructions."""
+        from src.documents.extractors.model import ModelExtractor, ProposedClaim
+        from src.documents.models import Chunk
+
+        onto = load_ontology("legal")
+        extractor = ModelExtractor(onto, model_id="test", region="us-east-1")
+        chunk = Chunk(
+            chunk_id="c1",
+            document_id="doc-1",
+            tenant_id=TENANT,
+            matter_id=NTL,
+            page=1,
+            ordinal=0,
+            char_start=0,
+            char_end=41,
+            text="Meridian is adverse to Calder Shipping AG",
+            filename="f.pdf",
+        )
+        claims = [
+            ProposedClaim(
+                subject_id="matter:NTL",
+                predicate="POTENTIAL_CONFLICT",
+                object_id="party:calder",
+                quote="Meridian is adverse to Calder",
+                confidence=0.9,
+            )
+        ]
+        assert extractor.validate(claims, chunk=chunk) == []
