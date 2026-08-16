@@ -72,6 +72,10 @@ class Hit:
     matched_on: list[str]
     source: dict[str, Any]
 
+    hops: int | None = None
+    """How far from a cited passage a walked edge was reached. None for a term match, where
+    `matched_on` is the explanation instead."""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "assertion_id": self.assertion_id,
@@ -82,6 +86,7 @@ class Hit:
             "confidence": self.confidence,
             "matter_id": self.matter_id,
             "matched_on": self.matched_on,
+            "hops": self.hops,
             "source": self.source,
         }
 
@@ -198,11 +203,17 @@ class GraphReader:
         seen_nodes: set[str] = set()
         out: dict[str, dict[str, Any]] = {}
 
-        for _ in range(max(1, depth)):
+        for hop in range(1, max(1, depth) + 1):
             next_frontier: set[str] = set()
             for record in records:
                 a = record.assertion
                 if a.subject_id not in frontier and a.object_id not in frontier:
+                    continue
+                # First seen wins. A later pass re-matches an edge whose endpoint is still in the
+                # frontier, and overwriting would relabel a direct edge as two hops out -- the
+                # shortest distance is the one that means anything.
+                if a.assertion_id in out:
+                    next_frontier.update({a.subject_id, a.object_id})
                     continue
                 out[a.assertion_id] = Hit(
                     assertion_id=a.assertion_id,
@@ -212,7 +223,12 @@ class GraphReader:
                     epistemic_class=a.epistemic_class.value,
                     confidence=a.confidence,
                     matter_id=a.matter_id,
+                    # A walked edge did not match a word, so `matched_on` stays empty and `hops`
+                    # carries the reason instead: how far from a cited passage it was reached.
+                    # Without it a reader cannot tell a fact stated in the document from one two
+                    # steps away, which is the difference between quoting and inferring.
                     matched_on=[],
+                    hops=hop,
                     source=a.source_locator.to_dict(),
                 ).to_dict()
                 next_frontier.update({a.subject_id, a.object_id})

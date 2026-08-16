@@ -219,3 +219,49 @@ class TestVectorDegradation:
         r = Resolver(graph_reader=reader, vector_search=Broken())
         res = r.resolve(ctx, "zzzq gibberish", GovernanceSettings())
         assert res.answer is None
+
+
+class TestHybridSeedsTheWalkWithGraphNodeIds:
+    """Tier 3 returned zero related facts for every question, silently.
+
+    A passage carries a bare `document_id`; an assertion's subject is `document:<id>`, per
+    `DocumentMeta.entity_id`. Seeding `expand()` with the raw id meant the first frontier matched
+    nothing, so the walk ended before it began and the answer's graph half was always empty. It
+    read as "nothing connects to this passage" rather than as a failure, which is why it survived:
+    an empty grounding card looks like a sparse graph.
+    """
+
+    def _resolver(self, reader):
+        class Vectors:
+            def search(self, ctx, question, *, top_k=10):
+                # What VectorSearch really returns: the bare document id, no prefix.
+                return [{"document_id": "d1", "page": 1, "text": "Acme Corporation"}]
+
+        return Resolver(graph_reader=reader, vector_search=Vectors())
+
+    def test_a_hybrid_answer_carries_the_walked_edges(self, reader, ctx):
+        res = self._resolver(reader).resolve(ctx, "what does d1 say about acme", GovernanceSettings(), tier_override=Tier.HYBRID)
+
+        assert res.tier is Tier.HYBRID
+        assert res.answer["related"], "the graph half was empty, so the walk never started"
+        assert res.assertions_used, "an answer that used facts must record which ones"
+
+    def test_the_walked_edges_say_how_far_out_they_are(self, reader, ctx):
+        """`matched_on` is empty for a walked edge because no term matched it, so `hops` carries the
+        explanation instead: a reader has to be able to tell a fact stated in the cited document
+        from one two steps away."""
+        res = self._resolver(reader).resolve(ctx, "what does d1 say about acme", GovernanceSettings(), tier_override=Tier.HYBRID)
+
+        hops = {e["hops"] for e in res.answer["related"]}
+        assert hops, "no hop distance recorded"
+        assert min(hops) == 1, "an edge on the cited document itself is one hop"
+        assert all(h >= 1 for h in hops)
+
+    def test_a_term_match_records_no_hop_distance(self, reader, ctx):
+        """Tier 2 explains itself with `matched_on`, so `hops` stays None rather than claiming a
+        distance the search never walked."""
+        hits = reader.search(ctx, "acme corporation", min_confidence=0.5)
+
+        assert hits
+        assert all(h["hops"] is None for h in hits)
+        assert any(h["matched_on"] for h in hits)

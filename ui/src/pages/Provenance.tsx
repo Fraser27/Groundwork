@@ -332,6 +332,20 @@ export default function Provenance() {
   )
 }
 
+/** The sub is kept alongside the email, not replaced by it: an email can be reassigned and the sub
+ *  is the recorded identity. Null email means the directory no longer knows the actor. */
+function Actor({ sub, email }: { sub: string; email?: string | null }) {
+  if (!email) return <span className="mono">{sub}</span>
+  return (
+    <>
+      {email}
+      <div>
+        <code>{sub}</code>
+      </div>
+    </>
+  )
+}
+
 /**
  * Who changed what the system believes.
  *
@@ -394,7 +408,9 @@ function GraphChanges({ tenant }: { tenant: string }) {
           {events.map((e, i) => (
             <tr key={`${e.at}-${i}`}>
               <td className="nowrap dim">{fmtDateTime(e.at)}</td>
-              <td className="nowrap">{e.actor}</td>
+              <td className="audit-actor">
+                <Actor sub={e.actor} email={e.actor_email} />
+              </td>
               <td>
                 <span className={`tag ${e.action === 'SUPERSEDE' ? 'tag-orange' : 'tag-red'}`}>
                   {ACTION_LABEL[e.action] ?? e.action}
@@ -415,6 +431,75 @@ function GraphChanges({ tenant }: { tenant: string }) {
         because they were true when drawn.
       </p>
     </div>
+  )
+}
+
+/** Beyond this the ids stop being scannable and push the other columns off the row. */
+const IDS_SHOWN = 3
+
+/** Tier 3 cites the graph around a passage, so a row can carry dozens. Collapsed rather than
+ *  clipped: an id with no way to reach it is as good as one that was never recorded. */
+function FactIds({
+  ids,
+  total,
+  truncated,
+  onInspect,
+}: {
+  ids: string[]
+  total: number
+  truncated: boolean
+  onInspect: (assertionId: string) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const shown = expanded ? ids : ids.slice(0, IDS_SHOWN)
+  const hidden = ids.length - shown.length
+
+  return (
+    <>
+      {fmtNum(total)}
+      {truncated && (
+        <span
+          className="dim"
+          title="Over 200 facts were cited and only the first 200 ids were stored. The count is exact."
+        >
+          {' '}
+          (ids capped)
+        </span>
+      )}
+      <div style={{ marginTop: 3 }}>
+        {shown.map((id) => (
+          <button
+            key={id}
+            type="button"
+            className="link-button mono"
+            style={{ fontSize: 11, display: 'block' }}
+            onClick={() => onInspect(id)}
+          >
+            {id}
+          </button>
+        ))}
+        {hidden > 0 && (
+          <button
+            type="button"
+            className="link-button dim"
+            style={{ fontSize: 11 }}
+            onClick={() => setExpanded(true)}
+          >
+            +{hidden} more
+          </button>
+        )}
+        {expanded && ids.length > IDS_SHOWN && (
+          <button
+            type="button"
+            className="link-button dim"
+            style={{ fontSize: 11 }}
+            onClick={() => setExpanded(false)}
+          >
+            Show fewer
+          </button>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -554,7 +639,9 @@ function Questions({
               {events.map((e, i) => (
                 <tr key={`${e.at}-${i}`}>
                   <td className="nowrap dim">{fmtDateTime(e.at)}</td>
-                  <td className="nowrap">{e.actor}</td>
+                  <td className="audit-actor">
+                    <Actor sub={e.actor} email={e.actor_email} />
+                  </td>
                   <td>
                     {e.question}
                     {!e.answered && (
@@ -570,30 +657,16 @@ function Questions({
                   </td>
                   <td className="num">
                     {e.facts_used === 0 ? (
-                      <span className="dim">-</span>
+                      <span className="dim" title="A metric or an AI-written query cites no facts.">
+                        -
+                      </span>
                     ) : (
-                      <>
-                        {fmtNum(e.facts_used)}
-                        {e.ids_truncated && (
-                          <span className="dim" title="Only the first 200 ids were stored.">
-                            {' '}
-                            (capped)
-                          </span>
-                        )}
-                        <div style={{ marginTop: 3 }}>
-                          {e.assertion_ids.slice(0, 3).map((id) => (
-                            <button
-                              key={id}
-                              type="button"
-                              className="link-button mono"
-                              style={{ fontSize: 11, display: 'block' }}
-                              onClick={() => onInspect(id)}
-                            >
-                              {id}
-                            </button>
-                          ))}
-                        </div>
-                      </>
+                      <FactIds
+                        ids={e.assertion_ids}
+                        total={e.facts_used}
+                        truncated={e.ids_truncated}
+                        onInspect={onInspect}
+                      />
                     )}
                   </td>
                 </tr>

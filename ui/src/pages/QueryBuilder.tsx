@@ -55,6 +55,20 @@ function asPassages(answer: QueryAnswer): QueryPassage[] {
   return []
 }
 
+/** Tier 2 explains a fact by the terms it matched; tier 3 walked to it, so distance is the
+ *  explanation -- ten edges read alike otherwise, quoting indistinguishable from inferring. */
+function whyIncluded(h: QueryHit): string {
+  const parts: string[] = []
+  if (h.matched_on.length > 0) parts.push(`matched on ${h.matched_on.join(', ')}`)
+  if (h.hops != null) {
+    parts.push(h.hops === 1 ? 'direct from the passage' : `${h.hops} hops from the passage`)
+  }
+  if (h.source.filename) {
+    parts.push(h.source.filename + (h.source.page != null ? `, page ${h.source.page}` : ''))
+  }
+  return parts.join(' · ')
+}
+
 /** Entity ids are `kind:slug`. The slug is what a reader recognises; the kind is noise here. */
 function entityLabel(id: string): string {
   const slug = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id
@@ -405,12 +419,7 @@ export default function QueryBuilder() {
                         <span className="prov-pred">{h.predicate}</span>{' '}
                         <strong>{entityLabel(h.object_id)}</strong>
                         <span className="dim" style={{ display: 'block', fontSize: 11.5 }}>
-                          {h.matched_on.length > 0 && `matched on ${h.matched_on.join(', ')}`}
-                          {h.source.filename
-                            ? `${h.matched_on.length > 0 ? ' · ' : ''}${h.source.filename}${
-                                h.source.page != null ? `, page ${h.source.page}` : ''
-                              }`
-                            : ''}
+                          {whyIncluded(h)}
                         </span>
                       </span>
                       <ConfidenceBar value={h.confidence} floor={floor} width={54} />

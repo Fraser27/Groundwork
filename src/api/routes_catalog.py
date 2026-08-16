@@ -737,8 +737,9 @@ async def graph_audit_log(
     if audit is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no graph audit log is configured")
     events = audit.events(ctx.tenant_id, limit=limit)
+    emails = _actor_emails(services, ctx.tenant_id)
     return {
-        "events": [e.to_dict() for e in events],
+        "events": [{**e.to_dict(), "actor_email": emails.get(e.actor)} for e in events],
         "count": len(events),
         "note": (
             "Append-only. Nothing here is edited or removed, and neither are the facts it "
@@ -746,6 +747,26 @@ async def graph_audit_log(
             "still reconstructs what the graph held."
         ),
     }
+
+
+def _actor_emails(services: Any, tenant_id: str) -> dict[str, str]:
+    """Cognito sub to email, for the audit surfaces.
+
+    Resolved at read time rather than stored on the event: an email can change and a sub cannot,
+    so the sub stays the recorded identity. But "84289448-90d1-70f2-..." tells a reader nothing
+    about who acted, which is most of what an audit trail is for.
+
+    Empty on failure and the caller falls back to the sub. A less readable trail beats a page that
+    will not load.
+    """
+    directory = getattr(services, "tenant_directory", None)
+    if directory is None or not hasattr(directory, "users_for_tenant"):
+        return {}
+    try:
+        return {u.sub: u.email for u in directory.users_for_tenant(tenant_id) if u.email}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("could not resolve actor emails: %s", e)
+        return {}
 
 
 @router.get("/tenants/{tenant}/audit/questions")
@@ -769,12 +790,14 @@ async def question_audit_log(
     if audit is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no query audit log is configured")
 
+    emails = _actor_emails(services, ctx.tenant_id)
+
     if assertion_id:
         window = min(max(limit, MAX_SCAN), 500)
         scanned = audit.questions(ctx.tenant_id, limit=window)
         events = [e for e in scanned if e.uses(assertion_id)]
         return {
-            "questions": [e.to_dict() for e in events],
+            "questions": [{**e.to_dict(), "actor_email": emails.get(e.actor)} for e in events],
             "count": len(events),
             "scanned": len(scanned),
             "assertion_id": assertion_id,
@@ -787,7 +810,7 @@ async def question_audit_log(
 
     events = audit.questions(ctx.tenant_id, limit=limit)
     return {
-        "questions": [e.to_dict() for e in events],
+        "questions": [{**e.to_dict(), "actor_email": emails.get(e.actor)} for e in events],
         "count": len(events),
         "scanned": len(events),
         "assertion_id": None,

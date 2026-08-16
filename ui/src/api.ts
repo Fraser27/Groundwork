@@ -173,6 +173,8 @@ export interface WipeReport {
 export interface GraphAuditEvent {
   at: string
   actor: string
+  /** Resolved from the directory at read time, so null when the sub is not a current user. */
+  actor_email?: string | null
   action: 'SUPERSEDE' | 'WIPE_DOCUMENT' | 'WIPE_MATTER'
   document_id?: string | null
   matter_id?: string | null
@@ -186,6 +188,7 @@ export interface GraphAuditEvent {
 export interface QueryAuditEvent {
   at: string
   actor: string
+  actor_email?: string | null
   question: string
   tier: number
   tier_name: string
@@ -478,6 +481,8 @@ export interface QueryHit {
   confidence: number
   matter_id?: string | null
   matched_on: string[]
+  /** Hops from a cited passage, 1-based. Null on a tier 2 match, explained by `matched_on`. */
+  hops?: number | null
   source: SourceLocator
 }
 

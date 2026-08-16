@@ -249,9 +249,17 @@ class Resolver:
         passages = self._vectors.search(ctx, question, top_k=settings.vector_top_k)
         if not passages:
             return None
+        # Seeded with the graph's node id, not the bare document id. An assertion's subject is
+        # `document:<id>` (`DocumentMeta.entity_id`), so seeding the raw id matched nothing on the
+        # first frontier and every hybrid answer returned zero related facts -- a silent empty
+        # rather than an error, so tier 3 looked like it had simply found nothing to connect.
+        # Both forms are passed: a seed that no assertion carries costs one set lookup, and being
+        # wrong in the other direction costs the whole graph half of the answer.
+        seeds = [f"document:{p['document_id']}" for p in passages if p.get("document_id")]
+        seeds += [p["document_id"] for p in passages if p.get("document_id")]
         expanded = self._graph.expand(
             ctx,
-            [p["document_id"] for p in passages],
+            seeds,
             depth=settings.graph_expand_depth,
             min_confidence=settings.min_confidence_floor,
         )
