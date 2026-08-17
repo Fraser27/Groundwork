@@ -40,7 +40,7 @@ from src.documents.keys import (
     raw_key,
     safe_filename,
 )
-from src.documents.models import DocumentMeta, sha256_hex
+from src.documents.models import DocumentMeta, document_id_for, sha256_hex
 from src.graph.scope import AuthContext, ScopeViolation
 
 logger = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ class DocumentStorage:
                 if parsed is None:
                     continue
                 key_tenant, content_sha256, filename = parsed
-                if f"doc-{sha256_hex(f'{key_tenant}:{content_sha256}')[:24]}" != document_id:
+                if document_id_for(key_tenant, content_sha256) != document_id:
                     continue
                 meta = DocumentMeta(
                     tenant_id=key_tenant,

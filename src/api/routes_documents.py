@@ -48,10 +48,17 @@ from src.api.events import get_event_hub
 from src.auth import AuthError
 from src.documents.chunk import chunk_document
 from src.documents.extractors.model import ModelExtractor
+from src.documents.filing import (
+    Filing,
+    apply_filing,
+    audit_filing,
+    log_filing,
+    resolve_filing,
+)
 from src.documents.ingest import DEFAULT_MEDIA_TYPE
 from src.documents.job_store import latest_per_document
 from src.documents.keys import parse_raw_key
-from src.documents.models import IngestJob, JobState
+from src.documents.models import IngestJob, JobState, document_id_for, sha256_hex
 from src.documents.parse import ParsedDocument, parse_plain_text
 from src.documents.runner import IngestBusy, IngestRunner
 from src.documents.storage import (
@@ -209,7 +216,34 @@ def _require_runner(services: Services) -> IngestRunner:
         plain_text_types=_PLAIN_TEXT_TYPES,
         parse_plain_text=parse_plain_text,
         on_event=get_event_hub().publish,
+        graph_audit=services.graph_audit,
     )
+
+
+def _filing_for(
+    services: Services, ctx: AuthContext, document_id: str, requested: str | None
+) -> Filing:
+    """Which matter this ingest files under, and record it if that moved the document.
+
+    Both synchronous routes require a matter, so adoption cannot fire here — what this is for
+    is the other half: a re-upload naming a *different* matter is an access change effected
+    through an upload, and it is audited exactly as a link would be. The async route resolves
+    the same way inside `IngestRunner`, so the rule lives in `documents/filing.py` once.
+    """
+    filing = resolve_filing(services.job_store, ctx.tenant_id, document_id, requested)
+    if filing.matter_id is not None:
+        # An adopted matter has not been checked against this caller's grants yet: the earlier
+        # filing was checked against whoever made it, which is not the same principal.
+        _assert_matter(ctx, filing.matter_id)
+    log_filing(filing, document_id, ctx.user_id)
+    audit_filing(
+        services.graph_audit,
+        tenant_id=ctx.tenant_id,
+        actor=ctx.user_id,
+        document_id=document_id,
+        filing=filing,
+    )
+    return filing
 
 
 def _run_pipeline(
@@ -773,9 +807,20 @@ async def upload_document(
     declared = file.content_type
     media_type = declared if declared and declared != DEFAULT_MEDIA_TYPE else None
 
+    filing = _filing_for(
+        services, ctx, document_id_for(ctx.tenant_id, sha256_hex(body)), matter_id
+    )
+
     try:
-        doc = storage.put_document(
-            ctx, filename=filename, body=body, matter_id=matter_id, media_type=media_type
+        doc = apply_filing(
+            storage.put_document(
+                ctx,
+                filename=filename,
+                body=body,
+                matter_id=filing.matter_id,
+                media_type=media_type,
+            ),
+            filing,
         )
     except ScopeViolation as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
@@ -816,7 +861,7 @@ async def upload_document(
         services,
         ctx,
         parsed,
-        matter_id=matter_id,
+        matter_id=doc.matter_id,
         run_model_extraction=run_model_extraction,
         job_id=doc.document_id,
     )
@@ -852,19 +897,20 @@ async def ingest_text(
     # identical document id gives identical assertion ids.
     document_id = hashlib.sha256(body.text.encode()).hexdigest()[:16]
     parsed = parse_plain_text(document_id, body.text, filename=body.filename)
+    filing = _filing_for(services, ctx, document_id, body.matter_id)
 
     result = _run_pipeline(
         services,
         ctx,
         parsed,
-        matter_id=body.matter_id,
+        matter_id=filing.matter_id,
         run_model_extraction=body.run_model_extraction,
         job_id=document_id,
     )
     return {
         "document_id": f"document:{document_id}",
         "filename": body.filename,
-        "matter_id": body.matter_id,
+        "matter_id": filing.matter_id,
         **result,
     }
 

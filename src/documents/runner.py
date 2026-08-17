@@ -31,8 +31,14 @@ import threading
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from src.documents.filing import (
+    apply_filing,
+    audit_filing,
+    log_filing,
+    resolve_filing,
+)
 from src.documents.job_store import InMemoryJobStore, JobTracker
-from src.documents.models import DocumentMeta, IngestJob, JobState
+from src.documents.models import DocumentMeta, IngestJob, JobState, document_id_for, sha256_hex
 from src.documents.storage import DocumentStorage, RawUpload
 from src.graph.scope import AuthContext
 
@@ -91,12 +97,16 @@ class IngestRunner:
         plain_text_types: frozenset[str],
         parse_plain_text: Callable[..., Any],
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        graph_audit: Any | None = None,
     ) -> None:
         self.storage = storage
         self.pipeline = pipeline
         self.parser = parser
         self.tracker = JobTracker(store or InMemoryJobStore())
         self.limiter = limiter or IngestLimiter(4)
+        # Only read when an upload moves a document off the matter it was filed under, which
+        # is an access change effected through an ingest.
+        self.graph_audit = graph_audit
         self.max_upload_bytes = max_upload_bytes
         self.plain_text_types = plain_text_types
         self.parse_plain_text = parse_plain_text
@@ -139,22 +149,45 @@ class IngestRunner:
             self.limiter.release()
 
     def _ingest(self, raw: RawUpload, *, run_model_extraction: bool) -> IngestJob:
-        # A synthetic context: there is no request and no JWT on this path. It is scoped
-        # to exactly the matter recorded on the object at ticket-minting time, where the
-        # uploader's access *was* checked against their real grants. Narrow rather than
-        # convenient: this context can reach one matter in one tenant and nothing else.
+        # Resolved before the context is built, because the context has to be scoped to the
+        # matter the facts will actually carry. Scoping it to `raw.matter_id` and filing under
+        # something else would have the pipeline operating outside the wall it thinks it is in.
+        filing = resolve_filing(
+            self.store,
+            raw.tenant_id,
+            document_id_for(raw.tenant_id, sha256_hex(raw.body)),
+            raw.matter_id,
+        )
+
+        # A synthetic context: there is no request and no JWT on this path. Scoped to exactly
+        # the matter this document is filed under -- named on the object at ticket-minting
+        # time, where the uploader's access *was* checked, or already established by a prior
+        # ingest or a link. An adopted matter is not a widening of the uploader's own grants:
+        # nothing is returned to them, and the alternative is facts filed under no matter,
+        # which is readable by the whole tenant.
         ctx = AuthContext(
             tenant_id=raw.tenant_id,
             user_id=raw.uploaded_by,
-            matter_allowlist=frozenset({raw.matter_id}) if raw.matter_id else frozenset(),
+            matter_allowlist=frozenset({filing.matter_id}) if filing.matter_id else frozenset(),
         )
 
-        doc = self.storage.put_document(
-            ctx,
-            filename=raw.filename,
-            body=raw.body,
-            matter_id=raw.matter_id,
-            media_type=raw.media_type,
+        doc = apply_filing(
+            self.storage.put_document(
+                ctx,
+                filename=raw.filename,
+                body=raw.body,
+                matter_id=filing.matter_id,
+                media_type=raw.media_type,
+            ),
+            filing,
+        )
+        log_filing(filing, doc.document_id, raw.uploaded_by)
+        audit_filing(
+            self.graph_audit,
+            tenant_id=raw.tenant_id,
+            actor=raw.uploaded_by,
+            document_id=doc.document_id,
+            filing=filing,
         )
         job = self.tracker.open(IngestJob.for_document(doc))
         self._emit(job)
