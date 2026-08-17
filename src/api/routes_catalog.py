@@ -25,7 +25,6 @@ from src.api.deps import (
 )
 from src.discovery.catalog_store import CatalogTable
 from src.discovery.glue_scanner import scan_catalog
-from src.documents.models import JobState
 from src.graph.assertions import EpistemicClass, ReviewState
 from src.graph.scope import ScopeViolation
 from src.ontology.loader import ONTOLOGY_DIR, load_ontology
@@ -67,16 +66,18 @@ async def dashboard(services: ServicesDep, principal: TenantDep) -> dict[str, An
     by_class = Counter(r.assertion.epistemic_class.value for r in records if r.is_current)
     by_state = Counter(r.assertion.review_state.value for r in records if r.is_current)
 
-    # Every field the UI reads has to be present, even when empty. The dashboard crashed on
-    # `Object.entries(undefined)` because these four were declared in the TypeScript
-    # interface but never sent: a type is a claim about runtime data, and the compiler cannot
-    # check it against an API response.
+    # Documents, not job rows. `jobs_in_state` counted attempts, so one document uploaded four
+    # times added four to the totals and appeared under several states at once -- the panel both
+    # inflated and contradicted itself. One query rather than one per state, too.
+    #
+    # Present even when empty, like every field here: the dashboard once crashed on
+    # `Object.entries(undefined)` because a field was declared in the TypeScript interface and
+    # never sent, and a type is a claim about runtime data that the compiler cannot check.
     documents_by_state: dict[str, int] = {}
     try:
-        for state in JobState:
-            found = services.job_store.jobs_in_state(ctx.tenant_id, state)
-            if found:
-                documents_by_state[state.value] = len(found)
+        from src.documents.job_store import documents_by_state as count_by_state
+
+        documents_by_state = count_by_state(services.job_store.jobs_for_tenant(ctx.tenant_id))
     except Exception as e:
         logger.debug("could not count documents by state: %s", e)
 

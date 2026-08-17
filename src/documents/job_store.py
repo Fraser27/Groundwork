@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
 from src.documents.models import IngestJob, JobState
@@ -38,6 +38,42 @@ JOB = "JOB#"
 #: Jobs are bookkeeping over an S3 object that is still there, so expiring them costs a
 #: re-run and nothing else. Long enough that a failure is still diagnosable next week.
 JOB_TTL_SECONDS = 30 * 24 * 3600
+
+
+def latest_per_document(jobs: Iterable[IngestJob]) -> list[IngestJob]:
+    """One job per document: the attempt that got furthest, newest breaking a tie.
+
+    Not the newest attempt. A document id is the hash of its bytes, so every job for one
+    document ran over identical content — whatever the furthest attempt reached is therefore
+    true of the document *now*, and a later re-upload that failed at parsing did not take
+    those facts back out of the graph. Showing PENDING_REVIEW for a document whose facts went
+    live hours ago understates what the system holds, which is the worse error of the two.
+
+    The failed attempt is not hidden: `/documents/{id}/jobs` and the detail timeline still
+    carry every attempt, which is where a stuck ingest is diagnosed.
+    """
+    best: dict[str, IngestJob] = {}
+    for job in jobs:
+        seen = best.get(job.document_id)
+        if seen is None or (job.state.progress, job.created_at) > (
+            seen.state.progress,
+            seen.created_at,
+        ):
+            best[job.document_id] = job
+    return sorted(best.values(), key=lambda j: j.created_at, reverse=True)
+
+
+def documents_by_state(jobs: Iterable[IngestJob]) -> dict[str, int]:
+    """How many *documents* stand in each state, for the dashboard.
+
+    Counting job rows instead counted attempts: one document uploaded four times added four
+    to the totals and appeared under several states at once, so the dashboard both inflated
+    and contradicted itself. States with no documents are omitted, as before.
+    """
+    counts: dict[str, int] = {}
+    for job in latest_per_document(jobs):
+        counts[job.state.value] = counts.get(job.state.value, 0) + 1
+    return counts
 
 
 class TableLike(Protocol):

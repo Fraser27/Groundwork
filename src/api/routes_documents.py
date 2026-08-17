@@ -49,6 +49,7 @@ from src.auth import AuthError
 from src.documents.chunk import chunk_document
 from src.documents.extractors.model import ModelExtractor
 from src.documents.ingest import DEFAULT_MEDIA_TYPE
+from src.documents.job_store import latest_per_document
 from src.documents.keys import parse_raw_key
 from src.documents.models import IngestJob, JobState
 from src.documents.parse import ParsedDocument, parse_plain_text
@@ -544,19 +545,16 @@ def _assertion_out(a: Any) -> dict[str, Any]:
     }
 
 
-def _latest_per_document(jobs: list[IngestJob]) -> list[IngestJob]:
-    """One job per document, the most recent.
-
-    A document re-ingested after a failure has several jobs, and the list must show where
-    it stands now rather than every attempt. The per-document history stays available at
-    `/documents/{id}/jobs`.
-    """
-    newest: dict[str, IngestJob] = {}
+def _screened(ctx: AuthContext, jobs: list[IngestJob], document_id: str) -> bool:
+    """True if any attempt on this document names a matter the caller may not read."""
     for job in jobs:
-        seen = newest.get(job.document_id)
-        if seen is None or job.created_at > seen.created_at:
-            newest[job.document_id] = job
-    return sorted(newest.values(), key=lambda j: j.created_at, reverse=True)
+        if job.document_id != document_id or not job.matter_id:
+            continue
+        try:
+            ctx.assert_can_read_matter(job.matter_id)
+        except ScopeViolation:
+            return True
+    return False
 
 
 def _document_summary(
@@ -601,19 +599,19 @@ async def list_documents(
     if matter_id:
         _assert_matter(ctx, matter_id)
 
-    jobs = _latest_per_document(services.job_store.jobs_for_tenant(ctx.tenant_id))
+    all_jobs = services.job_store.jobs_for_tenant(ctx.tenant_id)
 
     # Matter scoping is applied to the *rows*, not just the filter: a document filed under
     # a matter this caller is screened from must not appear in an unfiltered list either.
+    # Checked against every attempt's matter, not only the winning row's: attempts can
+    # disagree if a refile updated some and failed on others, and the safe reading of a
+    # disagreement is the more restrictive one.
     visible = []
-    for job in jobs:
+    for job in latest_per_document(all_jobs):
         if matter_id and job.matter_id != matter_id:
             continue
-        if job.matter_id:
-            try:
-                ctx.assert_can_read_matter(job.matter_id)
-            except ScopeViolation:
-                continue
+        if _screened(ctx, all_jobs, job.document_id):
+            continue
         visible.append(job)
 
     storage = storage_from_config(services.config)
@@ -663,9 +661,10 @@ async def get_document(
     if not jobs:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no document {document_id!r}")
 
-    latest = max(jobs, key=lambda j: j.created_at)
-    if latest.matter_id:
-        _assert_matter(ctx, latest.matter_id)
+    # Same rule as the list, so a document cannot read LIVE on one page and pending on the other.
+    latest = latest_per_document(jobs)[0]
+    if _screened(ctx, jobs, document_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no document {document_id!r}")
 
     storage = storage_from_config(services.config)
     meta = storage.describe(document_id, tenant_id=ctx.tenant_id) if storage else None

@@ -254,7 +254,18 @@ export const INGEST_STEP_LABEL: Record<string, string> = {
   EMBEDDING: 'Embedding',
   GRAPH_STAGED: 'Staged',
   PENDING_REVIEW: 'Review',
+  APPROVED: 'Approved',
   LIVE: 'Live',
+  // Failures. Absent before, so a document that failed at chunking, staging or promotion showed
+  // the raw enum name with no help text -- degraded quietly rather than crashing, which is why
+  // it survived.
+  FETCH_FAILED: 'Fetch failed',
+  PARSE_FAILED: 'Parse failed',
+  CHUNK_FAILED: 'Chunking failed',
+  EXTRACT_FAILED: 'Extraction failed',
+  EMBED_FAILED: 'Embedding failed',
+  STAGE_FAILED: 'Staging failed',
+  PROMOTE_FAILED: 'Promotion failed',
 }
 
 export const INGEST_STEP_HELP: Record<string, string> = {
@@ -266,12 +277,19 @@ export const INGEST_STEP_HELP: Record<string, string> = {
   EMBEDDING: 'Indexing the passages for search. From here the verbatim text is findable even though its extracted facts are not yet trusted.',
   GRAPH_STAGED: 'Proposed facts are written to the graph but held back from answers.',
   PENDING_REVIEW: 'Waiting for a human to approve or reject the model-extracted facts.',
+  APPROVED: 'Signed off, and about to go live. A document sits here only briefly.',
   LIVE: 'Reviewed and in use. Approved facts can now shape answers.',
+  STAGE_FAILED:
+    'The facts were read but could not be written to the graph. Nothing is lost — the document is still in S3 and Replay re-runs it.',
+  PROMOTE_FAILED:
+    'Approved but not yet in service: the step that makes facts live did not finish. The approval stands and Replay retries it.',
 }
 
 export function ingestPhase(state: IngestState): 'pending' | 'running' | 'review' | 'live' | 'failed' {
   if (state.endsWith('_FAILED')) return 'failed'
-  if (state === 'LIVE') return 'live'
+  // APPROVED reads as live rather than running: a reviewer has signed it off and only the
+  // promotion step remains. Falling through to 'running' showed a finished document as in flight.
+  if (state === 'LIVE' || state === 'APPROVED') return 'live'
   if (state === 'PENDING_REVIEW' || state === 'GRAPH_STAGED') return 'review'
   if (state === 'REGISTERED') return 'pending'
   return 'running'

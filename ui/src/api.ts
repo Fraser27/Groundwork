@@ -330,9 +330,19 @@ export const INGEST_STATES = [
   'EMBEDDING',
   'GRAPH_STAGED',
   'PENDING_REVIEW',
+  // Between review and live, and it was missing: a document settled by an approval sits here,
+  // so the pipeline showed every step incomplete for a document that had finished.
+  'APPROVED',
   'LIVE',
 ] as const
 
+/**
+ * Mirrors `JobState` in src/documents/models.py, and it had drifted in both directions:
+ * `GRAPH_FAILED` was declared and does not exist in Python, while `APPROVED`, `STAGE_FAILED`,
+ * `PROMOTE_FAILED`, `CHUNK_FAILED` and `EXTRACT_FAILED` are all sent and were absent. A state
+ * the API sends and this union omits falls through to a raw string with no label and no help
+ * text, which is degradation rather than a crash and therefore easy to miss.
+ */
 export type IngestState =
   | (typeof INGEST_STATES)[number]
   | 'FETCH_FAILED'
@@ -340,7 +350,8 @@ export type IngestState =
   | 'CHUNK_FAILED'
   | 'EXTRACT_FAILED'
   | 'EMBED_FAILED'
-  | 'GRAPH_FAILED'
+  | 'STAGE_FAILED'
+  | 'PROMOTE_FAILED'
 
 export interface DocumentSummary {
   document_id: string

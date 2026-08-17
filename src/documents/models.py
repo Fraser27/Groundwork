@@ -26,6 +26,16 @@ def sha256_hex(data: str | bytes) -> str:
     return hashlib.sha256(data.encode("utf-8") if isinstance(data, str) else data).hexdigest()
 
 
+def document_id_for(tenant_id: str, content_sha256: str) -> str:
+    """A document's id, derivable before it is stored.
+
+    Tenant is in the hash: identical bytes uploaded by two firms are two documents, or a
+    shared graph would fuse them. Separate from `DocumentMeta` because ingest has to know the
+    id *before* writing, to find what the document is already filed under.
+    """
+    return f"doc-{sha256_hex(f'{tenant_id}:{content_sha256}')[:24]}"
+
+
 class JobState(str, Enum):
     """Where an ingest job is, including how it failed.
 
@@ -65,6 +75,11 @@ class JobState(str, Enum):
     def retry_target(self) -> JobState | None:
         return _RETRY_TARGET.get(self)
 
+    @property
+    def progress(self) -> int:
+        """How far through the pipeline, for comparing two attempts on the same document."""
+        return _PROGRESS[self]
+
 
 #: Which phase a failure must restart from. STAGE_FAILED restarts at EXTRACTING
 #: rather than at staging: extractions are not persisted between attempts, and
@@ -94,6 +109,37 @@ _TRANSITIONS: dict[JobState, frozenset[JobState]] = {
     JobState.LIVE: frozenset(),
     **{failed: frozenset({target}) for failed, target in _RETRY_TARGET.items()},
 }
+
+
+def _success_path() -> list[JobState]:
+    """The happy path, read out of `_TRANSITIONS` rather than restated.
+
+    A second hardcoded ordering would drift from the transitions map, and the drift would
+    show up as a document reporting a state it never reached.
+    """
+    order = [JobState.REGISTERED]
+    while True:
+        ahead = sorted(s for s in _TRANSITIONS[order[-1]] if not s.is_failed)
+        if not ahead:
+            return order
+        if len(ahead) > 1:
+            raise AssertionError(f"{order[-1].value} has {len(ahead)} non-failure successors")
+        order.append(ahead[0])
+
+
+def _build_progress() -> dict[JobState, int]:
+    """Pipeline depth per state. Even numbers are the happy path; a failure sits one below
+    the furthest state it could have been reached from, so `PARSE_FAILED` outranks
+    `FETCHING` but never `PARSING` — the phase was entered, not completed."""
+    path = _success_path()
+    progress = {state: i * 2 for i, state in enumerate(path)}
+    for failed in _RETRY_TARGET:
+        entered = max(progress[s] for s in path if failed in _TRANSITIONS[s])
+        progress[failed] = entered - 1
+    return progress
+
+
+_PROGRESS: dict[JobState, int] = _build_progress()
 
 
 class IllegalTransition(ValueError):
@@ -130,10 +176,9 @@ class DocumentMeta(BaseModel):
     @model_validator(mode="after")
     def _derive_id(self) -> DocumentMeta:
         if not self.document_id:
-            # Tenant is in the hash: identical bytes uploaded by two firms are two
-            # documents, or a shared graph would fuse them.
-            digest = sha256_hex(f"{self.tenant_id}:{self.content_sha256}")[:24]
-            object.__setattr__(self, "document_id", f"doc-{digest}")
+            object.__setattr__(
+                self, "document_id", document_id_for(self.tenant_id, self.content_sha256)
+            )
         return self
 
     @property

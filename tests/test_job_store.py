@@ -16,6 +16,8 @@ from src.documents.job_store import (
     InMemoryJobStore,
     JobTracker,
     document_gsi_pk,
+    documents_by_state,
+    latest_per_document,
     tenant_pk,
 )
 from src.documents.models import DocumentMeta, IngestJob, JobState
@@ -150,6 +152,164 @@ class TestQueryByDocument:
         store.put_job(IngestJob.for_document(doc(content="d" * 64)))
 
         assert [j.job_id for j in store.jobs_in_state(TENANT, JobState.FETCHING)] == [live.job_id]
+
+
+def job(doc_id: str, state: JobState, created_at: str, job_id: str = "") -> IngestJob:
+    return IngestJob(
+        job_id=job_id or f"job-{doc_id}-{created_at}",
+        document_id=doc_id,
+        tenant_id=TENANT,
+        state=state,
+        created_at=created_at,
+    )
+
+
+class TestStateProgress:
+    def test_the_happy_path_is_strictly_increasing(self):
+        """Derived from `_TRANSITIONS`, so a new state cannot be ordered wrongly by omission."""
+        path = [
+            JobState.REGISTERED,
+            JobState.FETCHING,
+            JobState.PARSING,
+            JobState.CHUNKING,
+            JobState.EXTRACTING,
+            JobState.EMBEDDING,
+            JobState.GRAPH_STAGED,
+            JobState.PENDING_REVIEW,
+            JobState.APPROVED,
+            JobState.LIVE,
+        ]
+        assert [s.progress for s in path] == sorted(s.progress for s in path)
+        assert len({s.progress for s in path}) == len(path)
+
+    def test_live_is_the_furthest_state(self):
+        assert JobState.LIVE.progress == max(s.progress for s in JobState)
+
+    def test_a_failure_outranks_the_phase_before_it_but_not_its_own(self):
+        """PARSE_FAILED means parsing was entered and did not finish."""
+        assert JobState.FETCHING.progress < JobState.PARSE_FAILED.progress
+        assert JobState.PARSE_FAILED.progress < JobState.PARSING.progress
+
+    def test_every_state_is_ordered(self):
+        assert {s.progress for s in JobState} and all(isinstance(s.progress, int) for s in JobState)
+
+
+class TestLatestPerDocument:
+    def test_one_row_per_document(self):
+        jobs = [
+            job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z"),
+            job("doc-a", JobState.LIVE, "2026-01-02T00:00:00Z"),
+            job("doc-b", JobState.LIVE, "2026-01-03T00:00:00Z"),
+        ]
+        assert {j.document_id for j in latest_per_document(jobs)} == {"doc-a", "doc-b"}
+
+    def test_the_furthest_attempt_wins_over_the_newest(self):
+        """The bug this exists for: a document whose facts are live displayed as pending
+        because a later re-upload stalled at the review gate. Every job for one document ran
+        over identical bytes, so the furthest state is the honest answer."""
+        jobs = [
+            job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z"),
+            job("doc-a", JobState.PENDING_REVIEW, "2026-01-02T00:00:00Z"),
+        ]
+        assert latest_per_document(jobs)[0].state is JobState.LIVE
+
+    def test_a_later_failure_does_not_retract_a_live_document(self):
+        jobs = [
+            job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z"),
+            job("doc-a", JobState.PARSE_FAILED, "2026-01-02T00:00:00Z"),
+        ]
+        assert latest_per_document(jobs)[0].state is JobState.LIVE
+
+    def test_the_newest_wins_when_both_reached_the_same_state(self):
+        jobs = [
+            job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z", job_id="old"),
+            job("doc-a", JobState.LIVE, "2026-01-02T00:00:00Z", job_id="new"),
+        ]
+        assert latest_per_document(jobs)[0].job_id == "new"
+
+    def test_a_retry_that_got_further_wins(self):
+        jobs = [
+            job("doc-a", JobState.PARSE_FAILED, "2026-01-01T00:00:00Z"),
+            job("doc-a", JobState.PENDING_REVIEW, "2026-01-02T00:00:00Z"),
+        ]
+        assert latest_per_document(jobs)[0].state is JobState.PENDING_REVIEW
+
+    def test_rows_come_back_newest_first(self):
+        jobs = [
+            job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z"),
+            job("doc-b", JobState.LIVE, "2026-01-03T00:00:00Z"),
+        ]
+        assert [j.document_id for j in latest_per_document(jobs)] == ["doc-b", "doc-a"]
+
+
+class TestDocumentsByState:
+    def test_four_attempts_on_one_document_count_once(self):
+        """The dashboard counted job rows, so a document uploaded four times added four to
+        the totals and appeared under several states at the same time."""
+        jobs = [
+            job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z"),
+            job("doc-a", JobState.LIVE, "2026-01-02T00:00:00Z"),
+            job("doc-a", JobState.PENDING_REVIEW, "2026-01-03T00:00:00Z"),
+            job("doc-a", JobState.PARSE_FAILED, "2026-01-04T00:00:00Z"),
+        ]
+        assert documents_by_state(jobs) == {"LIVE": 1}
+
+    def test_states_with_no_documents_are_omitted(self):
+        assert documents_by_state([job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z")]) == {
+            "LIVE": 1
+        }
+
+    def test_documents_in_different_states_are_counted_separately(self):
+        jobs = [
+            job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z"),
+            job("doc-b", JobState.PENDING_REVIEW, "2026-01-01T00:00:00Z"),
+        ]
+        assert documents_by_state(jobs) == {"LIVE": 1, "PENDING_REVIEW": 1}
+
+
+class TestScreeningAcrossAttempts:
+    """Visibility is decided over every attempt, not just the row that gets displayed.
+
+    Two attempts on one document can name different matters -- a refile updates each job row
+    separately and can fail part-way. Judging the wall from the winning row alone would then
+    show a screened document whenever the unfiled attempt happened to win.
+    """
+
+    def _ctx(self):
+        from src.graph.scope import AuthContext
+
+        return AuthContext(
+            user_id="alice",
+            tenant_id=TENANT,
+            matter_denylist=frozenset({"NTL-2026-0114"}),
+        )
+
+    def test_a_screened_matter_on_any_attempt_hides_the_document(self):
+        from src.api.routes_documents import _screened
+
+        jobs = [
+            job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z"),
+            job("doc-a", JobState.LIVE, "2026-01-02T00:00:00Z"),
+        ]
+        jobs[1].matter_id = "NTL-2026-0114"
+        assert _screened(self._ctx(), jobs, "doc-a") is True
+
+    def test_a_readable_document_is_not_hidden(self):
+        from src.api.routes_documents import _screened
+
+        jobs = [job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z")]
+        jobs[0].matter_id = "NTL-2026-0999"
+        assert _screened(self._ctx(), jobs, "doc-a") is False
+
+    def test_another_documents_screen_is_not_applied(self):
+        from src.api.routes_documents import _screened
+
+        jobs = [
+            job("doc-a", JobState.LIVE, "2026-01-01T00:00:00Z"),
+            job("doc-b", JobState.LIVE, "2026-01-01T00:00:00Z"),
+        ]
+        jobs[1].matter_id = "NTL-2026-0114"
+        assert _screened(self._ctx(), jobs, "doc-a") is False
 
 
 class TestKeys:

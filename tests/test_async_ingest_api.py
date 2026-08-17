@@ -254,6 +254,50 @@ class TestTheDocumentListExists:
         assert len(docs) == 1
         assert docs[0]["state"] == "LIVE"
 
+    def test_a_later_stalled_attempt_does_not_hide_live_facts(self, client):
+        """Observed in production: two rows for one document, PENDING_REVIEW newer than LIVE.
+        The page read "awaiting review" for a document whose facts had gone live hours before.
+        Both attempts ran over the same bytes, so the furthest state is the true one."""
+        from src.api.deps import get_services
+        from src.documents.models import JobState
+
+        store = get_services().job_store
+        live = self._job(TENANT, "doc-1")
+        live.created_at = "2026-08-15T13:16:00Z"
+        store.put_job(live)
+        stalled = self._job(TENANT, "doc-1")
+        stalled.job_id = "job-stalled"
+        stalled.state = JobState.PENDING_REVIEW
+        stalled.created_at = "2026-08-16T07:10:00Z"
+        store.put_job(stalled)
+
+        docs = client.get(f"/api/tenants/{TENANT}/documents").json()["documents"]
+        assert [d["state"] for d in docs] == ["LIVE"]
+        assert client.get(f"/api/tenants/{TENANT}/documents/doc-1").json()["state"] == "LIVE"
+
+    def test_the_detail_still_shows_every_attempt(self, client):
+        """Collapsing the row must not collapse the history: a failed retry is what makes a
+        stuck document diagnosable, and the timeline is where it stays visible."""
+        from src.api.deps import get_services
+        from src.documents.models import JobState, StateChange
+
+        store = get_services().job_store
+        live = self._job(TENANT, "doc-1")
+        live.created_at = "2026-08-15T13:16:00Z"
+        live.history = [StateChange(state=JobState.LIVE, at=live.created_at)]
+        store.put_job(live)
+        failed = self._job(TENANT, "doc-1")
+        failed.job_id = "job-failed"
+        failed.state = JobState.PARSE_FAILED
+        failed.reason = "no vision model"
+        failed.created_at = "2026-08-16T07:10:00Z"
+        failed.history = [StateChange(state=JobState.PARSE_FAILED, at=failed.created_at)]
+        store.put_job(failed)
+
+        body = client.get(f"/api/tenants/{TENANT}/documents/doc-1").json()
+        assert [t["state"] for t in body["timeline"]] == ["LIVE", "PARSE_FAILED"]
+        assert len(client.get(f"/api/tenants/{TENANT}/documents/doc-1/jobs").json()["jobs"]) == 2
+
     def test_another_tenants_documents_are_not_listed(self, client):
         from src.api.deps import get_services
 
