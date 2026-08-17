@@ -180,6 +180,18 @@ class TestAForbiddenTierIsNeverQueried:
         assert decision.degraded is True
         assert decision.tiers == [2, 3]
 
+    def test_a_tier_that_does_not_exist_is_not_reported_as_forbidden(self):
+        """Retired and forbidden are different facts. A hardcoded `(1, 2, 3, 4)` here told the
+        reader of every trace that their administrator had turned tier 4 off, when the truth is
+        that it was never built -- so the trace blamed a policy for a missing capability."""
+        routing = FakeRoutingIndex({k: STRONG for k in (KIND_METRIC, KIND_ENTITY, KIND_TABLE)})
+        decision = router(routing, FakeChunks(STRONG)).route(
+            ctx(), "anything", settings(allowed_tiers=frozenset({1, 2, 3}))
+        )
+
+        assert "4" not in decision.dropped
+        assert decision.forbidden == set()
+
 
 class TestRoutingNeverCostsAnAnswer:
     def test_no_vector_store_degrades_to_every_permitted_tier(self):

@@ -35,7 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.governance import GovernanceSettings
+from src.governance import KNOWN_TIERS, GovernanceSettings
 from src.graph.scope import AuthContext
 from src.query.router_index import KIND_ENTITY, KIND_METRIC, KIND_TABLE
 from src.query.router_scoring import LayerScore, cosine_of, score_layers
@@ -174,9 +174,12 @@ class TierRouter:
     ) -> RouterDecision:
         """Decide which tiers to run. Never raises."""
         permitted = sorted(int(t) for t in settings.allowed_tiers)
+        # Over the tiers that exist, not a literal range. A hardcoded 4 here reported retired
+        # tier 4 as "not permitted for this tenant" on every single question, which reads as an
+        # administrator's decision rather than as a capability that was never built.
         forbidden = {
             str(t): f"tier {t} is not permitted for this tenant"
-            for t in (1, 2, 3, 4)
+            for t in sorted(KNOWN_TIERS)
             if t not in permitted
         }
         base = RouterDecision(

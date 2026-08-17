@@ -41,7 +41,7 @@ DEFAULT_ENRICHMENT_MODEL = DEFAULT_OCR_MODEL
 #: The resolution tiers that exist. Written out rather than imported from `query.resolver`, which
 #: imports this module -- so a test pins the two together instead, because a second list that can
 #: drift from the enum is exactly how a retired tier survived in a default for a day.
-_KNOWN_TIERS = frozenset({1, 2, 3})
+KNOWN_TIERS = frozenset({1, 2, 3})
 
 
 class GovernanceError(ValueError):
@@ -204,10 +204,10 @@ class GovernanceSettings:
         # here from `from_env`'s default long after the tier was retired, and it only surfaced
         # because the Admin page displayed it -- a tier the code has no member for reaches
         # `Tier(4)` in the resolver and raises where a refusal belongs.
-        if unknown := sorted(t for t in self.allowed_tiers if t not in _KNOWN_TIERS):
+        if unknown := sorted(t for t in self.allowed_tiers if t not in KNOWN_TIERS):
             raise GovernanceError(
                 f"allowed_tiers contains {unknown}, which is not a resolution tier. "
-                f"Permitted: {sorted(_KNOWN_TIERS)}."
+                f"Permitted: {sorted(KNOWN_TIERS)}."
             )
 
     def to_dict(self) -> dict[str, Any]:

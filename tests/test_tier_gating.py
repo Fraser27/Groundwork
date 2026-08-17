@@ -196,9 +196,9 @@ class TestTheFourthTierStaysRetired:
         """Two lists that can drift is how a retired tier survived in `from_env`'s default for a
         day. `governance` cannot import `Tier` -- the resolver imports governance -- so the
         duplication is deliberate and this is what keeps it honest."""
-        from src.governance import _KNOWN_TIERS
+        from src.governance import KNOWN_TIERS
 
-        assert _KNOWN_TIERS == {int(t) for t in Tier}
+        assert KNOWN_TIERS == {int(t) for t in Tier}
 
     def test_a_retired_tier_in_the_cap_is_refused_rather_than_stored(self):
         """It reached the Admin page as `[1,2,3,4]` because nothing validated the members --
