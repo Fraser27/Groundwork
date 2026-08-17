@@ -265,3 +265,187 @@ class TestHybridSeedsTheWalkWithGraphNodeIds:
         assert hits
         assert all(h["hops"] is None for h in hits)
         assert any(h["matched_on"] for h in hits)
+
+
+class UnscopedReader:
+    """A reader that returns everything, screened or not.
+
+    Deliberately ignores `AuthContext`, which the real `GraphReader._readable` does not. That is
+    the point: the block check is the second line, and a test that relies on the first line
+    holding cannot tell whether the second one exists.
+    """
+
+    def __init__(self, hits: list[dict], blocking: list[dict] | None = None) -> None:
+        self.hits = hits
+        self.blocking = blocking or []
+
+    def search(self, ctx, question, **kw) -> list[dict]:
+        return self.hits
+
+    def expand(self, ctx, seeds, **kw) -> list[dict]:
+        return self.hits
+
+    def blocking_facts(self, ctx, seeds, **kw) -> list[dict]:
+        return self.blocking
+
+
+@pytest.fixture
+def screened() -> AuthContext:
+    return AuthContext(
+        user_id="bob@firm.com",
+        tenant_id=TENANT,
+        matter_denylist=frozenset({"M-9"}),
+        screen_reasons={"M-9": "Acting for the counterparty."},
+        screen_contacts={"M-9": "risk@firm.com"},
+    )
+
+
+HITS = [
+    {"assertion_id": "a-open", "matter_id": "M-1", "document_id": "d1"},
+    {"assertion_id": "a-screened", "matter_id": "M-9", "document_id": "d9"},
+]
+
+
+class TestTheEthicalScreenVetoesOnQueryToo:
+    """`/query` had no block check at all, so tiers 2-4 returned evidence a screen forbids.
+
+    Matter scoping in `GraphReader._readable` still applied underneath, so this was missing
+    defence in depth rather than an open door. But `/query` and `/query/compose` behaved
+    differently on the same screened data, and for a product whose claim is that every answer
+    has a basis, two answers depending on which endpoint you asked is the defect.
+    """
+
+    def test_a_screened_fact_does_not_survive_tier_two(self, screened):
+        res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
+            screened, "acme corporation", GovernanceSettings()
+        )
+        assert [h["assertion_id"] for h in res.answer] == ["a-open"]
+
+    def test_the_screened_assertion_id_is_stripped_from_the_audit_trail(self, screened):
+        """Leaving the id behind would still hand the blocked subject to whatever reads the
+        trail, and `See in graph` deep-links straight off this list."""
+        res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
+            screened, "acme corporation", GovernanceSettings()
+        )
+        assert res.assertions_used == ["a-open"]
+
+    def test_the_block_is_reported_not_silent(self, screened):
+        res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
+            screened, "acme corporation", GovernanceSettings()
+        )
+        block = res.to_dict()["blocks"][0]
+        assert block["matter_id"] == "M-9"
+        assert block["rule"] == "ethical_screen"
+        assert block["reason"] == "Acting for the counterparty."
+        assert block["contact"] == "risk@firm.com"
+
+    def test_withholding_says_how_much_went(self, screened):
+        """A count, never the content. "One fact was withheld" is what stops the remainder
+        reading as the whole answer."""
+        res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
+            screened, "acme corporation", GovernanceSettings()
+        )
+        assert any("withheld" in w for w in res.warnings)
+
+    def test_a_screen_is_disclosed_even_when_nothing_matched(self, screened):
+        """A nil result under a wall is the harm exactly: a conflict check that reads as clean
+        when it is only incomplete."""
+        res = Resolver(graph_reader=UnscopedReader([])).resolve(
+            screened, "zzzq unrelated gibberish", GovernanceSettings()
+        )
+        assert res.answer is None
+        assert [b.matter_id for b in res.blocks] == ["M-9"]
+
+    def test_an_unscreened_caller_carries_no_blocks(self, ctx):
+        res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
+            ctx, "acme corporation", GovernanceSettings()
+        )
+        assert res.to_dict()["blocks"] == []
+        assert len(res.answer) == 2
+
+    def test_a_hybrid_answer_is_screened_on_both_halves(self, screened):
+        class Vectors:
+            def search(self, ctx, question, *, top_k=10):
+                return [
+                    {"document_id": "d1", "page": 1, "matter_id": "M-1"},
+                    {"document_id": "d9", "page": 1, "matter_id": "M-9"},
+                ]
+
+        res = Resolver(graph_reader=UnscopedReader(HITS), vector_search=Vectors()).resolve(
+            screened, "acme", GovernanceSettings(), tier_override=Tier.HYBRID
+        )
+        assert [p["document_id"] for p in res.answer["passages"]] == ["d1"]
+        assert [h["assertion_id"] for h in res.answer["related"]] == ["a-open"]
+
+    def test_a_citation_to_a_screened_document_is_dropped(self, screened):
+        """A citation naming a page of a screened document is the leak in miniature."""
+
+        class Vectors:
+            def search(self, ctx, question, *, top_k=10):
+                return [
+                    {"document_id": "d1", "page": 1, "matter_id": "M-1"},
+                    {"document_id": "d9", "page": 4, "matter_id": "M-9"},
+                ]
+
+        res = Resolver(graph_reader=UnscopedReader(HITS), vector_search=Vectors()).resolve(
+            screened, "acme", GovernanceSettings(), tier_override=Tier.HYBRID
+        )
+        assert [c["document_id"] for c in res.citations] == ["d1"]
+
+    def test_a_rule_block_reaches_query_as_well(self, screened):
+        """Not only screens. A rule that fired on DECLARED premises is the other half of what
+        `blocking_facts` reports, and it was absent from this path entirely."""
+        reader = UnscopedReader(
+            [{"assertion_id": "a1", "subject_id": "party:acme", "matter_id": "M-1"}],
+            blocking=[
+                {
+                    "subject_id": "party:acme",
+                    "reason": "Potential conflict",
+                    "rule": "conflict_check",
+                }
+            ],
+        )
+        res = Resolver(graph_reader=reader).resolve(screened, "acme", GovernanceSettings())
+        assert "conflict_check" in [b.rule for b in res.blocks]
+        assert res.answer == []
+
+
+class TestTierOneIsExemptByDecision:
+    def test_a_compiled_metric_is_returned_whole(self, matcher, screened):
+        """An Athena-side aggregate carries no assertion, document or matter id, so there is
+        nothing to veto row-wise, and dropping rows from a total would misreport the figure
+        rather than withhold it. A metric that must exclude a matter says so in its definition.
+        """
+        res = Resolver(metric_matcher=matcher).resolve(
+            screened, "fees billed by month", GovernanceSettings(), execute=False
+        )
+        assert res.tier is Tier.GOVERNED_METRIC
+        assert res.blocks == []
+        assert res.sql
+
+
+class TestBothEndpointsAgree:
+    """The gap this closes. Same caller, same screened data, two endpoints."""
+
+    def test_neither_path_returns_the_screened_assertion(self, screened):
+        from src.query.planner import Planner
+
+        reader = UnscopedReader(HITS)
+        resolved = Resolver(graph_reader=reader).resolve(screened, "acme", GovernanceSettings())
+        composed = Planner(graph_reader=reader).plan(
+            screened, "acme", GovernanceSettings(), allow_synthesis=False
+        )
+
+        assert "a-screened" not in str(resolved.to_dict())
+        assert "a-screened" not in str(composed.to_dict())
+
+    def test_both_name_the_same_block(self, screened):
+        from src.query.planner import Planner
+
+        reader = UnscopedReader(HITS)
+        resolved = Resolver(graph_reader=reader).resolve(screened, "acme", GovernanceSettings())
+        composed = Planner(graph_reader=reader).plan(
+            screened, "acme", GovernanceSettings(), allow_synthesis=False
+        )
+
+        assert resolved.to_dict()["blocks"] == composed.to_dict()["blocks"]

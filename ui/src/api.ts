@@ -515,6 +515,21 @@ export type QueryAnswer =
   | { passages: QueryPassage[]; related: QueryHit[] }
   | null
 
+/**
+ * Something the deterministic veto refused to let through, exactly as `Block.to_dict` sends it.
+ *
+ * `rule` is `ethical_screen` for a recorded wall and the ontology rule's name for an inference
+ * that fired. `contact` is only ever set for a screen: a rule block is not somebody's decision
+ * to explain.
+ */
+export interface QueryBlock {
+  subject: string
+  reason: string
+  rule: string
+  matter_id?: string | null
+  contact?: string | null
+}
+
 export interface QueryResult {
   tier: ResolutionTier
   tier_name: string
@@ -528,16 +543,20 @@ export interface QueryResult {
   assertions_used: string[]
   tiers_attempted: ResolutionTier[]
   warnings: string[]
+  /** Always an array from the API. Optional here only so a cached older response cannot crash
+   *  the page — the read path guards on `?? []` rather than trusting this. */
+  blocks?: QueryBlock[]
 }
 
 // ── Graph ────────────────────────────────────────────────────────────────────
 
+/** Exactly what `_node()` sends. Nodes are derived from entity ids, so there is nothing
+ *  else on them — no matter, no properties. The matter lives on the assertion. */
 export interface GraphNode {
   id: string
   label: string
+  /** The id prefix: `party:acme` -> `party`. Lowercase; `EntityDef.slug` is what it matches. */
   type: string
-  matter_id?: string | null
-  properties?: Record<string, unknown>
 }
 
 export interface GraphEdge {
@@ -570,6 +589,10 @@ export interface EntityDef {
   label: string
   description: string
   help?: string | null
+  /** The id prefix form of `id`, lowercase. Compare against `GraphNode.type`. */
+  slug?: string
+  /** `domain` for facts read out of documents, `catalog` for schema declared by a source. */
+  layer?: string
 }
 
 export interface PredicateDef {

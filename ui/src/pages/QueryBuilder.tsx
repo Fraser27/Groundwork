@@ -13,6 +13,7 @@ import {
   api,
   type Matter,
   type QueryAnswer,
+  type QueryBlock,
   type QueryHit,
   type QueryPassage,
   type QueryResult,
@@ -73,6 +74,11 @@ function whyIncluded(h: QueryHit): string {
 function entityLabel(id: string): string {
   const slug = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id
   return slug.replace(/[-_]/g, ' ')
+}
+
+/** `rule` is `ethical_screen` for a recorded wall; anything else is an ontology rule that fired. */
+function isScreen(b: QueryBlock): boolean {
+  return b.rule === 'ethical_screen'
 }
 
 /** The tier is what each example is meant to demonstrate, not a promise about the answer. */
@@ -153,6 +159,10 @@ export default function QueryBuilder() {
   const usedIds = result?.assertions_used?.length
     ? result.assertions_used
     : hits.map((h) => h.assertion_id)
+  // `?? []` rather than trusting the declared type: the field is new, and a type is a claim
+  // about the response, not a check on one.
+  const blocks = result?.blocks ?? []
+  const screens = blocks.filter(isScreen)
 
   return (
     <>
@@ -310,6 +320,69 @@ export default function QueryBuilder() {
               </div>
             )}
 
+            {blocks.length > 0 && (
+              <div className="withheld-block" style={{ marginTop: 16 }}>
+                <div className="withheld-block-head">
+                  <h3>
+                    {blocks.length} {blocks.length === 1 ? 'block' : 'blocks'} applied to this
+                    answer
+                    <FieldHelp text={HELP.ethicalScreen} />
+                  </h3>
+                  <span className="tag tag-red">
+                    {screens.length === blocks.length ? 'Screened' : 'Withheld'}
+                  </span>
+                </div>
+                <p className="withheld-block-note">
+                  Applied before anything was written or summarised, and by the graph rather than a
+                  model, so no part of the answer above rests on what is listed here. They are
+                  named on purpose: an answer that looks complete because the inconvenient part
+                  was invisible is the failure a screen exists to prevent.
+                </p>
+                <div className="withheld-list">
+                  {blocks.map((b, i) => (
+                    <div className="withheld-item" key={`${b.rule}-${b.subject}-${i}`}>
+                      <div className="withheld-item-head">
+                        <strong>{b.matter_id ?? entityLabel(b.subject)}</strong>
+                        <code>{b.rule || 'blocked'}</code>
+                      </div>
+                      <div className="withheld-field">
+                        <span className="withheld-field-label">Reason recorded</span>
+                        {b.reason}
+                      </div>
+                      {isScreen(b) && (
+                        <div className="withheld-field">
+                          <span className="withheld-field-label">Who to contact</span>
+                          {b.contact ?? (
+                            <span className="dim">
+                              No contact was given. Ask your risk team about this matter.
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div className="withheld-field">
+                        <span className="withheld-field-label">In the graph</span>
+                        {/* Stated rather than linked, on purpose. `?highlight=` takes assertion
+                            ids and a block has none — a screen is a grant, not a fact. A link
+                            filtered to a screened matter would draw an empty canvas reading as
+                            "this matter holds nothing", which is the silent failure this card
+                            exists to prevent. */}
+                        <span className="dim">
+                          Nothing to open.{' '}
+                          {isScreen(b)
+                            ? 'A screen is a recorded instruction, not an assertion, and the ' +
+                              'facts it covers are never returned to you, so there is no ' +
+                              'subgraph to draw.'
+                            : 'A rule block names what was refused, not an edge you can open.'}
+                          {usedIds.length > 0 &&
+                            ' What the answer did use opens in the graph below.'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {rows && (
               <div className="card">
                 <div className="card-header">
@@ -444,6 +517,14 @@ export default function QueryBuilder() {
                 <div className="answer-block">
                   Nothing came back. The question reached {tierMeta.label.toLowerCase()}, but no
                   row, fact or passage cleared the trust floor of {floor.toFixed(2)}.
+                  {blocks.length > 0 && (
+                    <>
+                      {' '}
+                      This is not the same as nothing existing: {blocks.length}{' '}
+                      {blocks.length === 1 ? 'block is' : 'blocks are'} in force, listed above.
+                      Treat the empty result as incomplete rather than clean.
+                    </>
+                  )}
                 </div>
               </div>
             )}

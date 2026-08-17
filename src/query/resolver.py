@@ -13,6 +13,11 @@ trustworthiness, and the caller is entitled to know which one they are getting.
 
 Tier 4 is the only tier that can be switched off, because it is the only one where
 the system is guessing at intent rather than executing something a human approved.
+
+Whatever a tier returns is then screened by `src.query.blocks`, the same veto the planner
+applies. Matter scoping already runs inside the reader, so this is defence in depth — but the
+two endpoints must agree about screened data, or "why does the system believe this?" has two
+answers depending on which one you asked.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from typing import Any
 
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
+from src.query.blocks import Block, Screen, blocks_for, seeds_from
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +77,9 @@ class Resolution:
     assertions_used: list[str] = field(default_factory=list)
     tiers_attempted: list[Tier] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    blocks: list[Block] = field(default_factory=list)
+    """What was withheld, named. Reported rather than dropped: an answer that looks clean only
+    because the inconvenient part was invisible is the failure `scope.py` exists to prevent."""
 
     @property
     def explanation(self) -> str:
@@ -92,6 +101,7 @@ class Resolution:
             "assertions_used": self.assertions_used,
             "tiers_attempted": [int(t) for t in self.tiers_attempted],
             "warnings": self.warnings,
+            "blocks": [b.to_dict() for b in self.blocks],
         }
 
 
@@ -108,6 +118,48 @@ class BlockedQuery:
     question: str
     reason: str
     at: str
+
+
+def _evidence(answer: Any) -> list[Any]:
+    """The id-bearing rows in an answer, whatever shape the tier gave it.
+
+    Tier 2 answers with a list of hits and tier 3 with `{passages, related}`. Tier 4 answers
+    with Athena columns and rows, which carry no ids at all and so cannot be screened row-wise.
+    """
+    if isinstance(answer, list):
+        return answer
+    if isinstance(answer, dict):
+        return [*(answer.get("passages") or []), *(answer.get("related") or [])]
+    return []
+
+
+def _apply(result: Resolution, screen: Screen) -> int:
+    """Strip blocked evidence from a resolution in place. Returns how much went.
+
+    The citation and assertion lists are filtered too. Removing a row while leaving its id
+    behind would still hand the blocked subject to whatever reads the audit trail, which is
+    exactly the leak the veto exists to prevent.
+    """
+    removed = 0
+    answer = result.answer
+    if isinstance(answer, list):
+        kept = screen.keep(answer)
+        removed += len(answer) - len(kept)
+        result.answer = kept
+    elif isinstance(answer, dict) and ("passages" in answer or "related" in answer):
+        for key in ("passages", "related"):
+            rows = answer.get(key)
+            if isinstance(rows, list):
+                kept = screen.keep(rows)
+                removed += len(rows) - len(kept)
+                answer[key] = kept
+
+    surviving = _evidence(result.answer)
+    kept_assertions = {row.get("assertion_id") for row in surviving if isinstance(row, dict)}
+    kept_documents = {row.get("document_id") for row in surviving if isinstance(row, dict)}
+    result.assertions_used = [a for a in result.assertions_used if a in kept_assertions]
+    result.citations = [c for c in result.citations if c.get("document_id") in kept_documents]
+    return removed
 
 
 class Resolver:
@@ -184,19 +236,63 @@ class Resolver:
             result = self._attempt(ctx, question, settings, tier, execute=execute)
             if result is not None:
                 result.tiers_attempted = attempted
-                return result
+                return self._screened(ctx, result, settings)
 
-        return Resolution(
-            tier=Tier.GRAPH_TRAVERSAL,
-            answer=None,
-            tiers_attempted=attempted,
-            warnings=[
-                (
-                    "No approved metric matched and nothing relevant was found in the graph. "
-                    "Rephrasing may help, or this may need a new metric definition."
-                )
-            ],
+        # Screened even though nothing matched. "Nothing found" while a wall is in force is the
+        # exact shape of the harm: a conflict check reads as clean when it is only incomplete.
+        return self._screened(
+            ctx,
+            Resolution(
+                tier=Tier.GRAPH_TRAVERSAL,
+                answer=None,
+                tiers_attempted=attempted,
+                warnings=[
+                    (
+                        "No approved metric matched and nothing relevant was found in the "
+                        "graph. Rephrasing may help, or this may need a new metric definition."
+                    )
+                ],
+            ),
+            settings,
         )
+
+    def _screened(
+        self, ctx: AuthContext, result: Resolution, settings: GovernanceSettings
+    ) -> Resolution:
+        """Apply the deterministic veto to whatever the tier returned.
+
+        Same `blocks_for` the planner calls, so the two endpoints cannot disagree about
+        screened data. It runs after the tier rather than inside it because a block is about
+        the evidence, not the retrieval strategy.
+        """
+        # Tier 1 is exempt by decision, not oversight. A compiled metric is an Athena-side
+        # aggregate: its rows carry no assertion, document or matter id, so there is nothing to
+        # veto, and dropping rows from a total would misreport the figure rather than withhold
+        # it. A metric that must exclude a matter says so in its own definition.
+        if result.tier is Tier.GOVERNED_METRIC:
+            return result
+
+        screen = blocks_for(
+            ctx,
+            graph_reader=self._graph,
+            seeds=seeds_from(_evidence(result.answer)),
+            min_confidence=settings.min_confidence_floor,
+        )
+        if not screen:
+            return result
+
+        result.blocks = screen.blocks
+        removed = _apply(result, screen)
+        if removed:
+            result.warnings = [
+                *result.warnings,
+                (
+                    f"{removed} matching {'item' if removed == 1 else 'items'} of evidence "
+                    f"{'was' if removed == 1 else 'were'} withheld. What was withheld, and "
+                    "why, is listed with the answer."
+                ),
+            ]
+        return result
 
     def _attempt(
         self,

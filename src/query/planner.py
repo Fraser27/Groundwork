@@ -40,6 +40,7 @@ from typing import Any
 
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
+from src.query.blocks import Block, Screen, blocks_for, seeds_from
 from src.query.resolver import Tier
 
 logger = logging.getLogger(__name__)
@@ -93,30 +94,6 @@ class Part:
             "citations": self.citations,
             "assertion_ids": self.assertion_ids,
             "confidence": self.confidence,
-        }
-
-
-@dataclass
-class Block:
-    """Something the graph refuses to let through, and why.
-
-    A block is a recorded fact, not a judgement: an ethical screen, or a rule that fired on
-    DECLARED or EXTRACTED_DET premises. It names its reason because a silent block is the
-    failure `scope.py` exists to prevent, where a clean-looking answer is clean only because
-    the inconvenient part was invisible.
-    """
-
-    subject: str
-    reason: str
-    rule: str = ""
-    matter_id: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "subject": self.subject,
-            "reason": self.reason,
-            "rule": self.rule,
-            "matter_id": self.matter_id,
         }
 
 
@@ -377,48 +354,12 @@ class Planner:
     def _blocks_for(
         self, ctx: AuthContext, seeds: list[str], settings: GovernanceSettings
     ) -> list[Block]:
-        """What the graph refuses to let through.
-
-        Two sources, both deterministic. An ethical screen is a recorded decision on
-        `AuthContext`. A rule block is an inference, but one the ontology restricts to
-        DECLARED and EXTRACTED_DET premises, so no model opinion reaches it.
-
-        Never asks a model. That is the design decision the whole module rests on.
-        """
-        blocks: list[Block] = []
-
-        for matter_id in sorted(ctx.matter_denylist):
-            blocks.append(
-                Block(
-                    subject=matter_id,
-                    reason=ctx.screen_reasons.get(matter_id)
-                    or "You are screened from this matter.",
-                    rule="ethical_screen",
-                    matter_id=matter_id,
-                )
-            )
-
-        if self._graph is not None and seeds:
-            try:
-                for found in self._graph.blocking_facts(
-                    ctx, seeds, min_confidence=settings.min_confidence_floor
-                ):
-                    blocks.append(
-                        Block(
-                            subject=str(found.get("subject_id", "")),
-                            reason=str(found.get("reason") or found.get("predicate") or "blocked"),
-                            rule=str(found.get("rule") or found.get("predicate") or ""),
-                            matter_id=found.get("matter_id"),
-                        )
-                    )
-            except AttributeError:
-                # An older reader has no `blocking_facts`. Screens still apply, so grounding
-                # degrades rather than disappearing, and the gap is visible in the response.
-                logger.debug("graph reader cannot report blocking facts")
-            except Exception as e:
-                logger.warning("could not read blocking facts: %s", e)
-
-        return blocks
+        return blocks_for(
+            ctx,
+            graph_reader=self._graph,
+            seeds=seeds,
+            min_confidence=settings.min_confidence_floor,
+        ).blocks
 
     def _without_blocked(self, part: Part, blocks: list[Block]) -> Part:
         """Drop blocked subjects from a part, keeping the part itself.
@@ -426,25 +367,13 @@ class Planner:
         Removing the whole part would hide that anything matched at all, which is the silent
         failure this design exists to avoid. The blocks are reported alongside.
         """
-        blocked = {b.subject for b in blocks if b.subject}
-        blocked_matters = {b.matter_id for b in blocks if b.matter_id}
-        if not blocked and not blocked_matters:
+        screen = Screen(blocks=blocks)
+        if not screen:
             return part
         if not isinstance(part.content, list):
             return part
 
-        kept = [
-            row
-            for row in part.content
-            if not (
-                isinstance(row, dict)
-                and (
-                    row.get("subject_id") in blocked
-                    or row.get("document_id") in blocked
-                    or row.get("matter_id") in blocked_matters
-                )
-            )
-        ]
+        kept = screen.keep(part.content)
         if len(kept) == len(part.content):
             return part
 
@@ -489,20 +418,4 @@ class Planner:
 
     @staticmethod
     def _seeds_from(part: Part) -> list[str]:
-        """Entity and document ids a part touched, for grounding.
-
-        `matter_id` is the join key rather than a fuzzy name match. It already exists on
-        every chunk and every assertion, so no normalisation is needed and a mis-join is not
-        possible.
-        """
-        if not isinstance(part.content, list):
-            return []
-        seeds: list[str] = []
-        for row in part.content:
-            if not isinstance(row, dict):
-                continue
-            for key in ("document_id", "subject_id", "object_id", "matter_id"):
-                value = row.get(key)
-                if isinstance(value, str) and value:
-                    seeds.append(value)
-        return seeds
+        return seeds_from(part.content)

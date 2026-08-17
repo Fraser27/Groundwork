@@ -1629,6 +1629,18 @@ code, pre { font-family: var(--mono); }
 }
 .graph-legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
+.graph-layer-group + .graph-layer-group { margin-top: 6px; }
+.graph-layer-head {
+  font-weight: 600;
+  color: var(--text);
+  border-top: 1px solid var(--border);
+  padding-top: 5px;
+}
+.graph-layer-head[aria-pressed='true'] { color: var(--accent); }
+.graph-layer-group:first-of-type .graph-layer-head { border-top: none; padding-top: 2px; }
+/* Indented to the dot column, so a kind reads as belonging to the layer above it. */
+.graph-layer-kind { padding-left: 2px; }
+
 .graph-inspect {
   position: absolute;
   top: 14px;

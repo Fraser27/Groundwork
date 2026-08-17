@@ -15,9 +15,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api, type EpistemicClass, type GraphEdge, type GraphNode, type Matter } from '../api'
+import {
+  api,
+  type EpistemicClass,
+  type GraphEdge,
+  type GraphNode,
+  type Matter,
+  type Ontology,
+} from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC, EPISTEMIC_ORDER, HELP } from '../epistemic'
+import { buildLayerIndex } from '../graphLayers'
 import { useProvenance } from '../useProvenance'
 import ConfidenceBar from '../components/ConfidenceBar'
 import EpistemicBadge from '../components/EpistemicBadge'
@@ -25,29 +33,40 @@ import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
 import { EmptyState, ErrorState, Spinner } from '../components/Shared'
 
+// Keyed by the id prefix, which is what `type` is. These were keyed `Party`/`Matter` while the
+// API sends `party`/`matter`, so every lookup missed and the whole graph drew in the fallback
+// blue at the fallback radius.
 const NODE_COLOURS: Record<string, string> = {
-  Matter: '#4361ee',
-  Party: '#0d9488',
-  Counsel: '#7c3aed',
-  Document: '#d97706',
-  Authority: '#dc2626',
-  Court: '#0891b2',
-  Deadline: '#db2777',
-  Clause: '#65a30d',
-  Topic: '#8b90a5',
+  matter: '#4361ee',
+  party: '#0d9488',
+  counsel: '#7c3aed',
+  document: '#d97706',
+  authority: '#dc2626',
+  court: '#0891b2',
+  deadline: '#db2777',
+  clause: '#65a30d',
+  topic: '#8b90a5',
+  source: '#475569',
+  table: '#64748b',
+  column: '#94a3b8',
 }
 
 const NODE_RADIUS: Record<string, number> = {
-  Matter: 15,
-  Party: 12,
-  Counsel: 12,
-  Document: 10,
-  Authority: 10,
-  Court: 9,
-  Deadline: 9,
-  Clause: 8,
-  Topic: 7,
+  matter: 15,
+  party: 12,
+  counsel: 12,
+  document: 10,
+  authority: 10,
+  court: 9,
+  deadline: 9,
+  clause: 8,
+  topic: 7,
+  source: 12,
+  table: 9,
+  column: 6,
 }
+
+const FALLBACK_COLOUR = '#6c8cff'
 
 interface SimNode extends GraphNode {
   x: number
@@ -78,6 +97,7 @@ export default function GraphExplorer() {
   const [nodes, setNodes] = useState<SimNode[]>([])
   const [edges, setEdges] = useState<GraphEdge[]>([])
   const [matters, setMatters] = useState<Matter[]>([])
+  const [onto, setOnto] = useState<Ontology | null>(null)
   const [floor, setFloor] = useState(0.8)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -127,6 +147,7 @@ export default function GraphExplorer() {
   const [minConf, setMinConf] = useState(0)
   const [includePending, setIncludePending] = useState(true)
   const [governingOnly, setGoverningOnly] = useState(false)
+  const [requestedLayer, setRequestedLayer] = useState('__all__')
 
   useEffect(() => {
     Promise.all([
@@ -157,7 +178,65 @@ export default function GraphExplorer() {
       .finally(() => setLoading(false))
   }, [tenant, reloadKey])
 
+  // Separate from the graph load, and deliberately not fatal: the layer control is a
+  // convenience, and losing it must not cost a reader the graph itself. Domain comes from the
+  // tenant's settings, so a healthcare tenant groups by the healthcare pack without a rebuild.
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getSettings(tenant)
+      .then((s) => (cancelled ? null : api.ontology(s.ontology_domain)))
+      .then((o) => {
+        if (!cancelled && o) setOnto(o)
+      })
+      .catch(() => setOnto(null))
+    return () => {
+      cancelled = true
+    }
+  }, [tenant, reloadKey])
+
+  const layers = useMemo(() => buildLayerIndex(onto), [onto])
+
   const nodeIndex = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+
+  /** Layer per node id, so the edge filter is a map lookup rather than a parse per edge. */
+  const layerByNode = useMemo(
+    () => new Map(nodes.map((n) => [n.id, layers.layerOf(n.type)])),
+    [nodes, layers],
+  )
+
+  /** Entity kinds grouped under their layer, with counts. Counts are of the whole loaded graph,
+   *  not the filtered view, so the numbers say what is there rather than what survived. */
+  const layerGroups = useMemo(() => {
+    if (!layers.loaded) return []
+    const counts = new Map<string, Map<string, number>>()
+    for (const n of nodes) {
+      const layer = layers.layerOf(n.type)
+      const kinds = counts.get(layer) ?? new Map<string, number>()
+      kinds.set(n.type, (kinds.get(n.type) ?? 0) + 1)
+      counts.set(layer, kinds)
+    }
+    return layers.order
+      .filter((l) => counts.has(l))
+      .map((l) => {
+        const kinds = [...counts.get(l)!.entries()].sort(
+          (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+        )
+        return {
+          layer: l,
+          label: layers.labelOf(l),
+          total: kinds.reduce((s, [, c]) => s + c, 0),
+          kinds,
+        }
+      })
+  }, [nodes, layers])
+
+  /** Derived, not stored: a layer with no nodes in it — a stale choice, or a pack that failed to
+   *  load — would hide the whole graph while the control that set it is no longer rendered. */
+  const layerFilter =
+    requestedLayer !== '__all__' && layerGroups.some((g) => g.layer === requestedLayer)
+      ? requestedLayer
+      : '__all__'
 
   const visibleEdges = useMemo(
     () =>
@@ -170,6 +249,13 @@ export default function GraphExplorer() {
         if (e.confidence < minConf) return false
         if (!includePending && e.review_state === 'PENDING') return false
         if (governingOnly && !e.governing) return false
+        if (layerFilter !== '__all__') {
+          // Either endpoint, not both: an edge joining a table to a matter is what makes this one
+          // graph rather than two, and dropping it from both views would hide the join.
+          const a = layerByNode.get(e.source)
+          const b = layerByNode.get(e.target)
+          if (a !== layerFilter && b !== layerFilter) return false
+        }
         if (matterFilter !== '__all__') {
           // The assertion carries the matter, not the node — nodes are derived from entity
           // ids and have no matter at all. Endpoint ids are `kind:slug`, so a Matter entity
@@ -181,7 +267,17 @@ export default function GraphExplorer() {
         }
         return true
       }),
-    [edges, visibleClasses, minConf, includePending, governingOnly, matterFilter, highlighted],
+    [
+      edges,
+      visibleClasses,
+      minConf,
+      includePending,
+      governingOnly,
+      matterFilter,
+      layerFilter,
+      layerByNode,
+      highlighted,
+    ],
   )
 
   const highlightEdges = useMemo(
@@ -213,8 +309,6 @@ export default function GraphExplorer() {
     }
     return ids
   }, [visibleEdges])
-
-  const nodeTypes = useMemo(() => [...new Set(nodes.map((n) => n.type))].sort(), [nodes])
 
   const wakeSim = useCallback((alpha = 0.5) => {
     alphaRef.current = Math.max(alphaRef.current, alpha)
@@ -388,7 +482,7 @@ export default function GraphExplorer() {
 
     // Nodes
     for (const n of visible) {
-      const colour = NODE_COLOURS[n.type] || '#6c8cff'
+      const colour = NODE_COLOURS[n.type] || FALLBACK_COLOUR
       const radius = NODE_RADIUS[n.type] || 8
       const isHovered = hovered?.kind === 'node' && hovered.id === n.id
       const isSelected = selectedNode === n.id
@@ -418,7 +512,7 @@ export default function GraphExplorer() {
       }
 
       ctx.fillStyle = labelColour
-      ctx.font = `${(n.type === 'Topic' ? 9.5 : 11) / Math.max(z * 0.85, 0.75)}px Inter, system-ui, sans-serif`
+      ctx.font = `${(radius <= 7 ? 9.5 : 11) / Math.max(z * 0.85, 0.75)}px Inter, system-ui, sans-serif`
       ctx.textAlign = 'center'
       ctx.fillText(n.label, n.x, n.y + radius + 13 / Math.max(z * 0.85, 0.75))
       ctx.globalAlpha = 1
@@ -737,6 +831,32 @@ export default function GraphExplorer() {
 
       <div className="graph-toolbar">
         <div className="graph-toolbar-left">
+          {layerGroups.length > 1 && (
+            <div className="toolbar-field">
+              <label>
+                Layer
+                <FieldHelp text={HELP.graphLayer} />
+              </label>
+              <div className="chip-toggles">
+                <button
+                  className={`chip-toggle${layerFilter === '__all__' ? ' active' : ''}`}
+                  onClick={() => setRequestedLayer('__all__')}
+                >
+                  All
+                </button>
+                {layerGroups.map((g) => (
+                  <button
+                    key={g.layer}
+                    className={`chip-toggle${layerFilter === g.layer ? ' active' : ''}`}
+                    onClick={() => setRequestedLayer(g.layer)}
+                    title={`${g.total} ${g.total === 1 ? 'entity' : 'entities'}`}
+                  >
+                    {g.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="toolbar-field">
             <label>
               Matter
@@ -860,13 +980,50 @@ export default function GraphExplorer() {
           )}
           <div className="graph-legend-title" style={{ marginTop: 11 }}>
             Entities
+            <FieldHelp text={HELP.graphLayer} align="right" />
           </div>
-          {nodeTypes.map((t) => (
-            <div className="graph-legend-row" key={t} style={{ cursor: 'default' }}>
-              <span className="graph-legend-dot" style={{ background: NODE_COLOURS[t] || '#6c8cff' }} />
-              <span>{t}</span>
-            </div>
-          ))}
+          {layerGroups.map((g) => {
+            const isolated = layerFilter === g.layer
+            return (
+              <div className="graph-layer-group" key={g.layer}>
+                <button
+                  className={`graph-legend-row graph-layer-head${layerFilter !== '__all__' && !isolated ? ' off' : ''}`}
+                  onClick={() => setRequestedLayer(isolated ? '__all__' : g.layer)}
+                  aria-pressed={isolated}
+                  title={
+                    isolated
+                      ? 'Show every layer again'
+                      : `Show only ${g.label.toLowerCase()} and the edges joining it to the rest`
+                  }
+                >
+                  <span style={{ flex: 1 }}>{g.label}</span>
+                  <span>{g.total}</span>
+                </button>
+                {g.kinds.map(([t, n]) => (
+                  <div className="graph-legend-row graph-layer-kind" key={t} style={{ cursor: 'default' }}>
+                    <span
+                      className="graph-legend-dot"
+                      style={{ background: NODE_COLOURS[t] || FALLBACK_COLOUR }}
+                    />
+                    <span style={{ flex: 1 }}>{layers.entityLabelOf(t)}</span>
+                    <span>{n}</span>
+                  </div>
+                ))}
+              </div>
+            )
+          })}
+          {/* No pack, so no layer to claim. The kinds still get listed — the vocabulary
+              being unreachable is not a reason to stop naming what is on screen. */}
+          {!layers.loaded &&
+            [...new Set(nodes.map((n) => n.type))].sort().map((t) => (
+              <div className="graph-legend-row" key={t} style={{ cursor: 'default' }}>
+                <span
+                  className="graph-legend-dot"
+                  style={{ background: NODE_COLOURS[t] || FALLBACK_COLOUR }}
+                />
+                <span>{t}</span>
+              </div>
+            ))}
         </div>
 
         <div className="graph-zoom-controls">
@@ -932,7 +1089,7 @@ export default function GraphExplorer() {
             <div className="graph-inspect-head">
               <span
                 className="graph-legend-dot"
-                style={{ background: NODE_COLOURS[selectedNodeObj.type] || '#6c8cff' }}
+                style={{ background: NODE_COLOURS[selectedNodeObj.type] || FALLBACK_COLOUR }}
               />
               <strong>{selectedNodeObj.label}</strong>
               <button
@@ -948,16 +1105,15 @@ export default function GraphExplorer() {
               <dl className="graph-inspect-meta">
                 <div>
                   <dt>Type</dt>
-                  <dd>{selectedNodeObj.type}</dd>
+                  <dd>{layers.entityLabelOf(selectedNodeObj.type)}</dd>
                 </div>
-                {selectedNodeObj.matter_id && (
-                  <div>
-                    <dt>Matter</dt>
-                    <dd>
-                      <code>{selectedNodeObj.matter_id}</code>
-                    </dd>
-                  </div>
-                )}
+                <div>
+                  <dt>
+                    Layer
+                    <FieldHelp text={HELP.graphLayer} />
+                  </dt>
+                  <dd>{layers.labelOf(layers.layerOf(selectedNodeObj.type))}</dd>
+                </div>
                 <div>
                   <dt>Assertions touching it</dt>
                   <dd>{selectedNodeEdges.length}</dd>

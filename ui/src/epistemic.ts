@@ -150,6 +150,8 @@ export const HELP = {
     'Refuses any question that no approved governed metric can answer, rather than falling back to model-generated SQL. Governed metrics keep working. Refused questions are logged and make a good backlog of metrics worth defining.',
   ontologyDomain:
     'Which vocabulary of entities, relationships and rules this tenant uses. The platform is domain-agnostic; the legal pack is simply the default.',
+  graphLayer:
+    'Which half of the graph an entity belongs to: facts read out of your documents, or schema declared by a system of record such as a Glue catalogue. They are one graph on purpose, so a metric over a table can be reconciled against a fact from a page, but you can read one at a time. Click a heading to isolate it. Edges that join the two stay drawn, because that join is the point.',
   ingestState:
     'Where a document is in the pipeline. Its text becomes searchable as soon as it is parsed, but anything a model read into it waits for review before it can shape an answer.',
   supersede:

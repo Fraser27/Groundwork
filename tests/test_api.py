@@ -605,3 +605,35 @@ class TestApprovingSettlesTheDocument:
         client.post(f"/api/tenants/{TENANT}/assertions/{mine}/approve")
 
         assert self._state(job.job_id) == "LIVE"
+
+
+class TestTheQueryEndpointSendsItsBlocks:
+    """The UI renders these, so the route must actually emit them.
+
+    Asserted at the HTTP boundary rather than on `Resolution`: a field the resolver carries but
+    the route drops is a page that renders nothing, and a type declaring it is a claim about the
+    response that nothing checks against one.
+    """
+
+    def test_every_answer_carries_a_blocks_list(self, client):
+        body = client.post(f"/api/tenants/{TENANT}/query", json={"query": "anything"}).json()
+        assert body["blocks"] == []
+
+    def test_a_screened_caller_gets_the_screen_named(self):
+        r = _screened_client().post(f"/api/tenants/{TENANT}/query", json={"query": "antitrust"})
+        body = r.json()
+        assert body["blocks"] == [
+            {
+                "subject": SCREENED_MATTER,
+                "reason": SCREEN_REASON,
+                "rule": "ethical_screen",
+                "matter_id": SCREENED_MATTER,
+                "contact": SCREEN_CONTACT,
+            }
+        ]
+
+    def test_the_shape_matches_what_the_ui_reads(self):
+        """`QueryBlock` in api.ts. A key the page reads and the API never sends is the recurring
+        crash in this repo: tsc stays clean and the render throws."""
+        r = _screened_client().post(f"/api/tenants/{TENANT}/query", json={"query": "antitrust"})
+        assert set(r.json()["blocks"][0]) == {"subject", "reason", "rule", "matter_id", "contact"}
