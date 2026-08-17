@@ -635,3 +635,47 @@ class TestTheQueryEndpointSendsItsBlocks:
         crash in this repo: tsc stays clean and the render throws."""
         r = _screened_client().post(f"/api/tenants/{TENANT}/query", json={"query": "antitrust"})
         assert set(r.json()["blocks"][0]) == {"subject", "reason", "rule", "matter_id", "contact"}
+
+
+class TestSettingsProjectsWhatThePageCanChange:
+    """The Admin page re-reads `/settings` after every save rather than trusting the patch.
+
+    So a field missing from that projection does not merely fail to display: it silently reverts
+    the control the user just moved, and the save looks broken while the value sits correctly in
+    storage. The router toggle was invisible for exactly this reason -- four fields saved by
+    `PATCH /governance` and absent from the read that followed it.
+    """
+
+    def _save(self, client, patch):
+        r = client.patch(f"/api/tenants/{TENANT}/governance", json=patch)
+        assert r.status_code == 200, r.text
+        return client.get(f"/api/tenants/{TENANT}/settings").json()
+
+    def test_the_router_toggle_survives_the_re_read(self, client):
+        assert self._save(client, {"router_enabled": False})["router_enabled"] is False
+
+    def test_every_router_control_is_projected(self, client):
+        """Named individually rather than by prefix: a control the page can move and the
+        projection cannot report is the bug, and it recurs one field at a time."""
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        for field in (
+            "router_enabled",
+            "router_min_similarity",
+            "router_margin",
+            "router_metric_boost",
+        ):
+            assert field in body, f"{field} is missing, so saving it would revert"
+
+    def test_a_saved_number_comes_back_as_saved(self, client):
+        assert self._save(client, {"router_margin": 0.5})["router_margin"] == 0.5
+
+    def test_the_tier_cap_is_projected_and_holds_no_retired_tier(self, client):
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        assert body["allowed_tiers"] == [1, 2, 3]
+
+    def test_the_ontology_is_the_tenants_not_the_processs(self, client):
+        """It read `services.ontology.domain` -- the pack loaded at boot, process-wide -- so a
+        tenant switched to healthcare still reported legal. The entity vocabulary depends on which
+        pack is live, which makes a wrong answer here more than cosmetic."""
+        body = self._save(client, {"ontology_domain": "healthcare"})
+        assert body["ontology_domain"] == "healthcare"

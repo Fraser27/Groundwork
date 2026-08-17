@@ -577,3 +577,115 @@ class TestRelinkingMovesTheEmbeddingsToo:
 
         assert report.assertions_relinked == 1
         assert any("vector chunks did not" in e for e in report.errors)
+
+
+class TestLinkingMovesTheDocumentRecordToo:
+    """Three stores hold a document's matter, and the Documents page reads the third.
+
+    `_document_summary` renders `job.matter_id`. Linking updated the graph assertions and the
+    vector chunks and not the job, so a user filed a document under a matter, watched the fact
+    counts move on the Matters page, and saw the document row still say unassigned. The one store
+    nothing wrote was the one on screen.
+
+    Every job for the document, not just the newest: a re-ingest leaves earlier rows behind and the
+    page picks among them, so refiling one can leave it reading a stale row.
+    """
+
+    def _services(self, jobs, graph_ids=("a-1",)):
+        from src.graph import matter_queries as q
+
+        class FakeGraph:
+            def query(self, cypher, params=None):
+                if cypher is q.GET_MATTER:
+                    return [{"m": {"matter_id": NTL, "name": "Northwind"}}]
+                if cypher is q.RELINK_DOCUMENT_ASSERTIONS:
+                    return [{"assertion_ids": list(graph_ids)}]
+                raise AssertionError(f"unexpected query: {cypher}")
+
+        class Jobs:
+            def __init__(self, rows):
+                self.rows = rows
+                self.written: list = []
+
+            def jobs_for_document(self, tenant_id, document_id):
+                return [j for j in self.rows if j.document_id == document_id]
+
+            def put_job(self, job):
+                self.written.append(job)
+
+        class Queue:
+            def visible(self, ctx):
+                return []
+
+        store = Jobs(jobs)
+
+        class Services:
+            review_queue = Queue()
+            graph_audit = InMemoryGraphAudit()
+            job_store = store
+
+        s = Services()
+        s.graph = FakeGraph()
+        return s, store
+
+    def _job(self, document_id="doc-a", matter_id=None):
+        from src.documents.models import DocumentMeta, IngestJob
+
+        doc = DocumentMeta(
+            document_id=document_id,
+            tenant_id=TENANT,
+            bucket="b",
+            key=f"processed/{document_id}",
+            filename="note.pdf",
+            media_type="application/pdf",
+            content_sha256="a" * 64,
+            byte_size=10,
+            uploaded_by="u",
+            matter_id=matter_id,
+        )
+        return IngestJob.for_document(doc)
+
+    def test_the_job_is_refiled(self, store, ctx):
+        store.create(ctx, NTL, "Northwind")
+        services, jobs = self._services([self._job()])
+
+        report = link_documents(services, ctx, NTL, ["doc-a"])
+
+        assert report.jobs_refiled == 1
+        assert jobs.written[0].matter_id == NTL
+
+    def test_every_job_for_the_document_is_refiled(self, store, ctx):
+        """A re-ingest leaves older rows, and the page picks among them."""
+        store.create(ctx, NTL, "Northwind")
+        services, _ = self._services([self._job(), self._job()])
+
+        report = link_documents(services, ctx, NTL, ["doc-a"])
+
+        assert report.jobs_refiled == 2
+
+    def test_a_job_already_on_the_matter_is_left_alone(self, store, ctx):
+        """Idempotent, so a re-link is not a write per job per attempt."""
+        store.create(ctx, NTL, "Northwind")
+        services, jobs = self._services([self._job(matter_id=NTL)])
+
+        report = link_documents(services, ctx, NTL, ["doc-a"])
+
+        assert report.jobs_refiled == 0
+        assert jobs.written == []
+
+    def test_a_job_store_failure_is_reported_not_raised(self, store, ctx):
+        """The facts have already moved by then. Failing here would leave three stores
+        disagreeing with no record of why."""
+        store.create(ctx, NTL, "Northwind")
+
+        class Broken:
+            def jobs_for_document(self, tenant_id, document_id):
+                raise RuntimeError("dynamo unreachable")
+
+        services, _ = self._services([])
+        services.job_store = Broken()
+
+        report = link_documents(services, ctx, NTL, ["doc-a"])
+
+        assert report.assertions_relinked == 1
+        assert any("document record did not" in e for e in report.errors)

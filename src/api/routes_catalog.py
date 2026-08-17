@@ -412,6 +412,12 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
     Assembled from governance settings plus process config rather than stored as a blob:
     a settings row that can drift from the values actually in force is worse than no
     settings page at all.
+
+    **This projection is what the Admin page renders after a save**, because `updateSettings`
+    patches governance and then re-reads here rather than trusting the patch response. So a field
+    missing from this dict does not merely fail to display -- it silently reverts the control the
+    user just moved, and the save looks broken while the value sits correctly in DynamoDB. Every
+    setting the page can change has to be projected here.
     """
     ctx, _ = principal
     settings = services.settings_for(ctx.tenant_id)
@@ -419,13 +425,25 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
     return {
         "tenant_id": ctx.tenant_id,
         "name": ctx.tenant_id,
-        "ontology_domain": services.ontology.domain,
+        # The tenant's own setting, not `services.ontology.domain` -- that is the pack loaded at
+        # boot, process-wide, so switching this tenant to healthcare still reported legal. The
+        # entity vocabulary depends on which pack is live, which makes a wrong answer here worse
+        # than cosmetic.
+        "ontology_domain": settings.ontology_domain or services.ontology.domain,
         "min_confidence": settings.min_confidence_floor,
         # Sent so the floor control can respect its own lower bound. The floor must stay above
         # the cap, and without this the UI offered a range that was mostly invalid: dragging to
         # 0.65 produced a rejection explaining an invariant the screen had never mentioned.
         "model_confidence_cap": settings.model_confidence_cap,
         "block_ungoverned_queries": settings.block_ungoverned_queries,
+        # The four router controls. Absent until now, so the Admin toggle read `undefined`, showed
+        # off however the tenant was configured, and every attempt to turn it on was reverted by
+        # the re-read that followed the save.
+        "router_enabled": settings.router_enabled,
+        "router_min_similarity": settings.router_min_similarity,
+        "router_margin": settings.router_margin,
+        "router_metric_boost": settings.router_metric_boost,
+        "allowed_tiers": sorted(settings.allowed_tiers),
         "extraction_model": settings.extraction_model or models.extraction_model,
         "synthesis_model": models.synthesis_model,
         "embedding_model": services.config.vector.embedding_model,
@@ -608,9 +626,7 @@ async def rebuild_router_index(
             "keyword-based and there is nothing to rebuild",
         )
 
-    report = indexer.rebuild(
-        ctx, metrics=body.metrics, tables=body.tables, entities=body.entities
-    )
+    report = indexer.rebuild(ctx, metrics=body.metrics, tables=body.tables, entities=body.entities)
     return report.to_dict()
 
 

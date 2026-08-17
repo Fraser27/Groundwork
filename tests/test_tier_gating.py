@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.governance import GovernanceSettings
+from src.governance import GovernanceError, GovernanceSettings
 from src.graph.scope import AuthContext
 from src.query.resolver import QueryBlocked, Resolver, Tier
 
@@ -150,11 +150,11 @@ class TestEnvParsing:
         """A typo in a cap must not stop the API starting, and must not silently forbid
         everything either, which would look like a total outage."""
         monkeypatch.setenv("LEXGRAPH_ALLOWED_TIERS", "nonsense")
-        assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2, 3, 4})
+        assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2, 3})
 
     def test_an_unset_cap_permits_all_tiers(self, monkeypatch):
         monkeypatch.delenv("LEXGRAPH_ALLOWED_TIERS", raising=False)
-        assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2, 3, 4})
+        assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2, 3})
 
 
 class TestTheFourthTierStaysRetired:
@@ -191,3 +191,18 @@ class TestTheFourthTierStaysRetired:
         stale caller deserves a refusal rather than a 500."""
         with pytest.raises(ValueError):
             Tier(4)
+
+    def test_the_known_tier_set_matches_the_enum(self):
+        """Two lists that can drift is how a retired tier survived in `from_env`'s default for a
+        day. `governance` cannot import `Tier` -- the resolver imports governance -- so the
+        duplication is deliberate and this is what keeps it honest."""
+        from src.governance import _KNOWN_TIERS
+
+        assert _KNOWN_TIERS == {int(t) for t in Tier}
+
+    def test_a_retired_tier_in_the_cap_is_refused_rather_than_stored(self):
+        """It reached the Admin page as `[1,2,3,4]` because nothing validated the members --
+        `_decode` narrowed a persisted row and `from_env`'s default still carried a 4, so the one
+        path nobody guarded was the one that leaked."""
+        with pytest.raises(GovernanceError, match="not a resolution tier"):
+            GovernanceSettings(allowed_tiers=frozenset({1, 2, 3, 4}))

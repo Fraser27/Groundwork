@@ -68,6 +68,9 @@ class LinkReport:
     chunks_refiled: int = 0
     """Embeddings moved with the facts. Counted separately because they are a different store and
     can fail independently -- and a chunk left behind is a retrieval leak, not a stale number."""
+    jobs_refiled: int = 0
+    """Document records moved. The third store, and the one the Documents page actually renders:
+    a link that moved the facts and not this showed every document as unassigned."""
     previous_matters: dict[str, str | None] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     at: str = field(default_factory=_now)
@@ -85,6 +88,7 @@ class LinkReport:
             "assertions_relinked": self.assertions_relinked,
             "assertion_ids": list(self.assertion_ids),
             "chunks_refiled": self.chunks_refiled,
+            "jobs_refiled": self.jobs_refiled,
             "previous_matters": dict(self.previous_matters),
             "errors": self.errors,
             "at": self.at,
@@ -223,6 +227,7 @@ def link_documents(
             report.errors.append(f"{document_id}: {e}")
 
         report.chunks_refiled += _refile_chunks(services, ctx, document_id, matter_id, report)
+        report.jobs_refiled += _refile_job(services, ctx, document_id, matter_id, report)
 
     _audit_link(services, ctx, report, reason)
     logger.info(
@@ -233,6 +238,45 @@ def link_documents(
         report.assertions_relinked,
     )
     return report
+
+
+def _refile_job(
+    services: Any, ctx: AuthContext, document_id: str, matter_id: str, report: LinkReport
+) -> int:
+    """Move the ingest job's matter as well as the facts and the chunks.
+
+    The Documents page renders `job.matter_id` -- `_document_summary` reads it directly -- so a
+    link that updated the graph and the vector store and not the job left every document row
+    saying unassigned while its facts had plainly moved. The store the user *looks at* was the one
+    store nothing wrote.
+
+    Every job for the document, not just the newest: a re-ingest leaves earlier rows behind, and
+    `_latest_per_document` picks by creation time, so refiling only one can leave the page reading
+    a stale row.
+
+    Reported rather than raised, like the chunks: the facts have already moved, and failing the
+    call here would leave three stores disagreeing with no record of why.
+    """
+    store = getattr(services, "job_store", None)
+    if store is None:
+        return 0
+    try:
+        jobs = store.jobs_for_document(ctx.tenant_id, document_id)
+    except Exception as e:  # noqa: BLE001
+        report.errors.append(f"{document_id}: facts moved but the document record did not: {e}")
+        return 0
+
+    moved = 0
+    for job in jobs:
+        if job.matter_id == matter_id:
+            continue
+        job.matter_id = matter_id
+        try:
+            store.put_job(job)
+            moved += 1
+        except Exception as e:  # noqa: BLE001
+            report.errors.append(f"{document_id}: facts moved but the document record did not: {e}")
+    return moved
 
 
 def _refile_chunks(

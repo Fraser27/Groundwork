@@ -38,6 +38,11 @@ from src.constants import (
 DEFAULT_QUERY_MODEL = DEFAULT_SYNTHESIS_MODEL
 DEFAULT_ENRICHMENT_MODEL = DEFAULT_OCR_MODEL
 
+#: The resolution tiers that exist. Written out rather than imported from `query.resolver`, which
+#: imports this module -- so a test pins the two together instead, because a second list that can
+#: drift from the enum is exactly how a retired tier survived in a default for a day.
+_KNOWN_TIERS = frozenset({1, 2, 3})
+
 
 class GovernanceError(ValueError):
     """Raised when a settings change would break a safety invariant."""
@@ -195,6 +200,15 @@ class GovernanceSettings:
             )
         if not 0.0 <= self.router_metric_boost <= 1.0:
             raise GovernanceError("router_metric_boost must be in [0,1]")
+        # Validated rather than trusted to every default and decoder being right. A `4` survived
+        # here from `from_env`'s default long after the tier was retired, and it only surfaced
+        # because the Admin page displayed it -- a tier the code has no member for reaches
+        # `Tier(4)` in the resolver and raises where a refusal belongs.
+        if unknown := sorted(t for t in self.allowed_tiers if t not in _KNOWN_TIERS):
+            raise GovernanceError(
+                f"allowed_tiers contains {unknown}, which is not a resolution tier. "
+                f"Permitted: {sorted(_KNOWN_TIERS)}."
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -227,7 +241,7 @@ class GovernanceSettings:
             auto_assert_deterministic=_b("LEXGRAPH_AUTO_ASSERT_DET", True),
             require_review_for_governing=_b("LEXGRAPH_REVIEW_GOVERNING", True),
             block_ungoverned_queries=_b("LEXGRAPH_BLOCK_UNGOVERNED", False),
-            allowed_tiers=_tiers("LEXGRAPH_ALLOWED_TIERS", frozenset({1, 2, 3, 4})),
+            allowed_tiers=_tiers("LEXGRAPH_ALLOWED_TIERS", frozenset({1, 2, 3})),
             router_enabled=_b("LEXGRAPH_ROUTER_ENABLED", True),
             router_min_similarity=_f("LEXGRAPH_ROUTER_MIN_SIMILARITY", 0.25),
             router_margin=_f("LEXGRAPH_ROUTER_MARGIN", 0.35),

@@ -937,13 +937,17 @@ export interface TenantSettings {
   model_confidence_cap: number
   block_ungoverned_queries: boolean
   /**
-   * Vector router. Every one is optional: the projection does not send them yet, and a missing
-   * field must leave the rest of the Admin page working rather than blanking it.
+   * Vector router. Sent by the projection now — they were absent, so the toggle read `undefined`,
+   * showed off whatever the tenant was configured to do, and the re-read that follows every save
+   * reverted it. Still optional, so a deployment running an older API leaves the rest of this
+   * page working rather than blanking it.
    */
   router_enabled?: boolean
   router_min_similarity?: number
   router_margin?: number
   router_metric_boost?: number
+  /** The tenant's tier cap, so the page can show which routes are permitted at all. */
+  allowed_tiers?: number[]
   extraction_model: string
   synthesis_model: string
   embedding_model: string
