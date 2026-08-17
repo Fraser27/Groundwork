@@ -223,6 +223,43 @@ class TestIdentity:
     def test_tenant_changes_identity(self):
         assert _base(tenant_id="firm-a").assertion_id != _base(tenant_id="firm-b").assertion_id
 
+    def test_confidence_is_not_part_of_identity(self):
+        """Load-bearing for the approval rescale, so pinned rather than left to inspection.
+
+        Approval moves `confidence` on a stored assertion. That is only safe because the id
+        hashes tenant/subject/predicate/object/method/locator/valid_from and nothing else -- if
+        confidence entered the hash, approving a fact would fork its id and every citation,
+        audit row and premise link pointing at the old one would dangle.
+        """
+        assert _base(confidence=0.55).assertion_id == _base(confidence=0.958).assertion_id
+
+    def test_the_raw_score_is_not_part_of_identity_either(self):
+        assert _base(raw_confidence=0.1).assertion_id == _base(raw_confidence=0.9).assertion_id
+
+    @pytest.mark.parametrize(
+        "field",
+        ["tenant_id", "subject_id", "predicate", "object_id", "method", "valid_from"],
+    )
+    def test_exactly_these_fields_are_hashed(self, field):
+        """The other half of the same guarantee: everything the hash *does* cover still moves
+        the id, so a change to `_compute_id` cannot quietly narrow it."""
+        changed = {
+            "tenant_id": "firm-other",
+            "subject_id": "Matter-9999",
+            "predicate": "ADVERSE_TO",
+            "object_id": "Party-Other",
+            "method": "llm:opus-9",
+            "valid_from": "2020-01-01T00:00:00Z",
+        }[field]
+        assert _base().assertion_id != _base(**{field: changed}).assertion_id
+
+    def test_mutating_confidence_in_place_does_not_restate_the_id(self):
+        """What `approve()` actually does, checked against the recomputed hash."""
+        a = _base(confidence=0.55)
+        before = a.assertion_id
+        a.confidence = 0.91
+        assert a._compute_id() == before
+
 
 class TestBitemporal:
     def test_recorded_at_is_set(self):

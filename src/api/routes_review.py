@@ -55,6 +55,10 @@ class AssertionOut(BaseModel):
     epistemic_class: str
     method: str
     confidence: float
+    raw_confidence: float | None = None
+    """What the extractor claimed, before the cap or an approval rescaled it. None for a fact
+    that never self-reported. Sent so a reviewer can see why a number is where it is."""
+
     review_state: str
     matter_id: str | None = None
     recorded_at: str | None = None
@@ -132,6 +136,7 @@ def _to_out(record: Any, floor: float) -> AssertionOut:
         epistemic_class=a.epistemic_class.value,
         method=a.method,
         confidence=a.confidence,
+        raw_confidence=a.raw_confidence,
         review_state=a.review_state.value,
         matter_id=a.matter_id,
         recorded_at=a.recorded_at,

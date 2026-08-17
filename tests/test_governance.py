@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from src.governance import FIELD_HELP, GovernanceError, GovernanceSettings
+from src.graph.assertions import answerable_confidence
 
 
 class TestCapFloorInvariant:
@@ -41,6 +42,30 @@ class TestCapFloorInvariant:
             {"min_confidence_floor": 0.5, "model_confidence_cap": 0.4}, updated_by="admin"
         )
         assert (s.min_confidence_floor, s.model_confidence_cap) == (0.5, 0.4)
+
+    def test_the_gap_no_longer_makes_approved_facts_unreachable(self):
+        """The gap is kept, but it stopped being the thing that hid approved facts.
+
+        It used to double as a permanent ceiling: a fact capped at 0.79 stayed at 0.79 after
+        approval, under a 0.80 floor, and an admin could not lower the floor to reach it
+        because doing so closes the gap and is refused. So the cap's only live effect was
+        blocking *approved* facts -- which is not what it is for. Approval now rescales instead,
+        which needs no settings change at all.
+        """
+        s = GovernanceSettings()
+        capped = s.effective_model_confidence(0.99)
+        assert capped < s.min_confidence_floor
+        assert answerable_confidence(capped) >= s.min_confidence_floor
+        # And the admin still cannot reach it by lowering the floor, which is why the rescale
+        # had to be the fix rather than a configuration change.
+        with pytest.raises(GovernanceError):
+            s.apply({"min_confidence_floor": 0.5}, updated_by="admin")
+
+    def test_an_unreviewed_claim_still_cannot_clear_the_floor_on_its_own(self):
+        """What the gap is actually for, and it has to keep holding."""
+        s = GovernanceSettings()
+        for claimed in (0.8, 0.95, 1.0):
+            assert s.effective_model_confidence(claimed) < s.min_confidence_floor
 
 
 class TestClamping:

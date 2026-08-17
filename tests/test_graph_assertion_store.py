@@ -26,7 +26,13 @@ import pytest
 from src.documents.review import AssertionRecord, Lifecycle
 from src.graph.assertion_queries import UnsafeRelationshipType, safe_type
 from src.graph.assertion_store import GraphAssertionStore
-from src.graph.assertions import EpistemicClass, ReviewState, SourceLocator, build_assertion
+from src.graph.assertions import (
+    EpistemicClass,
+    ReviewState,
+    SourceLocator,
+    answerable_confidence,
+    build_assertion,
+)
 from src.graph.client import GraphClient
 from src.graph.scope import AuthContext
 
@@ -226,6 +232,40 @@ class TestReviewDecisionsReachBothCopies:
         got = store.get(TENANT, a.assertion_id)
         assert got.assertion.review_state is ReviewState.APPROVED
         assert got.lifecycle is Lifecycle.LIVE
+
+    def test_the_rescaled_confidence_reaches_the_edge(self, store, graph):
+        """`ReviewQueue.approve` rescales confidence and writes through `put`, and it is the
+        *edge* copy `edge_scope` filters on. A rescale that landed only on the node would
+        leave an approved fact above the floor in the audit read and below it in every
+        traversal -- the same class of bug as an approval that skipped the edge."""
+        a = _assertion(confidence=0.55)
+        store.put(AssertionRecord(assertion=a))
+
+        a.raw_confidence = a.confidence
+        a.confidence = answerable_confidence(a.confidence)
+        a.review_state = ReviewState.APPROVED
+        store.put(AssertionRecord(assertion=a, lifecycle=Lifecycle.LIVE))
+
+        rows = graph.query(
+            "MATCH ()-[r {tenant_id: $t, assertion_id: $a}]->() RETURN r.confidence AS c",
+            {"t": TENANT, "a": a.assertion_id},
+        )
+        assert rows[0]["c"] == pytest.approx(0.91)
+
+    def test_the_raw_score_survives_the_round_trip(self, store):
+        """Provenance is the product, so the number the model actually claimed has to be
+        readable back out -- otherwise the bump is a confidence nobody can explain."""
+        a = _assertion(confidence=0.79)
+        a.raw_confidence = 0.93
+        store.put(AssertionRecord(assertion=a))
+        assert store.get(TENANT, a.assertion_id).assertion.raw_confidence == pytest.approx(0.93)
+
+    def test_a_fact_with_no_self_report_reads_back_as_none(self, store):
+        """A catalog scan asserts its confidence rather than estimating it, so None must not
+        come back as 0.0 -- that would read as "the model was certain it was wrong"."""
+        a = _assertion()
+        store.put(AssertionRecord(assertion=a))
+        assert store.get(TENANT, a.assertion_id).assertion.raw_confidence is None
 
 
 class TestSupersedeRatherThanDelete:

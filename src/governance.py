@@ -64,7 +64,12 @@ class GovernanceSettings:
     model_confidence_cap: float = 0.79
     """Ceiling applied to every model extraction. Must stay below
     `min_confidence_floor`, so an unreviewed model claim sits under the retrieval
-    floor by construction."""
+    floor by construction.
+
+    It caps the *unreviewed* claim only. Approval rescales into
+    `[min_confidence_floor, 1.0]` (`assertions.answerable_confidence`), so this no longer
+    doubles as a permanent ceiling -- which it was, and which made approving a fact a no-op
+    for retrieval."""
 
     auto_assert_deterministic: bool = True
     """Whether quote-verified presence claims go live without review. Turning this off
@@ -290,10 +295,11 @@ FIELD_HELP: dict[str, str] = {
         "Raising it makes answers more conservative and may leave questions unanswered."
     ),
     "model_confidence_cap": (
-        "The highest confidence an AI-extracted fact may claim. Kept just below the "
-        "confidence floor on purpose, so an AI claim can never influence an answer until "
-        "a person has approved it. The system will not let you raise this to or above "
-        "the floor."
+        "The highest confidence an AI-extracted fact may claim while it is still unreviewed. "
+        "Kept just below the confidence floor on purpose, so an AI claim can never influence "
+        "an answer until a person has approved it. The system will not let you raise this to "
+        "or above the floor. Approving a fact lifts it above the floor, in the order the AI "
+        "reported, so this is a gate rather than a permanent ceiling."
     ),
     "auto_assert_deterministic": (
         "Whether a fact goes straight into the knowledge graph when its quoted words were "

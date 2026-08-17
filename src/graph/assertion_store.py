@@ -69,6 +69,7 @@ def _to_item(record: AssertionRecord) -> dict[str, Any]:
         "epistemic_class": a.epistemic_class.value,
         "method": a.method,
         "confidence": a.confidence,
+        "raw_confidence": a.raw_confidence,
         "matter_id": a.matter_id,
         "review_state": a.review_state.value,
         "reviewed_by": a.reviewed_by,
@@ -120,6 +121,9 @@ def _from_node(node: dict[str, Any]) -> AssertionRecord:
         confidence=float(node["confidence"]),
         source_locator=locator,
         matter_id=node.get("matter_id"),
+        raw_confidence=(
+            float(raw) if (raw := node.get("raw_confidence")) is not None else None
+        ),
         premises=premises,
         rule_id=node.get("rule_id"),
         rule_version=node.get("rule_version"),

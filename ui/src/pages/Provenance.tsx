@@ -46,7 +46,12 @@ export default function Provenance() {
   const { provenance, error: provError } = useProvenance(tenant, selected)
 
   useEffect(() => {
-    Promise.all([api.listAssertions(tenant, { limit: 500 }), api.getSettings(tenant)])
+    // 'ALL' is not optional here. Omitting it lets the server apply its PENDING default, so the
+    // audit trail showed only unreviewed facts -- an approved graph rendered as "no facts recorded".
+    Promise.all([
+      api.listAssertions(tenant, { review_state: 'ALL', limit: 500 }),
+      api.getSettings(tenant),
+    ])
       .then(([a, s]) => {
         setAll(a)
         setFloor(s.min_confidence)

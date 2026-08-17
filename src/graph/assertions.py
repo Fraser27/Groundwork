@@ -26,6 +26,8 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
+from src.constants import DEFAULT_MIN_CONFIDENCE
+
 
 class EpistemicClass(str, Enum):
     """How we came to believe an assertion.
@@ -93,11 +95,51 @@ PRESENCE_PREDICATES = frozenset({"MENTIONS"})
 SUGGESTION_ONLY_CLASSES = frozenset({EpistemicClass.PREDICTED})
 
 
+#: Bottom of the band a fact must reach to inform an answer. Same number as the retrieval
+#: floor, because it *is* the retrieval floor read from the write side.
+ANSWERABLE_FLOOR = DEFAULT_MIN_CONFIDENCE
+
+#: What a descriptive claim may ever be worth: the floor exactly, never above it.
+#:
+#: The ordering this fixes was inverted in production. `MENTIONS` means only "this string
+#: appears in this document" and was written at 0.95, while an `ADVERSE_TO` a partner had
+#: personally approved sat at 0.55 — so retrieval filled with the claim nobody needed and
+#: dropped the one a conflict check reads. Which predicates are weak is the ontology's call
+#: rather than a list here: descriptive predicates are exactly the ones a pack declines to
+#: govern, which is the same distinction in the legal and healthcare packs both.
+DESCRIPTIVE_CONFIDENCE = ANSWERABLE_FLOOR
+
+
+def answerable_confidence(confidence: float, *, governing: bool = True) -> float:
+    """Where a claim lands once a human has approved it.
+
+    Rescales into `[ANSWERABLE_FLOOR, 1.0]` rather than multiplying. A flat multiplier gets
+    both ends wrong: 0.79 x 1.3 is 1.027, which `build_assertion` refuses as out of range,
+    and 0.55 x 1.3 is 0.715, still under the floor and so still unreachable. Rescaling
+    preserves the order the model reported while guaranteeing both bounds by construction.
+
+    A descriptive claim lands *on* the floor rather than in the band. Approval still makes it
+    answerable — a person vouched for it — but it must not outrank a governing fact, which is
+    the inversion this whole change exists to undo.
+
+    Takes the stored confidence, not the model's self-report: a cap a model could undo by
+    getting itself approved would not be a cap. `raw_confidence` keeps the self-report.
+    """
+    if not governing:
+        return DESCRIPTIVE_CONFIDENCE
+    return ANSWERABLE_FLOOR + confidence * (1.0 - ANSWERABLE_FLOOR)
+
+
 class ReviewState(str, Enum):
     AUTO_ASSERTED = "AUTO_ASSERTED"
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+
+
+#: Signed off, one way or the other: a system of record or a check said so, or a person did.
+#: The states retrieval admits and `promote` moves to live.
+SIGNED_OFF_STATES = frozenset({ReviewState.AUTO_ASSERTED, ReviewState.APPROVED})
 
 
 @dataclass(frozen=True)
@@ -228,11 +270,25 @@ class Assertion:
     extractor improves you supersede its old output rather than silently mixing
     generations."""
     confidence: float
+    """How much the system trusts this *now*. Moves: a reviewer's approval rescales it into
+    the answerable band. Read `raw_confidence` for what the extractor originally claimed."""
+
     source_locator: SourceLocator
 
     matter_id: str | None = None
     """Matter scoping lives on the assertion, not in a separate graph, so an
     ethical wall is a policy change rather than a data migration."""
+
+    raw_confidence: float | None = None
+    """The extractor's own self-report, before any cap or approval bump.
+
+    Deliberately the *pre-clamp* number rather than the pre-approval one. Both were being
+    discarded — `effective_model_confidence` stored only `min(raw, cap)` — and the pre-clamp
+    value is the strictly larger fact: the clamp is recoverable from it plus the cap, and the
+    pre-approval value is recoverable from `confidence` by inverting the rescale, whereas
+    nothing recovers a self-report that was never written down. None for a fact that never
+    self-reported: a catalog scan and a reviewer's correction assert their confidence rather
+    than estimating it."""
 
     premises: tuple[str, ...] = ()
     rule_id: str | None = None
@@ -281,7 +337,10 @@ class Assertion:
         return self.superseded_at is None
 
     def to_edge_props(self) -> dict[str, Any]:
-        """The fast path: just enough to filter a traversal without a second hop."""
+        """The fast path: just enough to filter a traversal without a second hop.
+
+        `raw_confidence` is absent on purpose: nothing filters on it, and the edge earns its
+        cheapness by carrying only what `edge_scope` reads."""
         return {
             "assertion_id": self.assertion_id,
             "tenant_id": self.tenant_id,
@@ -304,6 +363,7 @@ class Assertion:
             "epistemic_class": self.epistemic_class.value,
             "method": self.method,
             "confidence": self.confidence,
+            "raw_confidence": self.raw_confidence,
             "rule_id": self.rule_id,
             "rule_version": self.rule_version,
             "valid_from": self.valid_from,
@@ -333,6 +393,7 @@ def build_assertion(
     confidence: float,
     source_locator: SourceLocator,
     matter_id: str | None = None,
+    raw_confidence: float | None = None,
     premises: tuple[str, ...] = (),
     premise_confidences: tuple[float, ...] = (),
     rule_id: str | None = None,
@@ -371,6 +432,8 @@ def build_assertion(
         raise AssertionError_("method is required, and must be versioned (e.g. regex:citation@v3)")
     if not 0.0 <= confidence <= 1.0:
         raise AssertionError_(f"confidence must be in [0,1], got {confidence}")
+    if raw_confidence is not None and not 0.0 <= raw_confidence <= 1.0:
+        raise AssertionError_(f"raw_confidence must be in [0,1], got {raw_confidence}")
 
     if allowed_predicates is not None and predicate not in allowed_predicates:
         raise AssertionError_(
@@ -428,6 +491,7 @@ def build_assertion(
         confidence=confidence,
         source_locator=source_locator,
         matter_id=matter_id,
+        raw_confidence=raw_confidence,
         premises=tuple(premises),
         rule_id=rule_id,
         rule_version=rule_version,

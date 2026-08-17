@@ -38,6 +38,7 @@ from typing import Any, Protocol
 from src.constants import DEFAULT_EXTRACTION_MODEL
 from src.documents.models import Chunk
 from src.graph.assertions import (
+    DESCRIPTIVE_CONFIDENCE,
     PRESENCE_PREDICATES,
     Assertion,
     AssertionError_,
@@ -60,6 +61,12 @@ MAX_MODEL_CONFIDENCE = 0.79
 
 #: Confidence for a quote-verified presence claim. Not 1.0: the search proved the text
 #: is there, but the entity id it was normalised to is still the model's work.
+#:
+#: Kept at 0.95 rather than lowered, and unreachable today. `PRESENCE_PREDICATES` is `{MENTIONS}`
+#: and MENTIONS is descriptive, so every verified claim currently lands on the floor instead.
+#: This is what a *governing* predicate would be worth if a check ever became able to confirm
+#: one -- deleting it would leave that case scored by accident, and 0.95 is the value the
+#: reasoning behind it still supports.
 VERIFIED_PRESENCE_CONFIDENCE = 0.95
 
 #: Versions the *check*, not the model. If quote matching ever changes, this bumps and
@@ -327,6 +334,18 @@ class ModelExtractor:
             return self.settings.effective_model_confidence(raw)
         return min(max(raw, 0.0), MAX_MODEL_CONFIDENCE)
 
+    def _presence_confidence(self, predicate: str) -> float:
+        """What a quote-verified claim is worth, which depends on what it claims.
+
+        A confirmed `MENTIONS` is certain about something nearly worthless -- the string is on
+        the page -- so it sits on the floor rather than above every reviewed fact in the graph.
+        Keyed off the pack's descriptive set, not a list of predicate names, so the healthcare
+        pack gets the same treatment without a code change.
+        """
+        if predicate in self.ontology.descriptive_predicates:
+            return DESCRIPTIVE_CONFIDENCE
+        return VERIFIED_PRESENCE_CONFIDENCE
+
     def _policy(self) -> ReviewPolicy | None:
         """Translate governance settings into the review policy the contract enforces.
 
@@ -413,8 +432,14 @@ class ModelExtractor:
                     ),
                     method=self.verified_method if verified else self.method,
                     confidence=(
-                        VERIFIED_PRESENCE_CONFIDENCE if verified else self._clamp(claim.confidence)
+                        self._presence_confidence(predicate)
+                        if verified
+                        else self._clamp(claim.confidence)
                     ),
+                    # What the model said, before the cap took it. The cap was overwriting the
+                    # self-report in place, so the number a reviewer read was unattributable to
+                    # anything -- neither the model's claim nor a decision anyone made.
+                    raw_confidence=min(max(claim.confidence, 0.0), 1.0),
                     source_locator=chunk.to_locator(*span),
                     matter_id=chunk.matter_id,
                     allowed_predicates=self.ontology.allowed_for(predicate),

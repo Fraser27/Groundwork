@@ -503,8 +503,12 @@ def _build_routing_index(cfg: LexGraphConfig) -> Any | None:
 
 def build_services(config: LexGraphConfig | None = None) -> Services:
     cfg = config or load_config()
+    ontology = load_ontology(cfg.ontology_pack)
     store = InMemoryAssertionStore()
-    queue = ReviewQueue(store)
+    # The pack decides which predicates approval lifts into the answerable band, so the queue
+    # needs it. Without one every approval is treated as governing, and an approved MENTIONS
+    # would outrank the ADVERSE_TO it exists to stop outranking.
+    queue = ReviewQueue(store, governing_predicates=ontology.governing_predicates)
     access = AccessManager(_build_access_store(cfg))
     # One instance, shared: the authenticator reads bindings the admin API writes, so a
     # newly invited user can sign in without waiting for a cache in a second copy.
@@ -524,7 +528,6 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
             dimensions=cfg.vector.embedding_dimensions,
         )
 
-    ontology = load_ontology(cfg.ontology_pack)
     # Built here rather than by the field default, because the router indexer reads through the
     # same instance and a second copy would index tables nobody scanned.
     catalog = CatalogStore()
@@ -549,7 +552,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
         ontology=ontology,
         review_queue=queue,
         access=access,
-        graph_reader=GraphReader(queue),
+        graph_reader=GraphReader(queue, ontology=ontology),
         embedder=embedder,
         catalog=catalog,
         routing_index=routing_index,

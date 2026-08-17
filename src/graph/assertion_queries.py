@@ -61,6 +61,7 @@ _NODE_PROPS = """
     a.epistemic_class = $epistemic_class,
     a.method = $method,
     a.confidence = $confidence,
+    a.raw_confidence = $raw_confidence,
     a.matter_id = $matter_id,
     a.review_state = $review_state,
     a.reviewed_by = $reviewed_by,

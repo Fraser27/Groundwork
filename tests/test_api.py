@@ -7,6 +7,8 @@ through HTTP. Several of these would pass at the unit level and fail here.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -163,6 +165,36 @@ class TestReviewQueue:
         r = client.post(f"/api/tenants/{TENANT}/assertions/{aid}/approve")
         assert r.status_code == 200
         assert r.json()["review_state"] == "APPROVED"
+
+    def test_approving_lifts_the_fact_over_the_floor(self, client):
+        """End to end, the bug the user reported: approval used to leave a fact below the
+        floor, so it went live and still answered nothing."""
+        aid = _stage_model_assertion(confidence=0.55, predicate="ADVERSE_TO")
+        body = client.post(f"/api/tenants/{TENANT}/assertions/{aid}/approve").json()
+        assert body["below_floor"] is False
+        assert body["confidence"] >= 0.8
+
+    def test_the_api_actually_sends_the_raw_score(self, client):
+        """The UI declares `raw_confidence`, so the API has to populate it. A type describing
+        a field the API never sends is the recurring bug class on this surface."""
+        aid = _stage_model_assertion(confidence=0.55, predicate="ADVERSE_TO")
+        body = client.post(f"/api/tenants/{TENANT}/assertions/{aid}/approve").json()
+        assert body["raw_confidence"] == 0.55
+        assert body["confidence"] != body["raw_confidence"]
+
+    def test_the_raw_score_is_on_the_provenance_read_too(self, client):
+        """Where a reviewer goes to ask why a number is what it is."""
+        aid = _stage_model_assertion(confidence=0.55, predicate="ADVERSE_TO")
+        client.post(f"/api/tenants/{TENANT}/assertions/{aid}/approve")
+        body = client.get(f"/api/tenants/{TENANT}/assertions/{aid}/provenance").json()
+        assert body["assertion"]["raw_confidence"] == 0.55
+
+    def test_an_approved_descriptive_fact_stays_on_the_floor(self, client):
+        """`CONCERNS_TOPIC` is descriptive in the pack, so approval makes it answerable
+        without letting it outrank a conflict-check edge."""
+        aid = _stage_model_assertion(confidence=0.79, predicate="CONCERNS_TOPIC")
+        body = client.post(f"/api/tenants/{TENANT}/assertions/{aid}/approve").json()
+        assert body["confidence"] == 0.8
 
     def test_reject_requires_a_reason(self, client):
         aid = _stage_model_assertion()
@@ -751,3 +783,43 @@ class TestSettingsProjectsWhatThePageCanChange:
         pack is live, which makes a wrong answer here more than cosmetic."""
         body = self._save(client, {"ontology_domain": "healthcare"})
         assert body["ontology_domain"] == "healthcare"
+
+
+class TestTheAuditPageAsksForEveryState:
+    """The Audit page claims to show "every fact the graph has ever held".
+
+    `GET /assertions` defaults to PENDING because that endpoint *is* the review queue, so a caller
+    that omits `review_state` gets unreviewed facts only. The Audit page omitted it, and a tenant
+    whose facts had all been approved read as "No facts recorded yet" -- an empty log and a broken
+    reader are indistinguishable to an auditor, which is the failure this whole surface exists to
+    prevent. Asserted here rather than in the UI because there is no JS test runner: the page is
+    the only caller of this route that must never take the default.
+    """
+
+    PAGE = Path(__file__).resolve().parents[1] / "ui" / "src" / "pages" / "Provenance.tsx"
+
+    def _reviewed_graph(self, client) -> None:
+        for predicate in ("CONCERNS_TOPIC", "MENTIONS"):
+            aid = _stage_model_assertion(predicate=predicate)
+            assert client.post(f"/api/tenants/{TENANT}/assertions/{aid}/approve").status_code == 200
+
+    def test_the_default_hides_a_reviewed_graph(self, client):
+        """The behaviour that made the tab empty. Pinned so the page's need to opt out is not
+        mistaken later for belt-and-braces."""
+        self._reviewed_graph(client)
+        assert client.get(f"/api/tenants/{TENANT}/assertions?limit=500").json()["total"] == 0
+
+    def test_asking_for_every_state_returns_the_approved_facts(self, client):
+        """What the client's 'ALL' becomes on the wire: an explicitly empty parameter."""
+        self._reviewed_graph(client)
+        body = client.get(f"/api/tenants/{TENANT}/assertions?limit=500&review_state=").json()
+        assert body["total"] == 2
+        assert {a["review_state"] for a in body["assertions"]} == {"APPROVED"}
+
+    def test_the_page_passes_review_state_all(self):
+        source = self.PAGE.read_text()
+        call = source[source.index("api.listAssertions(") :][:200]
+        assert "review_state: 'ALL'" in call, (
+            "Provenance.tsx omits review_state, so the server's PENDING default applies and the "
+            "Facts tab shows nothing once facts have been reviewed"
+        )

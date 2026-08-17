@@ -333,6 +333,7 @@ def _assertion_out(a: Any, floor: float) -> dict[str, Any]:
         "epistemic_class": a.epistemic_class.value,
         "method": a.method,
         "confidence": a.confidence,
+        "raw_confidence": a.raw_confidence,
         "review_state": a.review_state.value,
         "matter_id": a.matter_id,
         "recorded_at": a.recorded_at,

@@ -15,6 +15,7 @@ from src.documents.review import (
     ReviewQueue,
 )
 from src.graph.assertions import (
+    ANSWERABLE_FLOOR,
     EpistemicClass,
     ReviewState,
     SourceLocator,
@@ -212,6 +213,114 @@ class TestApproval:
         approved = q.approve_many(ctx(), [a.assertion_id for a in assertions])
         assert len(approved) == 3
         assert q.pending_count(ctx()) == 0
+
+
+#: The legal pack's split, as `build_services` passes it in.
+GOVERNING = frozenset({"REPRESENTS", "ADVERSE_TO", "DISTINGUISHES", "OVERRULES", "PARTY_TO"})
+
+
+class TestApprovalRescalesIntoTheAnswerableBand:
+    """Approval has to change what retrieval can see, or it changes nothing.
+
+    Production had approved `ADVERSE_TO` at 0.55 and `OVERRULES` at 0.79 while the retrieval
+    floor was 0.80, so a partner's signature moved a fact to LIVE and left it unreachable.
+    Meanwhile `MENTIONS` -- "this string is in this document" -- sat at 0.95 and answered
+    everything. That is what "it always picks the weak facts" was.
+    """
+
+    def test_an_approved_fact_clears_the_floor(self):
+        q = ReviewQueue(governing_predicates=GOVERNING)
+        a = model(confidence=0.55)
+        q.stage(ctx(), [a])
+        assert a.confidence < ANSWERABLE_FLOOR
+        approved = q.approve(ctx(), a.assertion_id).assertion
+        assert approved.confidence >= ANSWERABLE_FLOOR
+
+    @pytest.mark.parametrize(("raw", "expected"), [(0.55, 0.91), (0.79, 0.958), (0.0, 0.8)])
+    def test_the_rescale_is_the_stated_formula(self, raw, expected):
+        q = ReviewQueue(governing_predicates=GOVERNING)
+        a = model(confidence=raw)
+        q.stage(ctx(), [a])
+        assert q.approve(ctx(), a.assertion_id).assertion.confidence == pytest.approx(expected)
+
+    def test_relative_order_among_model_facts_survives(self):
+        """A reviewer approving three facts must not flatten what the model distinguished."""
+        q = ReviewQueue(governing_predicates=GOVERNING)
+        raws = [0.3, 0.55, 0.79]
+        out = []
+        for i, raw in enumerate(raws):
+            a = model(object_id=f"authority:{i}", confidence=raw)
+            q.stage(ctx(), [a])
+            out.append(q.approve(ctx(), a.assertion_id).assertion.confidence)
+        assert out == sorted(out)
+        assert len(set(out)) == len(raws)
+
+    def test_nothing_can_exceed_one(self):
+        """`build_assertion` refuses confidence outside [0,1], so a bump that could overshoot
+        would be a write that fails after the approval has already been recorded. A x1.3
+        multiplier does exactly that: 0.79 x 1.3 is 1.027."""
+        q = ReviewQueue(governing_predicates=GOVERNING)
+        a = model(confidence=1.0)
+        q.stage(ctx(), [a])
+        assert q.approve(ctx(), a.assertion_id).assertion.confidence == 1.0
+
+    def test_a_descriptive_predicate_stays_on_the_floor(self):
+        """Approving a MENTIONS makes it usable, never better than a governing fact."""
+        q = ReviewQueue(governing_predicates=GOVERNING)
+        a = model(predicate="CONCERNS_TOPIC", object_id="topic:antitrust", confidence=0.79)
+        q.stage(ctx(), [a])
+        approved = q.approve(ctx(), a.assertion_id).assertion
+        assert approved.confidence == ANSWERABLE_FLOOR
+
+    def test_an_approved_governing_fact_outranks_an_approved_descriptive_one(self):
+        """The inversion, stated directly. This is the ordering the product needs."""
+        q = ReviewQueue(governing_predicates=GOVERNING)
+        weak = model(predicate="CONCERNS_TOPIC", object_id="topic:antitrust", confidence=0.79)
+        strong = model(predicate="ADVERSE_TO", object_id="party:beta", confidence=0.55)
+        q.stage(ctx(), [weak, strong])
+        weak_out = q.approve(ctx(), weak.assertion_id).assertion.confidence
+        strong_out = q.approve(ctx(), strong.assertion_id).assertion.confidence
+        assert strong_out > weak_out
+
+    def test_the_raw_score_is_preserved(self):
+        """"What the model claimed" and "how much we trust it now" are different facts.
+        Collapsing them makes the bump unauditable, and provenance is the product."""
+        q = ReviewQueue(governing_predicates=GOVERNING)
+        a = model(confidence=0.55)
+        q.stage(ctx(), [a])
+        approved = q.approve(ctx(), a.assertion_id).assertion
+        assert approved.raw_confidence == 0.55
+        assert approved.confidence != approved.raw_confidence
+
+    def test_re_approving_does_not_compound_the_bump(self):
+        """Approval is idempotent, so the rescale must be too -- otherwise a double-click
+        walks a fact up the band with no new evidence behind it."""
+        q = ReviewQueue(governing_predicates=GOVERNING)
+        a = model(confidence=0.55)
+        q.stage(ctx(), [a])
+        once = q.approve(ctx(), a.assertion_id).assertion.confidence
+        assert q.approve(ctx(), a.assertion_id).assertion.confidence == once
+
+    def test_the_assertion_id_does_not_move(self):
+        """The rescale is only safe because `assertion_id` hashes
+        tenant/subject/predicate/object/method/locator/valid_from and *not* confidence. If
+        confidence ever entered that hash, approving a fact would fork its id and every
+        citation, audit row and premise link pointing at it would dangle."""
+        q = ReviewQueue(governing_predicates=GOVERNING)
+        a = model(confidence=0.55)
+        before = a.assertion_id
+        q.stage(ctx(), [a])
+        approved = q.approve(ctx(), a.assertion_id).assertion
+        assert approved.assertion_id == before
+        assert approved._compute_id() == before
+
+    def test_no_pack_means_every_predicate_is_treated_as_governing(self):
+        """Erring the other way would demote an ADVERSE_TO to the floor for want of a config
+        value, which is the inversion this exists to undo."""
+        q = ReviewQueue()
+        a = model(predicate="ADVERSE_TO", object_id="party:beta", confidence=0.79)
+        q.stage(ctx(), [a])
+        assert q.approve(ctx(), a.assertion_id).assertion.confidence > ANSWERABLE_FLOOR
 
 
 class TestRejection:

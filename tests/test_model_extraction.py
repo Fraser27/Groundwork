@@ -18,6 +18,7 @@ import json
 import pytest
 
 from src.documents.extractors.model import (
+    DESCRIPTIVE_CONFIDENCE,
     MAX_MODEL_CONFIDENCE,
     VERIFIED_PRESENCE_CONFIDENCE,
     ModelExtractionFailed,
@@ -174,11 +175,16 @@ class TestVerifiedPresence:
         assert a.method.startswith("llm:")
         assert a.method.endswith("+verify:quote@v1")
 
-    def test_confidence_is_not_certainty(self):
-        """The search proved the text is there; the entity id is still the model's work."""
+    def test_a_descriptive_claim_lands_on_the_floor_not_above_it(self):
+        """MENTIONS is certain about something nearly worthless -- the string is on the page.
+
+        It was written at 0.95, above every reviewed fact in the graph, so retrieval filled
+        with "this document contains this name" and dropped the approved ADVERSE_TO a conflict
+        check reads. Descriptive claims sit on the floor: answerable, never ahead.
+        """
         [a] = extractor().validate([entity()], chunk=chunk())
-        assert a.confidence == VERIFIED_PRESENCE_CONFIDENCE
-        assert a.confidence < 1.0
+        assert a.confidence == DESCRIPTIVE_CONFIDENCE
+        assert a.confidence < VERIFIED_PRESENCE_CONFIDENCE
 
     def test_self_reported_confidence_is_ignored(self):
         """The check's confidence, not the model's opinion of itself."""
@@ -186,7 +192,17 @@ class TestVerifiedPresence:
             subject_id="", predicate="MENTIONS", object_id="party:acme", quote=QUOTE, confidence=0.1
         )
         [a] = extractor().validate([claim], chunk=chunk())
-        assert a.confidence == VERIFIED_PRESENCE_CONFIDENCE
+        assert a.confidence == DESCRIPTIVE_CONFIDENCE
+        assert a.raw_confidence == 0.1
+
+    def test_the_score_is_keyed_off_the_pack_not_a_predicate_list(self):
+        """A healthcare pack must get this without a code change, so the split has to come
+        from `descriptive_predicates` rather than a hardcoded set of names."""
+        from src.ontology.loader import load_ontology
+
+        for domain in ("legal", "healthcare"):
+            ont = load_ontology(domain)
+            assert "MENTIONS" in ont.descriptive_predicates, domain
 
     def test_subject_defaults_to_the_document(self):
         [a] = extractor().validate([entity()], chunk=chunk())

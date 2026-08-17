@@ -19,8 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.documents.review import ReviewQueue
-from src.graph.assertions import EpistemicClass
-from src.graph.scope import AuthContext
+from src.graph.scope import AuthContext, TrustFilter
 
 logger = logging.getLogger(__name__)
 
@@ -99,38 +98,30 @@ class GraphReader:
     resolver depends on does not change, which is the point of keeping it narrow.
     """
 
-    def __init__(self, review_queue: ReviewQueue) -> None:
+    def __init__(self, review_queue: ReviewQueue, *, ontology: Any | None = None) -> None:
         self._queue = review_queue
+        self._ontology = ontology
+        """Supplies the governing/descriptive split `expand()` ranks on. Optional: without it
+        every predicate ranks alike and ordering falls back to confidence, which is the old
+        behaviour minus the truncation bug rather than a new failure."""
+
+    def _is_governing(self, predicate: str) -> bool:
+        return self._ontology is not None and self._ontology.is_governing(predicate)
 
     def _readable(self, ctx: AuthContext, min_confidence: float) -> list[Any]:
         """Current, in-scope, trusted-enough assertions.
 
-        `visible()` already applies the tenant and matter walls. The rest of the
-        filtering mirrors `scope.edge_scope` so tier 2 and a direct graph read agree
-        about what counts as usable.
+        `visible()` already applies the tenant and matter walls. The trust half is
+        `TrustFilter`, the same object `scope.edge_scope` renders into Cypher — it used to be
+        a second hand-written copy of those conditions, which is how the two came to disagree
+        about which facts an answer may rest on.
         """
-        trusted = {
-            EpistemicClass.DECLARED.value,
-            EpistemicClass.EXTRACTED_DET.value,
-            EpistemicClass.EXTRACTED_MODEL.value,
-            EpistemicClass.INFERRED.value,
-        }
-        if ctx.include_suggestions:
-            trusted.add(EpistemicClass.PREDICTED.value)
-
-        out = []
-        for record in self._queue.visible(ctx):
-            a = record.assertion
-            if not record.is_current:
-                continue
-            if a.epistemic_class.value not in trusted:
-                continue
-            if a.confidence < min_confidence:
-                continue
-            if a.review_state.value not in ("AUTO_ASSERTED", "APPROVED"):
-                continue
-            out.append(record)
-        return out
+        trust = TrustFilter.for_context(ctx, min_confidence=min_confidence)
+        return [
+            record
+            for record in self._queue.visible(ctx)
+            if record.is_current and trust.matches(record.assertion)
+        ]
 
     def search(
         self,
@@ -197,11 +188,23 @@ class GraphReader:
         Used by tier 3: vector search supplies the passages, this supplies the
         verified relationships around them. Breadth-first and depth-capped, because
         an unbounded walk on a well-connected graph returns the whole tenant.
+
+        Ranked before truncating, which it previously was not: the walk cut off mid-hop at
+        `limit`, so which facts survived came down to the store's insertion order. With the
+        catalog's DECLARED edges sitting at 1.00 the cap filled with `HAS_COLUMN` schema noise
+        and an approved `ADVERSE_TO` never made the list.
+
+        Governing predicates lead, then confidence, then hop distance. Confidence alone is not
+        enough and the reason is worth stating: a Glue declaration genuinely *is* 1.00 — the
+        catalog said so — so no honest confidence number puts `ADVERSE_TO` ahead of it, and
+        lowering it would be false modesty about a system of record. What separates them is
+        whether the predicate carries consequence, which is the ontology's call. Same ranking
+        key as the graph overview in `routes_catalog._graph_overview`, for the same reason.
         """
         records = self._readable(ctx, min_confidence)
         frontier = {s for s in seed_ids if s}
         seen_nodes: set[str] = set()
-        out: dict[str, dict[str, Any]] = {}
+        found: dict[str, tuple[int, Any]] = {}
 
         for hop in range(1, max(1, depth) + 1):
             next_frontier: set[str] = set()
@@ -209,34 +212,44 @@ class GraphReader:
                 a = record.assertion
                 if a.subject_id not in frontier and a.object_id not in frontier:
                     continue
+                next_frontier.update({a.subject_id, a.object_id})
                 # First seen wins. A later pass re-matches an edge whose endpoint is still in the
                 # frontier, and overwriting would relabel a direct edge as two hops out -- the
                 # shortest distance is the one that means anything.
-                if a.assertion_id in out:
-                    next_frontier.update({a.subject_id, a.object_id})
-                    continue
-                out[a.assertion_id] = Hit(
-                    assertion_id=a.assertion_id,
-                    subject_id=a.subject_id,
-                    predicate=a.predicate,
-                    object_id=a.object_id,
-                    epistemic_class=a.epistemic_class.value,
-                    confidence=a.confidence,
-                    matter_id=a.matter_id,
-                    # A walked edge did not match a word, so `matched_on` stays empty and `hops`
-                    # carries the reason instead: how far from a cited passage it was reached.
-                    # Without it a reader cannot tell a fact stated in the document from one two
-                    # steps away, which is the difference between quoting and inferring.
-                    matched_on=[],
-                    hops=hop,
-                    source=a.source_locator.to_dict(),
-                ).to_dict()
-                next_frontier.update({a.subject_id, a.object_id})
-                if len(out) >= limit:
-                    return list(out.values())
+                if a.assertion_id not in found:
+                    found[a.assertion_id] = (hop, a)
             seen_nodes |= frontier
             frontier = next_frontier - seen_nodes
             if not frontier:
                 break
 
-        return list(out.values())
+        # `assertion_id` last so a tie is resolved the same way twice. Two runs of one question
+        # returning different facts is indistinguishable from the graph having changed.
+        ranked = sorted(
+            found.values(),
+            key=lambda row: (
+                not self._is_governing(row[1].predicate),
+                -row[1].confidence,
+                row[0],
+                row[1].assertion_id,
+            ),
+        )
+        return [
+            Hit(
+                assertion_id=a.assertion_id,
+                subject_id=a.subject_id,
+                predicate=a.predicate,
+                object_id=a.object_id,
+                epistemic_class=a.epistemic_class.value,
+                confidence=a.confidence,
+                matter_id=a.matter_id,
+                # A walked edge did not match a word, so `matched_on` stays empty and `hops`
+                # carries the reason instead: how far from a cited passage it was reached.
+                # Without it a reader cannot tell a fact stated in the document from one two
+                # steps away, which is the difference between quoting and inferring.
+                matched_on=[],
+                hops=hop,
+                source=a.source_locator.to_dict(),
+            ).to_dict()
+            for hop, a in ranked[:limit]
+        ]

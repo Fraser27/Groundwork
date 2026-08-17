@@ -194,6 +194,17 @@ export default function ProvenancePanel({
                 <ConfidenceBar value={a.confidence} floor={confidenceFloor} width={90} />
               </dd>
             </div>
+            {typeof a.raw_confidence === 'number' && a.raw_confidence !== a.confidence && (
+              <div>
+                <dt>
+                  As extracted
+                  <FieldHelp text={HELP.rawConfidence} />
+                </dt>
+                <dd>
+                  {a.raw_confidence.toFixed(2)}, before review
+                </dd>
+              </div>
+            )}
             <div>
               <dt>
                 Method

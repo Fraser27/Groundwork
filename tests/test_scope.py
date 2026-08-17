@@ -7,11 +7,20 @@ privilege breach, not a bug report.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import ClassVar
+
 import pytest
 
 from src.access import AccessDecision, AccessManager
-from src.graph.assertions import EpistemicClass
-from src.graph.scope import AuthContext, ScopeViolation, edge_scope, node_scope
+from src.graph.assertions import EpistemicClass, ReviewState, answerable_confidence
+from src.graph.scope import (
+    AuthContext,
+    ScopeViolation,
+    TrustFilter,
+    edge_scope,
+    node_scope,
+)
 
 CTX = AuthContext(user_id="alice@firm.com", tenant_id="firm-acme")
 
@@ -233,3 +242,90 @@ class TestBitemporalReads:
 class TestNodeScope:
     def test_node_scope_is_tenant_bound(self):
         assert "n.tenant_id = $scope_tenant" in node_scope(CTX).where
+
+
+class TestTrustFilterIsTheOnlyDefinition:
+    """The trust policy is read two ways and must answer the same.
+
+    `edge_scope` renders it as Cypher; `GraphReader._readable` evaluates it in Python. They
+    were separate hand-written copies, and had already diverged in effect: `edge_scope`'s
+    confidence floor is dead for retrieval, because both its callers pass
+    `min_confidence=0.0` on purpose, so `_readable` was the only live gate on what a lawyer
+    sees. These tests fail if a condition is ever added to one rendering and not the other.
+    """
+
+    #: Every combination that decides an answer, including the one from production: an
+    #: APPROVED model fact at 0.79 -- which the floor excluded and the whole change is about.
+    MATRIX: ClassVar = [
+        (cls, conf, state)
+        for cls in EpistemicClass
+        for conf in (0.0, 0.55, 0.79, 0.8, 0.958, 1.0)
+        for state in ReviewState
+    ]
+
+    @staticmethod
+    def _cypher_admits(trust: TrustFilter, cls, conf, state) -> bool:
+        """Evaluate the Cypher clauses against one candidate, as Neptune would."""
+        clauses, params = trust.clauses("r")
+        admitted = True
+        for clause in clauses:
+            if "epistemic_class" in clause:
+                admitted &= cls.value in params["scope_classes"]
+            elif "confidence" in clause:
+                admitted &= conf >= params["scope_min_conf"]
+            elif "review_state" in clause:
+                admitted &= state.value in params["scope_states"]
+            else:
+                raise AssertionError(f"unrecognised trust clause {clause!r}; the Python "
+                                     "rendering cannot be checked against it")
+        return admitted
+
+    @pytest.mark.parametrize("include_suggestions", [False, True])
+    @pytest.mark.parametrize("include_pending", [False, True])
+    def test_both_renderings_agree_across_the_matrix(self, include_suggestions, include_pending):
+        ctx = AuthContext(
+            user_id="u", tenant_id="firm-acme", include_suggestions=include_suggestions
+        )
+        trust = TrustFilter.for_context(ctx, include_pending=include_pending)
+        for cls, conf, state in self.MATRIX:
+            candidate = SimpleNamespace(
+                epistemic_class=cls.value, confidence=conf, review_state=state.value
+            )
+            assert trust.matches(candidate) is self._cypher_admits(trust, cls, conf, state), (
+                f"{cls.value}/{conf}/{state.value} is admitted by one rendering and not the other"
+            )
+
+    def test_edge_scope_is_built_from_the_shared_filter(self):
+        """Not a second copy: every trust clause `edge_scope` emits comes from `clauses()`."""
+        scoped = edge_scope(CTX)
+        clauses, _ = TrustFilter.for_context(CTX).clauses("r")
+        for clause in clauses:
+            assert clause in scoped.where
+
+    def test_an_approved_model_fact_is_admitted_once_rescaled(self):
+        """The production bug, stated as a test. 0.79 was excluded; the rescale lands it in."""
+        trust = TrustFilter.for_context(CTX)
+        approved = SimpleNamespace(
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL.value,
+            confidence=0.79,
+            review_state=ReviewState.APPROVED.value,
+        )
+        assert not trust.matches(approved)
+        approved.confidence = answerable_confidence(0.79)
+        assert trust.matches(approved)
+
+    def test_the_review_queue_still_sees_everything(self):
+        """`include_pending` with a zero floor is how the queue reads its own backlog. A queue
+        that hid unreviewed low-confidence claims would hide its reason for existing."""
+        trust = TrustFilter.for_context(
+            AuthContext(user_id="u", tenant_id="firm-acme", include_suggestions=True),
+            min_confidence=0.0,
+            trusted_classes=frozenset(EpistemicClass),
+            include_pending=True,
+        )
+        for cls, conf, state in self.MATRIX:
+            assert trust.matches(
+                SimpleNamespace(
+                    epistemic_class=cls.value, confidence=conf, review_state=state.value
+                )
+            )

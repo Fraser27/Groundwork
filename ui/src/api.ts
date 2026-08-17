@@ -85,6 +85,14 @@ export interface Assertion {
   epistemic_class: EpistemicClass
   method: string
   confidence: number
+  /**
+   * What the extractor claimed, before the cap or an approval rescaled `confidence`.
+   *
+   * Null for a fact that never self-reported: a catalog scan and a reviewer's correction
+   * assert their confidence rather than estimating it. Populated by `_to_out` in
+   * `routes_review.py`, so it is on every assertion the queue and provenance panel read.
+   */
+  raw_confidence?: number | null
   source_locator: SourceLocator
   premises: string[]
   rule_id?: string | null

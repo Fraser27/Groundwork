@@ -21,6 +21,7 @@ from src.graph.assertions import (
 from src.graph.scope import AuthContext
 from src.metrics.loader import load_metrics
 from src.metrics.models import StaticCatalog
+from src.ontology.loader import load_ontology
 from src.query.graph_reader import GraphReader, terms_of
 from src.query.metric_matcher import MetricMatcher
 from src.query.resolver import QueryBlocked, Resolver, Tier
@@ -144,6 +145,173 @@ class TestGraphReading:
         shallow = reader.expand(ctx, ["counsel:dalgleish-rowe"], depth=1)
         deep = reader.expand(ctx, ["counsel:dalgleish-rowe"], depth=3)
         assert len(deep) >= len(shallow)
+
+
+#: Roughly the live graph: 26 DECLARED catalog edges at 1.00, plus the handful of facts anyone
+#: actually asked for. The counts matter -- the schema noise has to outnumber the limit for the
+#: truncation bug to show up at all.
+def _catalog_heavy_reader(ctx: AuthContext) -> GraphReader:
+    ontology = load_ontology("legal")
+    queue = ReviewQueue(
+        InMemoryAssertionStore(), governing_predicates=ontology.governing_predicates
+    )
+    catalog = [
+        build_assertion(
+            tenant_id=TENANT,
+            subject_id="document:d1",
+            predicate="HAS_COLUMN",
+            object_id=f"column:matters-{i}",
+            epistemic_class=EpistemicClass.DECLARED,
+            method="glue:catalog_scan",
+            confidence=1.0,
+            source_locator=SourceLocator(source_id="glue", table="lexgraph.matters"),
+        )
+        for i in range(26)
+    ]
+    governing = [
+        build_assertion(
+            tenant_id=TENANT,
+            subject_id="document:d1",
+            predicate=predicate,
+            object_id=object_id,
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:opus-5",
+            confidence=confidence,
+            source_locator=SourceLocator(
+                document_id="d1", filename="d1.pdf", page=1, quote="the Adverse Party"
+            ),
+        )
+        for predicate, object_id, confidence in (
+            ("ADVERSE_TO", "party:beta-holdings-ltd", 0.55),
+            ("OVERRULES", "authority:410-u-s-113", 0.79),
+        )
+    ]
+    queue.stage(ctx, catalog + governing, job_id="j1")
+    for a in governing:
+        queue.approve(ctx, a.assertion_id)
+    queue.promote(ctx, job_id="j1")
+    return GraphReader(queue, ontology=ontology)
+
+
+class TestTheReaderEnforcesTrustItselfNotJustInCypher:
+    """`_readable` is the *only* live trust gate on retrieval.
+
+    `edge_scope`'s confidence floor is dead for this path: its two callers
+    (`assertion_store._scope`, `router_indexer`) both pass `min_confidence=0.0,
+    include_pending=True` on purpose, so nothing but `_readable` stands between an unreviewed
+    claim and an answer. It was a hand-written copy of `edge_scope`'s conditions with nothing
+    checking the two agreed -- so these assert the conditions directly, at the reader, rather
+    than trusting that the Cypher would have caught it.
+    """
+
+    @pytest.fixture
+    def mixed(self, ctx) -> GraphReader:
+        ontology = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=ontology.governing_predicates
+        )
+        facts = [
+            build_assertion(
+                tenant_id=TENANT,
+                subject_id="document:d1",
+                predicate="ADVERSE_TO",
+                object_id=f"party:p{i}",
+                epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+                method="llm:opus-5",
+                confidence=0.9,
+                source_locator=SourceLocator(
+                    document_id="d1", filename="d1.pdf", page=1, quote="the Adverse Party"
+                ),
+            )
+            for i in range(3)
+        ]
+        queue.stage(ctx, facts, job_id="j1")
+        # Only the first is approved. The other two stay PENDING at a confidence that clears
+        # the floor, which is exactly the case a missing review_state filter would leak.
+        queue.approve(ctx, facts[0].assertion_id)
+        queue.promote(ctx, job_id="j1")
+        return GraphReader(queue, ontology=ontology)
+
+    def test_pending_claims_never_reach_a_search_result(self, mixed, ctx):
+        hits = mixed.search(ctx, "adverse party")
+        assert len(hits) == 1, "an unreviewed claim above the floor reached an answer"
+
+    def test_pending_claims_never_reach_an_expansion(self, mixed, ctx):
+        edges = mixed.expand(ctx, ["document:d1"], depth=2)
+        assert len(edges) == 1, "an unreviewed claim above the floor reached an answer"
+
+    def test_predicted_claims_stay_out_without_the_flag(self, mixed, ctx):
+        """PREDICTED is a research hint, never a finding, and `include_suggestions` is the
+        only thing that admits it."""
+        assert mixed._readable(ctx, 0.0)
+        for record in mixed._readable(ctx, 0.0):
+            assert record.assertion.epistemic_class is not EpistemicClass.PREDICTED
+
+    def test_the_floor_is_enforced_at_the_reader(self, mixed, ctx):
+        assert mixed.expand(ctx, ["document:d1"], depth=2, min_confidence=0.99) == []
+
+
+class TestExpandRanksBeforeTruncating:
+    """`expand()` had no ordering at all: it truncated mid-walk on `len(out) >= limit`, so
+    which facts survived came down to the store's insertion order. With 26 catalog edges at
+    1.00 in front of them, the approved `ADVERSE_TO` and `OVERRULES` never made the cut --
+    tier 3 answered every question with `HAS_COLUMN`.
+
+    `search()` has sorted by `(-match_count, -confidence)` since it was written; this is the
+    same discipline applied to the walk.
+    """
+
+    @pytest.fixture
+    def reader(self, ctx) -> GraphReader:
+        return _catalog_heavy_reader(ctx)
+
+    def test_governing_facts_survive_the_limit(self, reader, ctx):
+        edges = reader.expand(ctx, ["document:d1"], depth=1, limit=5)
+        assert {e["predicate"] for e in edges} >= {"ADVERSE_TO", "OVERRULES"}
+
+    def test_schema_noise_does_not_fill_the_limit(self, reader, ctx):
+        edges = reader.expand(ctx, ["document:d1"], depth=1, limit=5)
+        assert edges[0]["predicate"] in {"ADVERSE_TO", "OVERRULES"}
+
+    def test_ordered_by_confidence_within_a_group(self, reader, ctx):
+        """Confidence cannot lead outright: a Glue declaration honestly *is* 1.00, so no
+        truthful score puts ADVERSE_TO in front of it. Consequence decides the group,
+        confidence orders inside it."""
+        ontology = load_ontology("legal")
+        edges = reader.expand(ctx, ["document:d1"], depth=1)
+        groups = [e["confidence"] for e in edges if ontology.is_governing(e["predicate"])]
+        assert groups == sorted(groups, reverse=True)
+        rest = [e["confidence"] for e in edges if not ontology.is_governing(e["predicate"])]
+        assert rest == sorted(rest, reverse=True)
+
+    def test_governing_edges_all_precede_descriptive_ones(self, reader, ctx):
+        ontology = load_ontology("legal")
+        flags = [ontology.is_governing(e["predicate"]) for e in reader.expand(ctx, ["document:d1"])]
+        assert flags == sorted(flags, reverse=True)
+
+    def test_a_nearer_edge_wins_a_tie(self, reader, ctx):
+        """Between two equally trusted facts the closer one is the more relevant."""
+        edges = reader.expand(ctx, ["document:d1"], depth=3)
+        by_conf: dict[tuple[bool, float], list[int]] = {}
+        ontology = load_ontology("legal")
+        for e in edges:
+            key = (ontology.is_governing(e["predicate"]), e["confidence"])
+            by_conf.setdefault(key, []).append(e["hops"])
+        for hops in by_conf.values():
+            assert hops == sorted(hops)
+
+    def test_hop_numbering_still_records_the_shortest_distance(self, reader, ctx):
+        """A later pass re-matching an edge must not relabel a direct edge as two hops."""
+        edges = reader.expand(ctx, ["document:d1"], depth=3)
+        direct = [e for e in edges if e["predicate"] == "ADVERSE_TO"]
+        assert direct and all(e["hops"] == 1 for e in direct)
+
+    def test_truncation_is_deterministic(self, reader, ctx):
+        """Two runs of one question returning different facts is indistinguishable from the
+        graph having changed."""
+        first = reader.expand(ctx, ["document:d1"], depth=2, limit=7)
+        second = reader.expand(ctx, ["document:d1"], depth=2, limit=7)
+        assert [e["assertion_id"] for e in first] == [e["assertion_id"] for e in second]
 
 
 class TestTierOrdering:

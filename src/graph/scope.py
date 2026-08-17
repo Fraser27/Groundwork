@@ -49,9 +49,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from src.access import AccessDecision, MatterAccess, not_assigned_message, screen_message
-from src.graph.assertions import SUGGESTION_ONLY_CLASSES, EpistemicClass, ReviewState
+from src.graph.assertions import (
+    SIGNED_OFF_STATES,
+    SUGGESTION_ONLY_CLASSES,
+    EpistemicClass,
+    ReviewState,
+)
 
 #: Tenant ids reach resource names (S3 prefixes, vector index names, and a cluster
 #: identifier if we ever split storage), so they are validated to a strict shape
@@ -230,6 +236,73 @@ class ScopedQuery:
         return ScopedQuery(where=f"({self.where}) AND ({clause})", params=self.params)
 
 
+@dataclass(frozen=True)
+class TrustFilter:
+    """"Is this fact trusted enough to inform an answer?" — asked once, answered two ways.
+
+    The same three conditions were written twice: as Cypher in `edge_scope` and as Python
+    `if` statements in `GraphReader._readable`, whose docstring promised it "mirrors
+    edge_scope". Nothing enforced the mirror, and the halves had already drifted in effect —
+    `edge_scope`'s confidence floor is dead for retrieval, because both its callers pass
+    `min_confidence=0.0` deliberately, leaving `_readable` as the sole live gate. So the
+    policy that decides what a lawyer sees lived in the copy nobody was pointing at.
+
+    One definition, rendered twice: `matches()` for a Python collection, `clauses()` for a
+    traversal. Adding a condition to one is now impossible without the other getting it.
+    """
+
+    classes: frozenset[EpistemicClass]
+    min_confidence: float
+    states: frozenset[ReviewState] | None
+    """None admits every state, which is what the review queue needs — it exists to show
+    exactly the claims retrieval will not use."""
+
+    @classmethod
+    def for_context(
+        cls,
+        ctx: AuthContext,
+        *,
+        min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+        trusted_classes: frozenset[EpistemicClass] | None = None,
+        include_pending: bool = False,
+    ) -> TrustFilter:
+        classes = trusted_classes or DEFAULT_TRUSTED_CLASSES
+        if ctx.include_suggestions:
+            classes = classes | SUGGESTION_ONLY_CLASSES
+        else:
+            # Belt and braces: even a caller passing PREDICTED explicitly does not get it
+            # without the flag, because `trusted_classes` is caller-supplied.
+            classes = classes - SUGGESTION_ONLY_CLASSES
+        return cls(
+            classes=frozenset(classes),
+            min_confidence=min_confidence,
+            states=None if include_pending else frozenset(SIGNED_OFF_STATES),
+        )
+
+    def matches(self, assertion: Any) -> bool:
+        """The Python rendering, for a store that is not a graph traversal."""
+        if EpistemicClass(assertion.epistemic_class) not in self.classes:
+            return False
+        if assertion.confidence < self.min_confidence:
+            return False
+        return self.states is None or ReviewState(assertion.review_state) in self.states
+
+    def clauses(self, edge_var: str) -> tuple[list[str], dict[str, object]]:
+        """The Cypher rendering, for a filtered traversal."""
+        clauses = [
+            f"{edge_var}.epistemic_class IN $scope_classes",
+            f"{edge_var}.confidence >= $scope_min_conf",
+        ]
+        params: dict[str, object] = {
+            "scope_classes": [c.value for c in self.classes],
+            "scope_min_conf": self.min_confidence,
+        }
+        if self.states is not None:
+            clauses.append(f"{edge_var}.review_state IN $scope_states")
+            params["scope_states"] = [s.value for s in self.states]
+        return clauses, params
+
+
 def edge_scope(
     ctx: AuthContext,
     *,
@@ -249,14 +322,16 @@ def edge_scope(
     `as_of` is the bitemporal read: it reconstructs what the graph asserted on a
     given date, which is the question that actually matters when someone asks what
     a file showed at the time advice was given.
+
+    The trust half of that — classes, floor, review state — is `TrustFilter`, shared with
+    `GraphReader._readable` so the two cannot answer the same question differently.
     """
-    classes = trusted_classes or DEFAULT_TRUSTED_CLASSES
-    if ctx.include_suggestions:
-        classes = classes | SUGGESTION_ONLY_CLASSES
-    else:
-        # Belt and braces: even a caller passing PREDICTED explicitly does not get
-        # it without the flag, because "trusted_classes" is caller-supplied.
-        classes = classes - SUGGESTION_ONLY_CLASSES
+    trust = TrustFilter.for_context(
+        ctx,
+        min_confidence=min_confidence,
+        trusted_classes=trusted_classes,
+        include_pending=include_pending,
+    )
 
     clauses = [f"{edge_var}.tenant_id = $scope_tenant"]
     params: dict[str, object] = {"scope_tenant": ctx.tenant_id}
@@ -273,18 +348,9 @@ def edge_scope(
         )
         params["scope_denied"] = list(ctx.matter_denylist)
 
-    clauses.append(f"{edge_var}.epistemic_class IN $scope_classes")
-    params["scope_classes"] = [c.value for c in classes]
-
-    clauses.append(f"{edge_var}.confidence >= $scope_min_conf")
-    params["scope_min_conf"] = min_confidence
-
-    if not include_pending:
-        clauses.append(f"{edge_var}.review_state IN $scope_states")
-        params["scope_states"] = [
-            ReviewState.AUTO_ASSERTED.value,
-            ReviewState.APPROVED.value,
-        ]
+    trust_clauses, trust_params = trust.clauses(edge_var)
+    clauses.extend(trust_clauses)
+    params.update(trust_params)
 
     if as_of is None:
         clauses.append(f"{edge_var}.superseded_at IS NULL")

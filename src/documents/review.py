@@ -27,9 +27,11 @@ from typing import Protocol
 
 from src.graph.assertions import (
     AUTO_ASSERT_CLASSES,
+    SIGNED_OFF_STATES,
     Assertion,
     EpistemicClass,
     ReviewState,
+    answerable_confidence,
     build_assertion,
 )
 from src.graph.scope import AuthContext, ScopeViolation
@@ -191,8 +193,21 @@ class QueueItem:
 
 
 class ReviewQueue:
-    def __init__(self, store: AssertionStore | None = None) -> None:
+    def __init__(
+        self,
+        store: AssertionStore | None = None,
+        *,
+        governing_predicates: frozenset[str] | None = None,
+    ) -> None:
         self.store = store or InMemoryAssertionStore()
+        self._governing = governing_predicates
+        """Which predicates approval should rescale into the answerable band, from the
+        tenant's pack. None means no pack was supplied, and then everything is treated as
+        governing -- erring the other way would demote an `ADVERSE_TO` to the floor for want
+        of a config value, which is the exact inversion this rescale exists to undo."""
+
+    def _is_governing(self, predicate: str) -> bool:
+        return self._governing is None or predicate in self._governing
 
     # ── staging ───────────────────────────────────────────────────────────────
 
@@ -298,6 +313,19 @@ class ReviewQueue:
         record.assertion.reviewed_by = ctx.user_id
         record.assertion.reviewed_at = _now()
         record.review_note = note
+        # Here rather than at extraction, because this is the moment the claim's standing
+        # actually changes: the cap exists to keep an *unreviewed* model claim under the
+        # retrieval floor, and once a person has signed it off there is nothing left for the cap
+        # to protect against. Leaving it capped made approval a no-op for retrieval -- the fact
+        # went live and stayed unreachable, which is what "it always picks the weak facts" was.
+        # `assertion_id` hashes tenant/subject/predicate/object/method/locator/valid_from and not
+        # confidence, so this moves the number without forking the id or breaking a citation.
+        if record.assertion.raw_confidence is None:
+            record.assertion.raw_confidence = record.assertion.confidence
+        record.assertion.confidence = answerable_confidence(
+            record.assertion.confidence,
+            governing=self._is_governing(record.assertion.predicate),
+        )
         # LIVE here, not in a later `promote` pass. Approving *is* the act that makes a fact live,
         # and separating the two meant an approved fact sat STAGED forever: `promote` is only
         # called during ingest, when nothing has been approved yet, so nothing ever promoted a
@@ -466,10 +494,7 @@ class ReviewQueue:
                 continue
             if not record.is_current:
                 continue
-            if record.assertion.review_state not in (
-                ReviewState.AUTO_ASSERTED,
-                ReviewState.APPROVED,
-            ):
+            if record.assertion.review_state not in SIGNED_OFF_STATES:
                 continue
             record.lifecycle = Lifecycle.LIVE
             self.store.put(record)
