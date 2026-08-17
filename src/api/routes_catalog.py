@@ -16,7 +16,13 @@ from fastapi import APIRouter, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.admin_ops import ResetScope, replay, reset_derived
-from src.api.deps import ServicesDep, TenantDep, require_admin, scope_violation_to_http
+from src.api.deps import (
+    ServicesDep,
+    TenantDep,
+    build_router_indexer,
+    require_admin,
+    scope_violation_to_http,
+)
 from src.discovery.catalog_store import CatalogTable
 from src.discovery.glue_scanner import scan_catalog
 from src.documents.models import JobState
@@ -563,6 +569,51 @@ async def scan_sources(
     }
 
 
+class RouterRebuildRequest(BaseModel):
+    """Which layers to rebuild. All three by default, which is what an operator means by
+    Rebuild; the flags exist so a catalog scan can refresh only tables."""
+
+    metrics: bool = True
+    tables: bool = True
+    entities: bool = True
+
+
+@router.post("/tenants/{tenant}/admin/router/rebuild")
+async def rebuild_router_index(
+    services: ServicesDep,
+    principal: TenantDep,
+    body: Annotated[RouterRebuildRequest | None, Body()] = None,
+) -> dict[str, Any]:
+    """Re-describe this tenant's metrics, tables and entities for the tier router.
+
+    Nothing here changes a metric definition, a table or a fact — it rebuilds the descriptions
+    tier selection is matched against, so it is safe to re-run and converges: a description's id
+    is derived from its item.
+
+    Approved metrics only. A draft that could route a question would send it to tier 1 and then
+    fail to match, which is worse than routing it honestly elsewhere.
+
+    Inline rather than in the background, because the operator pressing Rebuild wants the counts.
+    That bounds it by the origin timeout, which is why the entity layer is capped.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    body = body or RouterRebuildRequest()
+
+    indexer = build_router_indexer(services)
+    if indexer is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "no routing index configured (VECTOR_ENDPOINT unset), so tier selection stays "
+            "keyword-based and there is nothing to rebuild",
+        )
+
+    report = indexer.rebuild(
+        ctx, metrics=body.metrics, tables=body.tables, entities=body.entities
+    )
+    return report.to_dict()
+
+
 # ── Reset and replay ─────────────────────────────────────────────────────────
 #
 # These demonstrate the architecture's central claim rather than merely asserting it: if
@@ -577,6 +628,7 @@ class ResetRequest(BaseModel):
     vectors: bool = True
     jobs: bool = True
     catalog: bool = True
+    routing: bool = True
 
     metrics: bool = False
     """Off by default, and the only option here that destroys something unrecoverable.
@@ -619,6 +671,7 @@ async def reset_derived_route(
         vectors=body.vectors,
         jobs=body.jobs,
         catalog=body.catalog,
+        routing=body.routing,
         metrics=body.metrics,
     )
     return reset_derived(services, ctx, scope).to_dict()

@@ -130,6 +130,14 @@ class Services:
     """What the last Glue scan found. A cache over Glue, not a source of truth — losing it
     costs a re-scan, which is why it is in-memory."""
 
+    routing_index: Any | None = None
+    """Where the tier router's semantic descriptions live. None without a vector endpoint, in
+    which case tier selection falls back to keyword matching rather than erroring."""
+
+    router_indexer: Any | None = None
+    """Builds those descriptions. Per-process rather than per-request: it holds no request state
+    and the graph and metric store it reads through are the shared ones."""
+
     def settings_for(self, tenant_id: str) -> GovernanceSettings:
         if tenant_id not in self.governance:
             store = self.governance_store
@@ -248,6 +256,24 @@ def build_metric_matcher(services: Services, tenant_id: str) -> MetricMatcher | 
         logger.debug("no schema catalog available: %s", e)
 
     return MetricMatcher(metrics, StaticCatalog(tables=tables))
+
+
+def build_router_indexer(services: Services) -> Any | None:
+    """The indexer, wired to whatever graph is reachable now.
+
+    The graph connects in the lifespan hook, *after* `build_services`, so the stored indexer is
+    built without one and its graph-backed layers are attached here — the same reason
+    `build_metric_matcher` runs per request rather than at startup.
+    """
+    indexer = services.router_indexer
+    if indexer is None or services.graph is None:
+        return indexer
+    indexer.graph = services.graph
+    if indexer.metric_store is None:
+        from src.metrics.graph_store import GraphMetricStore
+
+        indexer.metric_store = GraphMetricStore(services.graph)
+    return indexer
 
 
 def _build_parser(cfg: LexGraphConfig) -> VisionParser | None:
@@ -380,6 +406,31 @@ def _build_vector_store(cfg: LexGraphConfig) -> object:
         return InMemoryVectorStore()
 
 
+def _build_routing_index(cfg: LexGraphConfig) -> Any | None:
+    """The tier router's index, or None with no endpoint.
+
+    None rather than an in-memory stand-in, unlike `_build_vector_store`. A routing index that
+    lived in one task's memory would be empty for whichever task served the next question, so the
+    router would see no hits and quietly decide nothing looked relevant -- worse than having no
+    router, because the fallback is at least honest about it.
+    """
+    if not cfg.vector.enabled:
+        return None
+    try:
+        from src.query.router_index import RoutingIndex
+
+        index = RoutingIndex(
+            endpoint=cfg.vector.endpoint,
+            region=cfg.vector.region,
+            dimensions=cfg.vector.embedding_dimensions,
+        )
+        logger.info("tier routing index backed by OpenSearch at %s", cfg.vector.endpoint)
+        return index
+    except Exception as e:
+        logger.warning("routing index unavailable (%s), tier selection stays keyword-based", e)
+        return None
+
+
 def build_services(config: LexGraphConfig | None = None) -> Services:
     cfg = config or load_config()
     store = InMemoryAssertionStore()
@@ -403,14 +454,36 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
             dimensions=cfg.vector.embedding_dimensions,
         )
 
+    ontology = load_ontology(cfg.ontology_pack)
+    # Built here rather than by the field default, because the router indexer reads through the
+    # same instance and a second copy would index tables nobody scanned.
+    catalog = CatalogStore()
+
+    routing_index = _build_routing_index(cfg)
+    router_indexer = None
+    if routing_index is not None and embedder is not None:
+        from src.query.router_indexer import RouterIndexer
+
+        # No graph and no metric store yet: both are attached by `build_router_indexer` once the
+        # lifespan hook has connected. The catalog store exists from the start.
+        router_indexer = RouterIndexer(
+            routing_index,
+            embedder=embedder,
+            ontology=ontology,
+            catalog=catalog,
+        )
+
     return Services(
         config=cfg,
         authenticator=Authenticator(cfg, access, tenants),
-        ontology=load_ontology(cfg.ontology_pack),
+        ontology=ontology,
         review_queue=queue,
         access=access,
         graph_reader=GraphReader(queue),
         embedder=embedder,
+        catalog=catalog,
+        routing_index=routing_index,
+        router_indexer=router_indexer,
         parser=_build_parser(cfg),
         job_store=_build_job_store(cfg),
         ingest_limiter=IngestLimiter(cfg.documents.max_concurrent_ingests),

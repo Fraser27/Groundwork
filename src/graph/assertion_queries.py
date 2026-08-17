@@ -145,6 +145,27 @@ ORDER BY a.recorded_at DESC
 LIMIT $limit
 """
 
+#: Distinct entity ids and the predicates they participate in, for the router's index.
+#:
+#: Read off the `:Assertion` node rather than by walking edges, so `{scope}` binds to `a` exactly
+#: as it does in `LIST_ASSERTIONS` and one scope builder covers both. Walking `(s)-[r]->(o)` would
+#: need a second scope on the relationship and the predicate would come from `type(r)`, which is
+#: the same value stored here.
+#:
+#: Subject and object are unioned so an entity that only ever appears as an object still gets a
+#: routable description. Otherwise a court named in twenty filings would be absent from the index
+#: and a question about it would route away from the graph entirely.
+LIST_ENTITY_IDS = """
+MATCH (a:Assertion)
+WHERE {scope}
+UNWIND [a.subject_id, a.object_id] AS entity_id
+WITH entity_id, a.predicate AS predicate
+WHERE entity_id IS NOT NULL
+RETURN entity_id, collect(DISTINCT predicate) AS predicates
+ORDER BY entity_id
+LIMIT $limit
+"""
+
 #: One assertion by id, for the provenance read.
 GET_ASSERTION = """
 MATCH (a:Assertion)

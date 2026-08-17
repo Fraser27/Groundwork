@@ -44,6 +44,10 @@ class ResetScope:
     vectors: bool = True
     jobs: bool = True
     catalog: bool = True
+    routing: bool = True
+    """The tier router's index. Derived from the metrics, tables and entities being dropped
+    here, so leaving it would route questions toward layers whose contents just went."""
+
     metrics: bool = False
 
     @property
@@ -58,6 +62,7 @@ class ResetReport:
     vectors_dropped: int = 0
     jobs_dropped: int = 0
     tables_forgotten: int = 0
+    routing_dropped: int = 0
     metrics_dropped: int = 0
     metrics_preserved: int = 0
     errors: list[str] = field(default_factory=list)
@@ -77,6 +82,7 @@ class ResetReport:
             "vectors_dropped": self.vectors_dropped,
             "jobs_dropped": self.jobs_dropped,
             "tables_forgotten": self.tables_forgotten,
+            "routing_dropped": self.routing_dropped,
             "metrics_dropped": self.metrics_dropped,
             "metrics_preserved": self.metrics_preserved,
             "errors": self.errors,
@@ -188,6 +194,12 @@ def reset_derived(services: Any, ctx: AuthContext, scope: ResetScope | None = No
             report.vectors_dropped = services.embedder.drop_tenant(ctx.tenant_id)
         except Exception as e:
             report.errors.append(f"vectors: {e}")
+
+    if scope.routing and getattr(services, "router_indexer", None) is not None:
+        try:
+            report.routing_dropped = services.router_indexer.drop_tenant(ctx.tenant_id)
+        except Exception as e:
+            report.errors.append(f"routing index: {e}")
 
     if scope.jobs:
         try:
