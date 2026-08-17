@@ -100,6 +100,22 @@ async def run_query(
     return out
 
 
+def _synthesiser_for(services: Any) -> Any | None:
+    """The synthesis model, or None when the deployment has no Bedrock access.
+
+    None rather than raising: without a model the parts and their citations are still the answer,
+    and refusing the question outright would trade a complete result for no result.
+    """
+    model_id = getattr(getattr(services, "config", None), "models", None)
+    model_id = getattr(model_id, "synthesis_model", "")
+    if not model_id:
+        return None
+
+    from src.query.synthesis import Synthesiser
+
+    return Synthesiser(model_id=model_id)
+
+
 class ComposeRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
     execute: bool = True
@@ -136,7 +152,10 @@ async def compose_query(
         graph_reader=services.graph_reader,
         vector_search=VectorSearch(services.embedder) if services.embedder else None,
         catalog=services.catalog,
-        synthesiser=None,
+        # Built per request from the tenant's configured model, so changing the model is a settings
+        # change rather than a release. This was `None` for the life of the route, so compose
+        # always answered "no synthesis model is configured": the seam existed with nothing in it.
+        synthesiser=_synthesiser_for(services) if body.synthesise else None,
     )
     answer = planner.plan(
         ctx,
