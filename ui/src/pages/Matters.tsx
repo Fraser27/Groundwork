@@ -92,7 +92,13 @@ export default function Matters() {
       }
       return c
     }
-    for (const d of docs) bump(d.matter_id)!.documents += 1
+    // Guarded, not asserted with `!`. A document uploaded before a matter was required carries
+    // none, so `bump` returns null and the non-null assertion crashed the whole page -- which is
+    // what a `!` costs when the value can genuinely be absent.
+    for (const d of docs) {
+      const c = bump(d.matter_id)
+      if (c) c.documents += 1
+    }
     for (const a of assertions) {
       const c = bump(a.matter_id)
       if (!c) continue
