@@ -40,6 +40,26 @@ class EntityDef:
     description: str
     help: str | None = None
 
+    layer: str = "domain"
+    """Which half of the graph this belongs to: `domain` for facts read out of documents,
+    `catalog` for schema declared by a system of record.
+
+    One graph on purpose -- a metric over `matters` should reconcile with a fact from a page -- but
+    a reader auditing a conflict check does not want a firm's Glue columns on screen. Declared here
+    rather than inferred from an id prefix, so a domain pack can add an entity kind without a UI
+    change.
+    """
+
+    @property
+    def slug(self) -> str:
+        """The id prefix form: `Party` -> `party`.
+
+        Entity ids are written `kind:slug` in lowercase while this vocabulary is declared
+        capitalised. Comparing one against the other without normalising is how `court:` came to
+        exist in the graph while `Court` sat declared and apparently unused.
+        """
+        return self.id.lower()
+
 
 @dataclass(frozen=True)
 class RuleDef:
@@ -105,6 +125,44 @@ class Ontology:
 
     def is_governing(self, predicate: str) -> bool:
         return predicate in self.governing_predicates
+
+    @property
+    def entity_kinds(self) -> frozenset[str]:
+        """Every declared entity kind, as it appears in an id prefix.
+
+        Closed, like the governing predicates and for the same reason. An extractor free to invent
+        a kind produces a graph nobody can query: `vessel:mv-aurelia` and `ship:mv-aurelia` are two
+        nodes, and a traversal finds one of them. Unlike a descriptive predicate, an entity kind is
+        structural -- it decides which node a fact hangs off -- so a new one is a deliberate pack
+        change rather than something a model may improvise.
+        """
+        return frozenset(e.slug for e in self.entities.values())
+
+    def entity_kind_of(self, entity_id: str) -> str | None:
+        """The declared kind an id claims, or None if it claims one this pack does not have.
+
+        Returns None for a bare id with no prefix too: an unprefixed id cannot be placed in the
+        vocabulary, and guessing would defeat the point of having one.
+        """
+        kind, sep, rest = entity_id.partition(":")
+        if not sep or not rest:
+            return None
+        kind = kind.lower()
+        return kind if kind in self.entity_kinds else None
+
+    def layer_of(self, entity_id: str) -> str:
+        """`domain`, `catalog`, or `unknown` for an id outside the vocabulary.
+
+        `unknown` rather than a default, because a filter that quietly files an unrecognised node
+        under `domain` hides exactly the drift this vocabulary exists to surface.
+        """
+        kind = self.entity_kind_of(entity_id)
+        if kind is None:
+            return "unknown"
+        for e in self.entities.values():
+            if e.slug == kind:
+                return e.layer
+        return "unknown"
 
     def allowed_for(self, predicate: str) -> frozenset[str] | None:
         """The vocabulary to validate `predicate` against.
@@ -175,6 +233,7 @@ def _parse(raw: dict[str, Any]) -> Ontology:
             label=e.get("label", e["id"]),
             description=e.get("description", ""),
             help=e.get("help"),
+            layer=e.get("layer", "domain"),
         )
         for e in raw.get("entity_types", [])
     }

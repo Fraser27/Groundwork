@@ -36,6 +36,21 @@ entity_types:
     label: Document
     description: A clinical note, report, or discharge summary.
 
+  # The same three structural types as the legal pack. Not shared from a base file: a pack is meant
+  # to be readable on its own, and a domain that catalogues nothing should be able to omit them.
+  - id: Source
+    label: Source
+    description: A system of record that was catalogued.
+    layer: catalog
+  - id: Table
+    label: Table
+    description: A table in a catalogued source.
+    layer: catalog
+  - id: Column
+    label: Column
+    description: A column in a catalogued table.
+    layer: catalog
+
 governing_predicates:
   - id: HAS_DIAGNOSIS
     label: has diagnosis

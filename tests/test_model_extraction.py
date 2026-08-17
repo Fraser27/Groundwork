@@ -460,3 +460,87 @@ class TestEndToEnd:
 
         with pytest.raises(ModelExtractionFailed, match="bedrock invoke failed"):
             ModelExtractor(ONTOLOGY, bedrock=Broken()).extract(chunk())
+
+
+class TestEntityKindsAreClosed:
+    """A model may not invent an entity kind, for the same reason it may not invent a predicate.
+
+    `vessel:mv-aurelia` and `ship:mv-aurelia` are two nodes, and a traversal finds one of them. A
+    conflict check that misses half its edges because two extractions disagreed on a noun looks
+    exactly like a clean conflict check -- the failure the closed vocabulary exists to prevent.
+
+    Structural rather than descriptive, which is why this is closed while a new subject-matter tag
+    is not: an entity kind decides which node a fact hangs off, so adding one is a pack decision.
+    """
+
+    def test_an_invented_kind_is_dropped(self):
+        claim = interpretation(
+            subject_id="vessel:mv-aurelia",
+            predicate="ADVERSE_TO",
+            object_id="party:acme-corporation",
+        )
+        assert extractor().validate([claim], chunk=chunk()) == []
+
+    def test_a_declared_kind_survives(self):
+        """Endpoints come back sorted because ADVERSE_TO is symmetric, so the pair is asserted as a
+        set rather than in whichever order the model happened to give them."""
+        claim = interpretation(
+            subject_id="party:calder-shipping-ag",
+            predicate="ADVERSE_TO",
+            object_id="party:acme-corporation",
+        )
+        out = extractor().validate([claim], chunk=chunk())
+        assert len(out) == 1
+        assert {out[0].subject_id, out[0].object_id} == {
+            "party:calder-shipping-ag",
+            "party:acme-corporation",
+        }
+
+    def test_an_unprefixed_id_is_dropped(self):
+        """A bare id cannot be placed in the vocabulary, and guessing its kind would defeat the
+        point of having one."""
+        claim = interpretation(
+            subject_id="mv-aurelia", predicate="ADVERSE_TO", object_id="party:acme-corporation"
+        )
+        assert extractor().validate([claim], chunk=chunk()) == []
+
+    def test_the_object_is_checked_too(self):
+        """Both endpoints, not just the subject: an edge to an invented node is as unqueryable as
+        one from it."""
+        claim = interpretation(
+            subject_id="party:acme-corporation",
+            predicate="ADVERSE_TO",
+            object_id="vessel:mv-aurelia",
+        )
+        assert extractor().validate([claim], chunk=chunk()) == []
+
+    def test_the_prompt_names_the_allowed_kinds(self):
+        """The model can only comply if told. Refusing at the boundary without asking first would
+        discard work the model would have got right."""
+        ex = extractor()
+        ex.extract(chunk())
+        body = ex.bedrock.requests[0]["body"]
+        sent = json.dumps(body)
+        assert "entity_kinds" in sent
+        assert "party" in sent
+        assert "invent" in body["system"]
+
+    def test_a_catalog_kind_is_declared_rather_than_special_cased(self):
+        """The Glue scanner mints `table:`, `column:` and `source:`. They were in the graph while no
+        pack named them, so the scanner was held to a looser rule than the extractor."""
+        assert {"table", "column", "source"} <= ONTOLOGY.entity_kinds
+
+
+class TestEntityLayers:
+    """Which half of the graph a node belongs to, so it can be read one half at a time."""
+
+    def test_a_legal_entity_is_domain(self):
+        assert ONTOLOGY.layer_of("party:acme-corporation") == "domain"
+
+    def test_a_catalogued_schema_node_is_catalog(self):
+        assert ONTOLOGY.layer_of("column:glue-main:db.tbl.col") == "catalog"
+
+    def test_an_unknown_kind_is_not_quietly_filed_as_domain(self):
+        """`unknown` rather than a default. A filter that files an unrecognised node under `domain`
+        hides the drift the vocabulary exists to surface."""
+        assert ONTOLOGY.layer_of("vessel:mv-aurelia") == "unknown"

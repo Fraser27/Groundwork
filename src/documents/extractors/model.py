@@ -88,6 +88,9 @@ citation nobody can search for cannot be checked.
 - Use the shortest quote that carries the claim.
 - `id` is a lowercase slug prefixed by kind: `party:acme-corporation`, \
 `authority:410-us-113`, `court:united-states-district-court-southern-district-of-new-york`.
+- The prefix MUST be one of `entity_kinds`, and `kind` must match it. Do not invent a kind, \
+however well it fits: an unlisted one is discarded, so the entity is lost rather than \
+approximated. Use the closest listed kind, or omit the claim if none fits.
 - Do not guess. If the passage does not clearly support a claim, omit it.
 - Return ONLY a JSON object, no prose.
 
@@ -374,6 +377,22 @@ class ModelExtractor:
 
             subject = claim.subject_id or subject_default
             if subject == claim.object_id:
+                continue
+
+            # Entity kinds are closed, exactly as governing predicates are. A model free to invent
+            # one produces a graph nobody can query: `vessel:mv-aurelia` and `ship:mv-aurelia` are
+            # two nodes and a traversal finds one of them. Refused here rather than only asked for
+            # in the prompt, because a prompt is a request and this is the boundary.
+            unknown = [
+                e for e in (subject, claim.object_id) if self.ontology.entity_kind_of(e) is None
+            ]
+            if unknown:
+                logger.info(
+                    "dropped %s: entity kind not in the %s vocabulary: %s",
+                    predicate,
+                    self.ontology.domain,
+                    ", ".join(unknown),
+                )
                 continue
 
             # The one decision that matters: a quote-match can confirm presence and

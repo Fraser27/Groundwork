@@ -184,6 +184,11 @@ async def get_ontology(domain: str) -> dict[str, Any]:
                 "label": e.label,
                 "description": e.description,
                 "help": e.help,
+                # `slug` is the id prefix and `layer` is which half of the graph it belongs to.
+                # Both are sent so the UI can group nodes without hardcoding prefixes -- a pack
+                # adding an entity kind should not require a UI change.
+                "slug": e.slug,
+                "layer": e.layer,
             }
             for e in onto.entities.values()
         ],

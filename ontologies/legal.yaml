@@ -51,6 +51,26 @@ entity_types:
     label: Clause
     description: A provision within a contract.
 
+  # Structural, not legal. Declared here because the vocabulary is closed and a scanner is held to
+  # it exactly as an extractor is: these three existed in the graph while no pack named them, which
+  # is the drift that closing the vocabulary is meant to make impossible. `layer: catalog` is what
+  # lets the graph be read one half at a time, without the UI hardcoding id prefixes.
+  - id: Source
+    label: Source
+    description: A system of record that was catalogued, such as an AWS Glue database.
+    help: Not a legal entity. It is here so a schema declaration has something to hang off, and so the graph can be read as facts or as schema rather than as one tangle.
+    layer: catalog
+  - id: Table
+    label: Table
+    description: A table in a catalogued source.
+    help: Schema only. No rows enter the graph — they stay in the warehouse and are queried in place when a question needs them.
+    layer: catalog
+  - id: Column
+    label: Column
+    description: A column in a catalogued table.
+    help: Its name, type and description are citable as facts declared by a system of record, which is what lets a governed metric compile against a real schema.
+    layer: catalog
+
 # ── Closed vocabulary. Write-time validation. No LLM may invent these. ────────
 governing_predicates:
   - id: REPRESENTS
