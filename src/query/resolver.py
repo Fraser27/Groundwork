@@ -81,6 +81,9 @@ class Resolution:
     """What was withheld, named. Reported rather than dropped: an answer that looks clean only
     because the inconvenient part was invisible is the failure `scope.py` exists to prevent."""
 
+    router: Any | None = None
+    """How the tiers were chosen, when a router chose them. None means they were tried in order."""
+
     @property
     def explanation(self) -> str:
         return TIER_EXPLANATION[self.tier]
@@ -102,6 +105,7 @@ class Resolution:
             "tiers_attempted": [int(t) for t in self.tiers_attempted],
             "warnings": self.warnings,
             "blocks": [b.to_dict() for b in self.blocks],
+            "router": self.router.to_dict() if self.router is not None else None,
         }
 
 
@@ -173,12 +177,15 @@ class Resolver:
         vector_search: Any | None = None,
         sql_generator: Any | None = None,
         firewall: Any | None = None,
+        router: Any | None = None,
     ) -> None:
         self._metrics = metric_matcher
         self._graph = graph_reader
         self._vectors = vector_search
         self._sql_gen = sql_generator
         self._firewall = firewall
+        # Optional, and absent means the previous behaviour: try every permitted tier in order.
+        self._router = router
         self.blocked: list[BlockedQuery] = []
 
     def resolve(
@@ -207,10 +214,16 @@ class Resolver:
         """
         allowed = {int(t) for t in settings.allowed_tiers}
 
+        decision = None
         if tier_override is not None:
             requested = [tier_override]
         elif tiers_requested:
             requested = sorted(set(tiers_requested))
+        elif self._router is not None:
+            # Only in this branch. An explicit tier is an instruction, and routing around one
+            # would make testing a single tier impossible and "answered the way you asked" false.
+            decision = self._router.route(ctx, question, settings)
+            requested = [Tier(t) for t in decision.tiers]
         else:
             requested = list(Tier)
 
@@ -236,6 +249,7 @@ class Resolver:
             result = self._attempt(ctx, question, settings, tier, execute=execute)
             if result is not None:
                 result.tiers_attempted = attempted
+                result.router = decision
                 return self._screened(ctx, result, settings)
 
         # Screened even though nothing matched. "Nothing found" while a wall is in force is the
@@ -246,6 +260,7 @@ class Resolver:
                 tier=Tier.GRAPH_TRAVERSAL,
                 answer=None,
                 tiers_attempted=attempted,
+                router=decision,
                 warnings=[
                     (
                         "No approved metric matched and nothing relevant was found in the "

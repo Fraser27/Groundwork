@@ -202,6 +202,27 @@ class Services:
             vector_search=VectorSearch(self.embedder) if self.embedder else None,
             sql_generator=None,
             firewall=None,
+            router=self.build_tier_router(),
+        )
+
+    def build_tier_router(self) -> Any | None:
+        """The router, or None when there is nothing for it to search.
+
+        None rather than a disabled router: the resolver treats absence as "try every permitted
+        tier in order", which is precisely the behaviour a deployment without a vector store
+        should have, so there is nothing to special-case downstream.
+        """
+        if self.routing_index is None or self.embedder is None:
+            return None
+
+        from src.query.router import TierRouter
+
+        return TierRouter(
+            routing_index=self.routing_index,
+            # The same store the passage lane reads, so a routing score for tier 3 and the
+            # retrieval that follows it cannot disagree about what is in the index.
+            chunk_search=getattr(self.embedder, "store", None),
+            embedder=self.embedder,
         )
 
 

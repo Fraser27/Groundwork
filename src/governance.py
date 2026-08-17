@@ -86,6 +86,40 @@ class GovernanceSettings:
     logs its refusals for an admin to read. This is the general form, so a firm can
     also forbid, say, the hybrid tier while keeping metrics and graph traversal."""
 
+    router_enabled: bool = True
+    """Choose which tiers to run by similarity rather than trying them in order.
+
+    Off is not a degraded mode, it is the previous behaviour: every permitted tier is attempted
+    in sequence until one answers. Worth turning off while a routing index is still being
+    built, since an empty index degrades to the same thing but pays a search to discover it."""
+
+    router_min_similarity: float = 0.25
+    """The floor below which a match does not count at all.
+
+    Answers one question only: did anything in the index resemble this question? When the answer
+    is no the router degrades and every permitted tier is tried, because similarity is not
+    calibrated and picking the least bad layer would be a guess dressed as a decision. This is
+    deliberately not a relevance threshold, and raising it far is how a tenant ends up routing
+    nothing."""
+
+    router_margin: float = 0.35
+    """How much worse than the best-scoring layer a layer may be and still be searched.
+
+    0 searches only the winning layer; 1.0 searches everything above the floor. Relative rather
+    than absolute because no cosine value means "relevant" across questions of different lengths
+    and phrasings — the answerable question is how much worse than the best is still worth
+    trying, and this is that question."""
+
+    router_metric_boost: float = 0.05
+    """How much a governed metric outranks an equally-scoring layer.
+
+    The protection that makes it safe for the router to be able to skip tier 1 at all: without
+    it, a paraphrase scoring fractionally low routes away from deterministic compiled SQL and
+    into tier 4, where a model writes the query. That is the failure the router was built to
+    remove, so it must not be reintroduced by the router itself. Cannot rescue a layer that
+    failed the floor — the floor is a question about the data, and a preference must not answer
+    it."""
+
     block_model_extraction: bool = False
     """Stop reading documents with a model. Since extraction is now model-only, this
     halts new facts from documents entirely — upload, transcription and search still
@@ -142,6 +176,17 @@ class GovernanceSettings:
                 "graph_expand_depth must be 1-5; deeper traversals fan out badly and "
                 "pull in weakly related matters"
             )
+        # Cosine, so -1 is meaningful in principle. Bounded at 0 because a negative floor admits
+        # items pointing away from the question, which is never what an administrator means.
+        if not 0.0 <= self.router_min_similarity <= 1.0:
+            raise GovernanceError("router_min_similarity must be in [0,1]")
+        if not 0.0 <= self.router_margin <= 1.0:
+            raise GovernanceError(
+                "router_margin must be in [0,1]: 0 searches only the best-scoring layer and "
+                "1 searches every layer above the similarity floor"
+            )
+        if not 0.0 <= self.router_metric_boost <= 1.0:
+            raise GovernanceError("router_metric_boost must be in [0,1]")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -173,6 +218,10 @@ class GovernanceSettings:
             require_review_for_governing=_b("LEXGRAPH_REVIEW_GOVERNING", True),
             block_ungoverned_queries=_b("LEXGRAPH_BLOCK_UNGOVERNED", False),
             allowed_tiers=_tiers("LEXGRAPH_ALLOWED_TIERS", frozenset({1, 2, 3, 4})),
+            router_enabled=_b("LEXGRAPH_ROUTER_ENABLED", True),
+            router_min_similarity=_f("LEXGRAPH_ROUTER_MIN_SIMILARITY", 0.25),
+            router_margin=_f("LEXGRAPH_ROUTER_MARGIN", 0.35),
+            router_metric_boost=_f("LEXGRAPH_ROUTER_METRIC_BOOST", 0.05),
             block_model_extraction=_b("LEXGRAPH_BLOCK_MODEL_EXTRACTION", False),
             query_model=os.getenv("LEXGRAPH_QUERY_MODEL", DEFAULT_QUERY_MODEL),
             ocr_model=os.getenv("LEXGRAPH_OCR_MODEL", DEFAULT_OCR_MODEL),
@@ -243,6 +292,28 @@ FIELD_HELP: dict[str, str] = {
         "within this list; anything outside it is refused rather than quietly answered "
         "a different way. 1 is an approved metric, 2 is the knowledge graph, 3 combines "
         "passages with graph relationships, 4 lets the AI write SQL."
+    ),
+    "router_enabled": (
+        "Choose which ways of answering to try by comparing the question against what this "
+        "tenant actually holds, instead of trying each in turn. Turn it off and every permitted "
+        "route is attempted in order, which is how the system behaved before."
+    ),
+    "router_min_similarity": (
+        "How closely something must resemble the question to count as a match at all. This is "
+        "only a detector for 'nothing here looks related': when nothing clears it, every "
+        "permitted route is tried rather than a guess being made. Raise it far and questions "
+        "stop being routed."
+    ),
+    "router_margin": (
+        "How much less relevant than the best match a route may look and still be searched. 0 "
+        "searches only the strongest match; 1 searches everything that cleared the floor. It is "
+        "expressed as a comparison rather than a score because relevance numbers are not "
+        "percentages and cannot be read as one."
+    ),
+    "router_metric_boost": (
+        "How much an approved metric is favoured over an equally relevant-looking route. It "
+        "exists so a rephrased question still reaches a governed metric rather than falling "
+        "through to AI-written SQL. It cannot make an unrelated metric look related."
     ),
     "block_model_extraction": (
         "Stop using AI to read documents for facts. Uploading, page transcription and "
