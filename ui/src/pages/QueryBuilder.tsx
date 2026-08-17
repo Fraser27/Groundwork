@@ -11,50 +11,25 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import {
   api,
+  type ComposedResult,
   type Matter,
-  type QueryAnswer,
-  type QueryBlock,
   type QueryHit,
-  type QueryPassage,
   type QueryResult,
-  type QueryRows,
   type ResolutionTier,
   type TenantSettings,
 } from '../api'
 import { getTenantId } from '../auth'
 import { HELP, TIERS } from '../epistemic'
+import { asHits, asPassages, asRows, lanesFromComposed, lanesFromResult } from '../trace'
 import { useProvenance } from '../useProvenance'
 import ConfidenceBar from '../components/ConfidenceBar'
 import DocumentViewer from '../components/DocumentViewer'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
+import QueryTrace from '../components/QueryTrace'
 import { ErrorState, Spinner, TierBadge } from '../components/Shared'
 import { epiStyle } from '../format'
-
-/**
- * `answer` is shaped by whichever tier answered, so it is narrowed rather than rendered.
- *
- * Rendering it directly is what blanked this page: tier 2 puts a list of assertions there, and a
- * list of objects as a React child throws. Narrowing in one place beats guessing at each use.
- */
-function asRows(answer: QueryAnswer): QueryRows | null {
-  if (answer && typeof answer === 'object' && 'columns' in answer && Array.isArray(answer.rows)) {
-    return answer as QueryRows
-  }
-  return null
-}
-
-function asHits(answer: QueryAnswer): QueryHit[] {
-  if (Array.isArray(answer)) return answer
-  if (answer && typeof answer === 'object' && 'related' in answer) return answer.related ?? []
-  return []
-}
-
-function asPassages(answer: QueryAnswer): QueryPassage[] {
-  if (answer && typeof answer === 'object' && 'passages' in answer) return answer.passages ?? []
-  return []
-}
 
 /** Tier 2 explains a fact by the terms it matched; tier 3 walked to it, so distance is the
  *  explanation -- ten edges read alike otherwise, quoting indistinguishable from inferring. */
@@ -74,11 +49,6 @@ function whyIncluded(h: QueryHit): string {
 function entityLabel(id: string): string {
   const slug = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id
   return slug.replace(/[-_]/g, ' ')
-}
-
-/** `rule` is `ethical_screen` for a recorded wall; anything else is an ontology rule that fired. */
-function isScreen(b: QueryBlock): boolean {
-  return b.rule === 'ethical_screen'
 }
 
 /** The tier is what each example is meant to demonstrate, not a promise about the answer. */
@@ -104,6 +74,9 @@ export default function QueryBuilder() {
   const [settings, setSettings] = useState<TenantSettings | null>(null)
   const [floorOverride, setFloorOverride] = useState<number | null>(null)
   const [result, setResult] = useState<QueryResult | null>(null)
+  const [composed, setComposed] = useState<ComposedResult | null>(null)
+  /** Run every lane instead of stopping at the first tier that can answer. */
+  const [everyLane, setEveryLane] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
   // The matter list and trust floor, not the answer. Asking still works without them.
@@ -133,15 +106,21 @@ export default function QueryBuilder() {
     setRunning(true)
     setError('')
     setResult(null)
+    setComposed(null)
     setOpenProvenance(null)
     try {
-      const res = await api.query(tenant, {
-        question: q,
-        matter_id: matterId || undefined,
-        as_of: asOf || undefined,
-        min_confidence: floor,
-      })
-      setResult(res)
+      if (everyLane) {
+        setComposed(await api.compose(tenant, { question: q }))
+      } else {
+        setResult(
+          await api.query(tenant, {
+            question: q,
+            matter_id: matterId || undefined,
+            as_of: asOf || undefined,
+            min_confidence: floor,
+          }),
+        )
+      }
     } catch (e) {
       setError((e as Error).message.replace(/^\d+:\s*/, ''))
     } finally {
@@ -162,7 +141,10 @@ export default function QueryBuilder() {
   // `?? []` rather than trusting the declared type: the field is new, and a type is a claim
   // about the response, not a check on one.
   const blocks = result?.blocks ?? []
-  const screens = blocks.filter(isScreen)
+  const lanes = result ? lanesFromResult(result) : []
+  const composedLanes = composed ? lanesFromComposed(composed) : []
+  const composedBlocks = composed?.blocks ?? []
+  const composedWarnings = composed?.warnings ?? []
 
   return (
     <>
@@ -252,6 +234,21 @@ export default function QueryBuilder() {
           </div>
         </div>
 
+        <label className="checkbox-row" style={{ marginBottom: asOf ? 12 : 0 }}>
+          <input
+            type="checkbox"
+            checked={everyLane}
+            onChange={(e) => setEveryLane(e.target.checked)}
+          />
+          <span>
+            Search every lane, not just the first that can answer
+            <FieldHelp text="Normally the question stops at the lowest tier that can answer it, which is right when a governed metric matches exactly. This runs the graph, the documents and the catalogue as well, and reports each separately rather than merging them, because a compiled figure, a quoted passage and a model's reading are not the same kind of claim. A matching governed metric still short-circuits: it is exact, and fanning out would add latency and nothing else." />
+            <span className="dim" style={{ display: 'block', fontSize: 11.5 }}>
+              Slower. Matter and as-at filters do not apply to this route.
+            </span>
+          </span>
+        </label>
+
         {asOf && (
           <div className="banner banner-info" style={{ marginBottom: 0 }}>
             <span>
@@ -320,68 +317,26 @@ export default function QueryBuilder() {
               </div>
             )}
 
-            {blocks.length > 0 && (
-              <div className="withheld-block" style={{ marginTop: 16 }}>
-                <div className="withheld-block-head">
-                  <h3>
-                    {blocks.length} {blocks.length === 1 ? 'block' : 'blocks'} applied to this
-                    answer
-                    <FieldHelp text={HELP.ethicalScreen} />
-                  </h3>
-                  <span className="tag tag-red">
-                    {screens.length === blocks.length ? 'Screened' : 'Withheld'}
-                  </span>
-                </div>
-                <p className="withheld-block-note">
-                  Applied before anything was written or summarised, and by the graph rather than a
-                  model, so no part of the answer above rests on what is listed here. They are
-                  named on purpose: an answer that looks complete because the inconvenient part
-                  was invisible is the failure a screen exists to prevent.
-                </p>
-                <div className="withheld-list">
-                  {blocks.map((b, i) => (
-                    <div className="withheld-item" key={`${b.rule}-${b.subject}-${i}`}>
-                      <div className="withheld-item-head">
-                        <strong>{b.matter_id ?? entityLabel(b.subject)}</strong>
-                        <code>{b.rule || 'blocked'}</code>
-                      </div>
-                      <div className="withheld-field">
-                        <span className="withheld-field-label">Reason recorded</span>
-                        {b.reason}
-                      </div>
-                      {isScreen(b) && (
-                        <div className="withheld-field">
-                          <span className="withheld-field-label">Who to contact</span>
-                          {b.contact ?? (
-                            <span className="dim">
-                              No contact was given. Ask your risk team about this matter.
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <div className="withheld-field">
-                        <span className="withheld-field-label">In the graph</span>
-                        {/* Stated rather than linked, on purpose. `?highlight=` takes assertion
-                            ids and a block has none — a screen is a grant, not a fact. A link
-                            filtered to a screened matter would draw an empty canvas reading as
-                            "this matter holds nothing", which is the silent failure this card
-                            exists to prevent. */}
-                        <span className="dim">
-                          Nothing to open.{' '}
-                          {isScreen(b)
-                            ? 'A screen is a recorded instruction, not an assertion, and the ' +
-                              'facts it covers are never returned to you, so there is no ' +
-                              'subgraph to draw.'
-                            : 'A rule block names what was refused, not an edge you can open.'}
-                          {usedIds.length > 0 &&
-                            ' What the answer did use opens in the graph below.'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* Above the answer cards: the route is what the reader needs in order to know how
+                much of what follows to trust. Step 4 opens itself when anything was refused. */}
+            <div style={{ marginTop: 16 }}>
+              <QueryTrace
+                router={result.router}
+                gate={result.gate}
+                lanes={lanes}
+                blocks={blocks}
+                floor={floor}
+                usedFactCount={usedIds.length}
+                onOpenPassage={(p) =>
+                  setOpenDocument({
+                    documentId: p.document_id,
+                    filename: p.filename || p.document_id,
+                    page: p.page as number,
+                    quote: p.text ?? null,
+                  })
+                }
+              />
+            </div>
 
             {rows && (
               <div className="card">
@@ -572,6 +527,79 @@ export default function QueryBuilder() {
                 ))}
               </div>
             </div>
+        </>
+      )}
+
+      {composed && (
+        <>
+          <div
+            className="tier-banner"
+            style={{ marginTop: 16, '--tier-colour': 'var(--purple)' } as CSSProperties}
+          >
+            <div className="tier-num">{(composed.lanes_run ?? []).length}</div>
+            <div className="tier-text">
+              <h4>
+                Composed from {(composed.lanes_run ?? []).length}{' '}
+                {(composed.lanes_run ?? []).length === 1 ? 'lane' : 'lanes'}
+                <FieldHelp text={HELP.resolutionTier} />
+                <span
+                  className={`tag ${composed.fully_deterministic ? 'tag-green' : 'tag-orange'}`}
+                >
+                  {composed.governance}
+                </span>
+              </h4>
+              <p>{composed.note}</p>
+            </div>
+          </div>
+
+          {composedWarnings.length > 0 && (
+            <div className="banner banner-warn" style={{ marginTop: 16 }}>
+              <span>{composedWarnings.join(' ')}</span>
+            </div>
+          )}
+
+          <div style={{ marginTop: 16 }}>
+            <QueryTrace
+              router={composed.router}
+              gate={composed.gate}
+              lanes={composedLanes}
+              blocks={composedBlocks}
+              floor={floor}
+              onOpenPassage={(p) =>
+                setOpenDocument({
+                  documentId: p.document_id,
+                  filename: p.filename || p.document_id,
+                  page: p.page as number,
+                  quote: p.text ?? null,
+                })
+              }
+            />
+          </div>
+
+          {composed.synthesis ? (
+            <div className="card">
+              <div className="card-header">
+                <h3>
+                  Answer
+                  <FieldHelp text="Written by a model over the evidence that survived the wall, and only over that. It decided none of it: every part it drew on is above, with its own provenance." />
+                </h3>
+                <span className="tag tag-orange">phrased by a model</span>
+              </div>
+              <div className="answer-block">{composed.synthesis}</div>
+            </div>
+          ) : (
+            <div className="card">
+              <div className="card-header">
+                <h3>Answer</h3>
+                <span className="tag tag-green">unsummarised</span>
+              </div>
+              <div className="answer-block">
+                No prose was written over these parts, so what is above is the whole answer. That
+                is the reviewable form: each lane's contribution is separate and carries its own
+                provenance.
+              </div>
+            </div>
+          )}
         </>
       )}
 

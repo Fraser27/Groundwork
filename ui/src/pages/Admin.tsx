@@ -15,6 +15,10 @@ import ScanPicker from '../components/ScanPicker'
 import { ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDateTime, fmtNum } from '../format'
 
+/** What a slider shows when the settings projection has not sent the field. Displayed, never
+ *  patched: nothing is written until an administrator moves the control. */
+const ROUTER_DEFAULTS = { margin: 0.35, minSimilarity: 0.25, metricBoost: 0.05 }
+
 const RESET_OPTIONS: { key: keyof ResetScope; label: string; rebuild: string }[] = [
   { key: 'graph', label: 'Graph facts', rebuild: 'Rebuilt by Replay' },
   { key: 'vectors', label: 'Search index', rebuild: 'Rebuilt by Replay' },
@@ -216,6 +220,13 @@ export default function Admin() {
         onRetry={retry}
       />
     )
+
+  // `??`, not the declared type: the settings projection does not carry these yet, and a
+  // control reading `undefined.toFixed` is the crash this page has had seven times.
+  const routerOn = settings.router_enabled ?? false
+  const margin = settings.router_margin ?? ROUTER_DEFAULTS.margin
+  const minSimilarity = settings.router_min_similarity ?? ROUTER_DEFAULTS.minSimilarity
+  const metricBoost = settings.router_metric_boost ?? ROUTER_DEFAULTS.metricBoost
 
   return (
     <>
@@ -438,6 +449,146 @@ export default function Admin() {
               model claim is capped at {settings.model_confidence_cap.toFixed(2)}, and the floor
               staying above that is what keeps one out of an answer even if the review gate were
               bypassed.
+            </p>
+          </div>
+        </div>
+
+        {/* Beside the trust floor because they are the same kind of control: a governance dial
+            whose effect is invisible until a question is asked. Every field is read with a
+            fallback -- the settings projection may not carry them yet, and a missing number must
+            not take the page down with it. */}
+        <div className="card">
+          <div className="card-header">
+            <h3>
+              Question router
+              <FieldHelp text={HELP.vectorRouter} />
+            </h3>
+            <span className={`tag ${routerOn ? 'tag-green' : 'tag-neutral'}`}>
+              {routerOn ? 'choosing' : 'searching everything'}
+            </span>
+          </div>
+          <label className="switch" style={{ marginBottom: 12 }}>
+            <input
+              type="checkbox"
+              checked={routerOn}
+              disabled={saving === 'router'}
+              onChange={(e) =>
+                patch(
+                  'router',
+                  { router_enabled: e.target.checked },
+                  e.target.checked
+                    ? 'The router will now choose which parts to search'
+                    : 'Every permitted part will now be searched',
+                )
+              }
+            />
+            <span className="switch-track" />
+            <span>Choose which parts of the system to search</span>
+          </label>
+          <p className="card-note" style={{ marginBottom: 14 }}>
+            Off, every way of answering that this firm permits is tried for every question, which
+            is slower and no less correct. On, the question is compared against descriptions of
+            this firm's metrics, entities, tables and documents, and only the closest are searched.
+            It chooses where to look and never what is true, and it cannot reach a tier your
+            settings forbid.
+          </p>
+
+          <div className="form-group">
+            <label>
+              Margin
+              <FieldHelp text={HELP.routerMargin} />
+            </label>
+            <input
+              type="range"
+              min={0.05}
+              max={0.9}
+              step={0.05}
+              disabled={!routerOn}
+              value={margin}
+              onChange={(e) =>
+                setSettings((s) => (s ? { ...s, router_margin: Number(e.target.value) } : s))
+              }
+              // On release, not on change: dragging patches governance once per pixel otherwise.
+              onMouseUp={(e) =>
+                patch(
+                  'margin',
+                  { router_margin: Number((e.target as HTMLInputElement).value) },
+                  `Margin set to ${Number((e.target as HTMLInputElement).value).toFixed(2)}`,
+                )
+              }
+              style={{ width: '100%' }}
+            />
+            <p className="hint">
+              <strong>{margin.toFixed(2)}</strong> — a layer scoring within{' '}
+              {Math.round(margin * 100)}% of the best-scoring layer is searched as well. Not a
+              relevance figure: it compares layers with each other, because a resemblance score
+              means nothing on its own.
+            </p>
+          </div>
+
+          <div className="form-group">
+            <label>
+              Similarity floor
+              <FieldHelp text={HELP.routerMinSimilarity} />
+            </label>
+            <input
+              type="range"
+              min={0.05}
+              max={0.8}
+              step={0.01}
+              disabled={!routerOn}
+              value={minSimilarity}
+              onChange={(e) =>
+                setSettings((s) =>
+                  s ? { ...s, router_min_similarity: Number(e.target.value) } : s,
+                )
+              }
+              onMouseUp={(e) =>
+                patch(
+                  'minsim',
+                  { router_min_similarity: Number((e.target as HTMLInputElement).value) },
+                  `Similarity floor set to ${Number((e.target as HTMLInputElement).value).toFixed(2)}`,
+                )
+              }
+              style={{ width: '100%' }}
+            />
+            <p className="hint">
+              <strong>{minSimilarity.toFixed(2)}</strong> — below this a match is not counted at
+              all. It answers only whether anything resembled the question; when nothing does, the
+              router searches everything rather than picking the least bad option. Keep it low.
+            </p>
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>
+              Governed-metric boost
+              <FieldHelp text={HELP.routerMetricBoost} />
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={0.3}
+              step={0.01}
+              disabled={!routerOn}
+              value={metricBoost}
+              onChange={(e) =>
+                setSettings((s) => (s ? { ...s, router_metric_boost: Number(e.target.value) } : s))
+              }
+              onMouseUp={(e) =>
+                patch(
+                  'boost',
+                  { router_metric_boost: Number((e.target as HTMLInputElement).value) },
+                  `Metric boost set to ${Number((e.target as HTMLInputElement).value).toFixed(2)}`,
+                )
+              }
+              style={{ width: '100%' }}
+            />
+            <p className="hint">
+              <strong>
+                {metricBoost > 0 ? `+${metricBoost.toFixed(2)}` : metricBoost.toFixed(2)}
+              </strong>{' '}
+              added to the governed-metric layer's score, so a near-tie resolves towards the
+              answer no model wrote. It cannot promote a metric that matched nothing.
             </p>
           </div>
         </div>

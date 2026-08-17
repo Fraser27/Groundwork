@@ -1494,6 +1494,163 @@ code, pre { font-family: var(--mono); }
   padding: 0 1px;
 }
 
+/* ── Query trace ────────────────────────────────────────────────────────────
+   Four steps down a rail, not across. Each one opens onto a table of passages
+   or a page of SQL, and four columns wide enough for that are too narrow to
+   read; the rail carries the ordering instead of the layout. */
+
+.qtrace { display: flex; flex-direction: column; }
+.qtrace-step { display: flex; gap: 12px; }
+.qtrace-rail { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; width: 24px; }
+.qtrace-node {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.qtrace-line { width: 2px; flex: 1; background: var(--border); margin: 3px 0; min-height: 12px; }
+.qtrace-body { flex: 1; min-width: 0; padding-bottom: 14px; }
+.qtrace-step.is-last .qtrace-body { padding-bottom: 0; }
+
+.qtrace-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.qtrace-head:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.qtrace-title { font-weight: 600; flex-shrink: 0; }
+.qtrace-summary { font-size: 12px; color: var(--text-dim); min-width: 0; }
+.qtrace-chevron {
+  margin-left: auto;
+  font-size: 14px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.qtrace-detail { padding: 12px 0 2px 11px; }
+.qtrace-note { font-size: 12px; color: var(--text-dim); line-height: 1.55; max-width: 760px; margin-top: 10px; }
+.qtrace-note:first-child { margin-top: 0; }
+.qtrace-list { font-size: 12px; color: var(--text-dim); line-height: 1.6; margin: 8px 0 0 18px; }
+.qtrace-list strong { color: var(--text); }
+.qtrace-sublabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  margin: 12px 0 5px;
+}
+
+.qtrace-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.qtrace-facts dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+}
+.qtrace-facts dd { margin: 2px 0 0; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.qtrace-facts dd.dim, .qtrace-facts dd .dim { font-weight: 400; font-size: 12px; }
+.qtrace-cleared { color: var(--green); }
+.qtrace-withheld { color: var(--red); }
+
+.qtrace-layers, .qtrace-lanes { display: flex; flex-direction: column; gap: 9px; }
+.qtrace-layer, .qtrace-lane {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: var(--bg-card);
+}
+/* A searched layer takes its colour; an unsearched one stays grey. The distinction has to
+   survive a glance, because it is the whole content of the step. */
+.qtrace-layer.is-selected, .qtrace-lane { border-left-color: var(--layer-colour, var(--accent)); }
+.qtrace-lane { padding: 0; }
+.qtrace-layer:not(.is-selected) { background: var(--bg-alt); }
+.qtrace-layer-head, .qtrace-lane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.qtrace-lane-head {
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.qtrace-lane-head:hover { background: var(--bg-hover); }
+.qtrace-lane-count { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.qtrace-lane-body { padding: 2px 12px 12px; border-top: 1px solid var(--border); }
+.qtrace-layer-name { font-size: 13px; font-weight: 600; }
+.qtrace-layer-reason { font-size: 12px; color: var(--text-dim); line-height: 1.55; margin-top: 5px; }
+.qtrace-more { font-size: 11.5px; margin-top: 6px; display: inline-block; }
+.qtrace-items { margin-top: 8px; }
+
+.qtrace-score { display: flex; align-items: center; gap: 7px; margin-left: auto; flex-shrink: 0; }
+.qtrace-score-track {
+  position: relative;
+  width: 96px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  overflow: visible;
+}
+.qtrace-score-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--layer-colour, var(--accent));
+}
+/* The margin cutoff, marked on the track for the same reason ConfidenceBar marks the trust
+   floor: "0.31" means nothing until you can see what it had to beat. */
+.qtrace-score-cutoff {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--text);
+  opacity: 0.55;
+}
+.qtrace-score-value { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-dim); min-width: 28px; }
+
+.qtrace-tier-verdict { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: 7px; }
+.qtrace-tier-reason { font-size: 11.5px; color: var(--text-dim); }
+/* A forbidden tier is not a low score, so it is not drawn as one. */
+.tier-ladder-row.forbidden { border-color: color-mix(in srgb, var(--red) 30%, transparent); }
+
 /* ── Graph explorer ────────────────────────────────────────────────────── */
 
 .graph-page { display: flex; flex-direction: column; height: calc(100vh - 120px); min-height: 520px; }

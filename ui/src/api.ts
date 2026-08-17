@@ -530,6 +530,87 @@ export interface QueryBlock {
   contact?: string | null
 }
 
+/** Which index a routing hit came from. `passages` is the document-chunk index. */
+export type RouterLayerKind = 'metric' | 'entity' | 'table' | 'passages'
+
+/**
+ * One thing the router matched, with the cosine that matched it.
+ *
+ * `detail` is free-form per kind — a metric sends its source table, a table its columns — so it
+ * is read defensively rather than declared per kind. Nothing here is a claim about relevance:
+ * cosine similarity is not calibrated across questions.
+ */
+export interface RouterItem {
+  kind: RouterLayerKind
+  item_id: string
+  label: string
+  similarity: number
+  detail?: Record<string, unknown> | null
+}
+
+export interface RouterLayer {
+  kind: RouterLayerKind
+  /** The tier a reader thinks of this layer as. `tiers` is authoritative. */
+  tier: number | null
+  /**
+   * Every tier this layer justifies running. A catalogued table is two: the graph holds its
+   * schema as declared facts, and tier 4 writes SQL against it.
+   */
+  tiers?: number[]
+  score: number
+  /** Before the boost, so the trace can show what the boost did rather than only its effect. */
+  raw_score: number
+  boost: number
+  hit_count: number
+  /** Score as a fraction of the best-scoring layer. This is what the margin is measured against. */
+  relative: number
+  selected: boolean
+  reason: string
+  items?: RouterItem[]
+}
+
+/**
+ * How the tiers were chosen, or the record that they were not.
+ *
+ * Absent when the router is disabled or the deployment has no vector store, so every read of
+ * this is guarded. `degraded` means the router ran every tier rather than choosing, which is a
+ * materially different story from a router that chose, and the UI says so rather than drawing
+ * an empty diagram.
+ */
+export interface RouterTrace {
+  enabled: boolean
+  degraded: boolean
+  reason?: string | null
+  margin: number
+  min_similarity: number
+  metric_boost: number
+  best_score: number
+  layers?: RouterLayer[]
+  tiers_selected?: number[]
+  /** Tier number as a string, because these are JSON object keys. */
+  tiers_dropped?: Record<string, string>
+  /**
+   * Tiers the tenant does not permit, sent as data rather than left to be read out of the
+   * wording of `tiers_dropped`. A tier refused by policy was never even searched, which is a
+   * different fact from one that was measured and out-scored.
+   */
+  tiers_forbidden?: string[]
+}
+
+/**
+ * What the ethical wall did, refusals and clearances alike.
+ *
+ * `subjects_cleared` is here because the wall approving something is as much a fact as it
+ * refusing something: a step that is only ever visible when it blocks reads as an exception
+ * rather than as a gate everything passed through.
+ */
+export interface GateTrace {
+  seeds_considered: number
+  subjects_cleared: number
+  items_withheld: number
+  blocks?: QueryBlock[]
+}
+
 export interface QueryResult {
   tier: ResolutionTier
   tier_name: string
@@ -546,6 +627,59 @@ export interface QueryResult {
   /** Always an array from the API. Optional here only so a cached older response cannot crash
    *  the page — the read path guards on `?? []` rather than trusting this. */
   blocks?: QueryBlock[]
+  /** Genuinely absent where the router is off or there is no vector store. Never asserted. */
+  router?: RouterTrace | null
+  gate?: GateTrace | null
+}
+
+// ── Composed answers ─────────────────────────────────────────────────────────
+
+/** Where one part of a composed answer came from. Mirrors src/query/planner.py :: Lane. */
+export type Lane = 'metric' | 'graph' | 'passages' | 'catalog'
+
+/** How much of a part a model wrote. Separate from the lane: retrieval can be fuzzy and the
+ *  text it returned still exact. Mirrors planner.py :: Provenance. */
+export type PartProvenance = 'deterministic' | 'verbatim' | 'inferred'
+
+/** Schema the catalog lane offered. Columns only — rows never leave the warehouse. */
+export interface CatalogSchemaRef {
+  full_name: string
+  description?: string | null
+  columns?: string[]
+}
+
+/**
+ * One lane's contribution, never merged with another's.
+ *
+ * `content` is shaped by the lane — rows for a metric, hits for the graph, passages for
+ * documents, schema for the catalog — so it is narrowed at the point of use rather than
+ * declared as any one of them. It is legitimately null for a metric part when no executor
+ * is wired: the SQL is the reviewable artefact and tier 1 stops there.
+ */
+export interface AnswerPart {
+  lane: Lane
+  provenance: PartProvenance
+  tier: number
+  content: unknown
+  sql?: string | null
+  citations?: QueryCitation[]
+  assertion_ids?: string[]
+  confidence?: number | null
+}
+
+export interface ComposedResult {
+  parts?: AnswerPart[]
+  blocks?: QueryBlock[]
+  lanes_run?: Lane[]
+  lanes_skipped?: Record<string, string>
+  synthesis?: string | null
+  /** Never plain "governed" when a model contributed. Composed server-side. */
+  governance: string
+  fully_deterministic: boolean
+  warnings?: string[]
+  note?: string
+  router?: RouterTrace | null
+  gate?: GateTrace | null
 }
 
 // ── Graph ────────────────────────────────────────────────────────────────────
@@ -799,6 +933,14 @@ export interface TenantSettings {
    */
   model_confidence_cap: number
   block_ungoverned_queries: boolean
+  /**
+   * Vector router. Every one is optional: the projection does not send them yet, and a missing
+   * field must leave the rest of the Admin page working rather than blanking it.
+   */
+  router_enabled?: boolean
+  router_min_similarity?: number
+  router_margin?: number
+  router_metric_boost?: number
   extraction_model: string
   synthesis_model: string
   embedding_model: string
@@ -1169,6 +1311,28 @@ export const api = {
         matter_id: body.matter_id,
         as_of: body.as_of,
         min_confidence: body.min_confidence,
+      }),
+    }),
+
+  /**
+   * Answer from every lane at once rather than from the first tier that can.
+   *
+   * `synthesise: false` is the reviewable form: every part is returned with its own provenance
+   * and no model writes over them. A governed metric that matches still short-circuits, so a
+   * composed answer can legitimately come back as one lane.
+   */
+  compose: (
+    tenant: string,
+    body: { question: string; execute?: boolean; synthesise?: boolean },
+  ) =>
+    request<ComposedResult>(`/tenants/${tenant}/query/compose`, {
+      method: 'POST',
+      // The API field is `query`, as on /query. Sending `question` is a 422 naming a field the
+      // user never saw.
+      body: JSON.stringify({
+        query: body.question,
+        execute: body.execute ?? true,
+        synthesise: body.synthesise ?? true,
       }),
     }),
 

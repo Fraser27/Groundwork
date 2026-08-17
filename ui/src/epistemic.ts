@@ -11,8 +11,10 @@ import type {
   AccessDecision,
   EpistemicClass,
   IngestState,
+  Lane,
   ResolutionTier,
   ReviewState,
+  RouterLayerKind,
 } from './api'
 
 export interface EpistemicMeta {
@@ -146,6 +148,24 @@ export const HELP = {
     'A metric definition that compiles to SQL deterministically. The same question always produces the same SQL, and no language model is involved in generating it.',
   resolutionTier:
     'Which part of the read path answered the question. The lower the tier, the less of the answer was generated: tier 1 is compiled SQL with no model at all, tier 4 is a model writing SQL against the real schema.',
+  vectorRouter:
+    'How the system decides which parts of itself to search. Your question is compared against short descriptions of this firm’s metrics, entities, tables and documents, and only the parts that came back close to it are searched. It chooses where to look; it never decides what is true, and it cannot let a part answer that your tenant is not permitted to use.',
+  routerLayer:
+    'One place the question could be answered from: the governed metrics, the entities in the graph, the catalogue tables, or the text of your documents. Each is scored separately, because the four hold different kinds of thing and one score across all of them would hide which.',
+  similarity:
+    'How close the wording of your question came to a description of this metric, entity, table or passage. It is a measure of resemblance between two pieces of text, not a probability and not a relevance percentage: 0.61 does not mean 61% likely to be right, and there is no fixed value above which something is relevant. Use it to compare candidates within one question, not across questions.',
+  routerMargin:
+    'How much worse than the best-scoring layer a layer may be and still be searched. At 0.35, a layer scoring within 35% of the best is searched too; anything further behind is left out. Not a relevance threshold, a comparison between layers, because resemblance scores are not comparable between one question and the next. Widen it to search more broadly and pay more latency; narrow it to search only the clearest match.',
+  routerMinSimilarity:
+    'The floor below which a match is not treated as a match at all. It answers one question only, did anything resemble the question, and when the answer is no the system searches everything rather than picking the least bad option. Keep it low: it is a sanity check, not a quality bar.',
+  routerMetricBoost:
+    'A fixed amount added to the governed-metric layer’s score, so a near-tie is resolved towards the deterministic answer. Governed metrics compile to SQL with no model involved, which makes them the better tie-break on principle rather than on score. It cannot promote a metric that matched nothing.',
+  routerDegraded:
+    'The router could not choose, so every permitted tier was run. It happens when nothing resembled the question, or when the search index is unreachable. The answer is not worse for it, but it is a different fact about the system than a router that chose, so it is stated rather than left to look like a choice.',
+  tierForbidden:
+    'This way of answering is switched off for your firm, so it was never tried. It says nothing about whether it would have been relevant, which is why it reads differently from a tier that was tried and scored too low.',
+  ethicalGate:
+    'The last step before you are shown anything: the graph, not a model, decides what may be included. It runs after retrieval and before any summary is written, so nothing the wall refused ever reaches the model. Both halves are recorded, what it refused and what it let through, because a gate that is only visible when it blocks reads as an exception rather than as something everything passed through.',
   ungovernedKillSwitch:
     'Refuses any question that no approved governed metric can answer, rather than falling back to model-generated SQL. Governed metrics keep working. Refused questions are logged and make a good backlog of metrics worth defining.',
   ontologyDomain:
@@ -309,4 +329,64 @@ export const TIERS: Record<ResolutionTier, TierMeta> = {
       'No governed metric matched, so a model wrote SQL against the real schema. The SQL is shown in full and passes the query firewall before running.',
     llm: 'A model wrote this query. Read it before relying on the number.',
   },
+}
+
+// ── The router's layers, and the lanes they turn into ───────────────────────
+
+export interface LayerMeta {
+  label: string
+  colour: string
+  /** What was searched, and what a hit in it is. One sentence. */
+  meaning: string
+  /** What expanding this layer shows. */
+  items: string
+}
+
+/** Mirrors src/query/router_index.py :: ROUTING_KINDS, plus the document-chunk index. */
+export const ROUTER_LAYERS: Record<RouterLayerKind, LayerMeta> = {
+  metric: {
+    label: 'Governed metrics',
+    colour: 'var(--green)',
+    meaning: 'The approved metric definitions this firm has written.',
+    items: 'the metrics that matched, and what each measures',
+  },
+  entity: {
+    label: 'Graph entities',
+    colour: 'var(--epi-declared)',
+    meaning: 'The parties, matters and authorities recorded in the graph.',
+    items: 'the entities that matched, and their type',
+  },
+  table: {
+    label: 'Catalogue tables',
+    colour: 'var(--teal)',
+    meaning: 'Table and column definitions read from the data catalogue. Schemas only.',
+    items: 'the tables that matched, and their columns',
+  },
+  passages: {
+    label: 'Document text',
+    colour: 'var(--purple)',
+    meaning: 'The text of your documents, indexed passage by passage.',
+    items: 'the passages that matched, with the page each came from',
+  },
+}
+
+export interface LaneMeta {
+  label: string
+  colour: string
+  /** What this lane returns, in the terms the diagram uses. */
+  returns: string
+}
+
+/** Mirrors src/query/planner.py :: Lane. The tier each lane corresponds to is in `TIERS`. */
+export const LANES: Record<Lane, LaneMeta> = {
+  metric: { label: 'Governed metric', colour: 'var(--green)', returns: 'rows, and the SQL' },
+  graph: { label: 'Graph', colour: 'var(--epi-declared)', returns: 'facts, each one an assertion' },
+  passages: { label: 'Documents', colour: 'var(--purple)', returns: 'passages, each with its page' },
+  catalog: { label: 'Catalogue', colour: 'var(--teal)', returns: 'table and column definitions' },
+}
+
+export const PART_PROVENANCE_LABEL: Record<string, string> = {
+  deterministic: 'deterministic',
+  verbatim: 'quoted verbatim',
+  inferred: 'a model’s reading',
 }
