@@ -51,9 +51,7 @@ class TestRecursiveExtraction:
         assert result.denied_tables == ["hr.salaries"]
 
     def test_denied_table_inside_a_cte_body(self, firewall):
-        result = firewall.validate(
-            "WITH leak AS (SELECT * FROM hr.salaries) SELECT * FROM leak"
-        )
+        result = firewall.validate("WITH leak AS (SELECT * FROM hr.salaries) SELECT * FROM leak")
         assert not result.allowed
         assert result.denied_tables == ["hr.salaries"]
 
@@ -86,9 +84,7 @@ class TestRecursiveExtraction:
         assert result.denied_tables == ["hr.salaries"]
 
     def test_denied_table_in_a_derived_table(self, firewall):
-        result = firewall.validate(
-            "SELECT * FROM (SELECT * FROM hr.salaries) x"
-        )
+        result = firewall.validate("SELECT * FROM (SELECT * FROM hr.salaries) x")
         assert not result.allowed
 
     def test_every_denied_table_is_reported_not_just_the_first(self, firewall):
@@ -110,9 +106,7 @@ class TestCTEAliases:
 
     def test_cte_exemption_only_covers_unqualified_references(self, firewall):
         """A real table that happens to share a CTE's name is still validated."""
-        result = firewall.validate(
-            "WITH salaries AS (SELECT 1 AS x) SELECT * FROM hr.salaries"
-        )
+        result = firewall.validate("WITH salaries AS (SELECT 1 AS x) SELECT * FROM hr.salaries")
         assert not result.allowed
         assert result.denied_tables == ["hr.salaries"]
 
@@ -277,9 +271,7 @@ class FakeAthena:
         return _ResultsPaginator(
             {
                 "ResultSet": {
-                    "ResultSetMetadata": {
-                        "ColumnInfo": [{"Name": "office"}, {"Name": "total"}]
-                    },
+                    "ResultSetMetadata": {"ColumnInfo": [{"Name": "office"}, {"Name": "total"}]},
                     "Rows": [header, *data],
                 }
             }
@@ -325,17 +317,13 @@ class TestExecutorEnforcement:
     def test_truncation_is_reported_not_hidden(self, firewall):
         """A silently truncated result is a wrong number presented as an answer."""
         client = FakeAthena(rows=[[str(i), str(i)] for i in range(10)])
-        result = executor(client, firewall).execute(
-            "SELECT * FROM legal_ops.invoices", max_rows=3
-        )
+        result = executor(client, firewall).execute("SELECT * FROM legal_ops.invoices", max_rows=3)
         assert result.truncated
         assert result.row_count == 3
 
     def test_an_exact_fit_is_not_flagged_as_truncated(self, firewall):
         client = FakeAthena(rows=[[str(i), str(i)] for i in range(3)])
-        result = executor(client, firewall).execute(
-            "SELECT * FROM legal_ops.invoices", max_rows=3
-        )
+        result = executor(client, firewall).execute("SELECT * FROM legal_ops.invoices", max_rows=3)
         assert not result.truncated
 
     def test_a_failed_query_surfaces_athenas_reason(self, firewall):
@@ -353,3 +341,131 @@ class TestExecutorEnforcement:
         )
         assert result.error_code == "timeout"
         assert client.stopped == ["q-1"]
+
+
+class TestTierOneCanActuallyRun:
+    """A governed metric had never returned a number.
+
+    `MetricMatch.run` logged "no executor wired" and returned None, and nothing anywhere
+    constructed an `AthenaExecutor` -- so for the life of the project tier 1 compiled correct SQL
+    and stopped. The reviewable half worked; the answer half did not exist.
+
+    The executor is injected, so none of this needs AWS.
+    """
+
+    def _match(self, executor=None):
+        from src.metrics.models import MetricDefinition, MetricRegistry, StaticCatalog
+        from src.query.metric_matcher import MetricMatch
+
+        metric = MetricDefinition(
+            metric_id="m1",
+            name="fees_billed",
+            definition="value invoiced",
+            expression="SUM(amount_gbp)",
+            source_table="lexgraph_legal.time_entries",
+        )
+        return MetricMatch(
+            metric=metric,
+            score=4,
+            matched_on=["fees", "billed"],
+            catalog=StaticCatalog(tables={}),
+            registry=MetricRegistry.from_list([metric]),
+            _executor=executor,
+        )
+
+    def test_no_executor_returns_the_sql_unrun(self):
+        """The state this project shipped in. Kept working, because a deployment with no
+        warehouse should still hand back reviewable SQL rather than fail the question."""
+        assert self._match().run("SELECT 1") is None
+
+    def test_an_executor_returns_columns_and_rows(self):
+        class Ran:
+            def execute(self, sql):
+                from src.executors.athena import QueryResult
+
+                return QueryResult(success=True, columns=["total"], rows=[["17010.0"]], row_count=1)
+
+        assert self._match(Ran()).run("SELECT 1") == {
+            "columns": ["total"],
+            "rows": [["17010.0"]],
+        }
+
+    def test_a_failed_query_warns_with_the_reason_rather_than_answering_emptily(self):
+        """A hallucinated column, a missing table, a denied permission -- each names something a
+        reader can go and fix. An empty result would read as "no data", which is the silent
+        failure the whole design exists to avoid."""
+
+        class Failed:
+            def execute(self, sql):
+                from src.executors.athena import QueryResult
+
+                return QueryResult(
+                    success=False,
+                    error="COLUMN_NOT_FOUND: line 1:8: Column 'nope' cannot be resolved",
+                    error_code="query_error",
+                )
+
+        match = self._match(Failed())
+        assert match.run("SELECT nope FROM t") is None
+        assert any("did not run" in w for w in match.warnings)
+        assert any("COLUMN_NOT_FOUND" in w for w in match.warnings)
+
+    def test_a_truncated_result_says_the_total_is_over_a_prefix(self):
+        """A silently truncated aggregate is a wrong number, not a partial one."""
+
+        class Truncated:
+            def execute(self, sql):
+                from src.executors.athena import QueryResult
+
+                return QueryResult(
+                    success=True,
+                    columns=["c"],
+                    rows=[["1"]],
+                    row_count=500,
+                    truncated=True,
+                )
+
+        match = self._match(Truncated())
+        match.run("SELECT 1")
+        assert any("prefix" in w for w in match.warnings)
+
+
+class TestTheExecutorIsBuiltFromConfig:
+    def _services(self, bucket="", tables=("lexgraph_legal.time_entries",)):
+        from src.config import AuthConfig, GraphConfig, LexGraphConfig, StructuredConfig
+
+        cfg = LexGraphConfig(
+            environment="local",
+            auth=AuthConfig(dev_bypass_tenant="demo-firm"),
+            graph=GraphConfig(uri="bolt://127.0.0.1:1", user="n", password="n"),
+        )
+        cfg.structured = StructuredConfig(athena_results_bucket=bucket)
+
+        class Catalog:
+            def tables(self, tenant_id):
+                return [type("T", (), {"full_name": name})() for name in tables]
+
+        return type("S", (), {"config": cfg, "catalog": Catalog()})()
+
+    def test_no_bucket_means_no_executor(self):
+        """Rather than an executor that fails on first use: absent is the honest state for a
+        deployment with no warehouse, and `run` already handles it."""
+        from src.api.deps import build_athena_executor
+
+        assert build_athena_executor(self._services(), "demo-firm") is None
+
+    def test_results_land_under_the_expiring_prefix(self):
+        """`athena-results/` is the prefix the bucket's 14-day lifecycle rule covers. Writing
+        anywhere else in that bucket would either accumulate forever or, worse, sit beside the
+        Iceberg warehouse under a rule meant for disposable output."""
+        from src.api.deps import build_athena_executor
+
+        ex = build_athena_executor(self._services(bucket="b"), "demo-firm")
+        assert ex._config.output_location == "s3://b/athena-results/"
+
+    def test_the_firewall_is_scoped_to_this_tenants_scanned_tables(self):
+        from src.api.deps import build_athena_executor
+
+        ex = build_athena_executor(self._services(bucket="b"), "demo-firm")
+        assert ex._firewall.validate("SELECT count(*) FROM lexgraph_legal.time_entries").allowed
+        assert not ex._firewall.validate("SELECT count(*) FROM other.payroll").allowed

@@ -276,7 +276,50 @@ def build_metric_matcher(services: Services, tenant_id: str) -> MetricMatcher | 
     except Exception as e:
         logger.debug("no schema catalog available: %s", e)
 
-    return MetricMatcher(metrics, StaticCatalog(tables=tables))
+    return MetricMatcher(
+        metrics, StaticCatalog(tables=tables), executor=build_athena_executor(services, tenant_id)
+    )
+
+
+def build_athena_executor(services: Services, tenant_id: str) -> Any | None:
+    """What actually runs a compiled metric, or None when there is nowhere to run it.
+
+    Nothing constructed one for the life of this project, so `MetricMatch.run` logged "no executor
+    wired" and returned None on every call: a governed metric compiled correctly and never returned
+    a figure. Tier 1 has been half a tier.
+
+    The firewall's allowlist is the tenant's own catalogued tables, so a compiled metric naming a
+    table this tenant has not scanned is refused before it reaches Athena. That is defence in
+    depth rather than the primary control -- a metric's SQL is compiled from a definition a human
+    approved, not written by a model -- but it is the same firewall that will check generated SQL,
+    and having it live on the deterministic path first is deliberate.
+    """
+    structured = getattr(services.config, "structured", None)
+    bucket = getattr(structured, "athena_results_bucket", "")
+    if not bucket:
+        return None
+
+    from src.executors.athena import AthenaConfig, AthenaExecutor
+    from src.query.firewall import SQLFirewall
+
+    try:
+        allowed = {t.full_name for t in services.catalog.tables(tenant_id)}
+    except Exception as e:
+        logger.debug("no catalog for the firewall allowlist: %s", e)
+        allowed = set()
+
+    return AthenaExecutor(
+        AthenaConfig(
+            workgroup=getattr(structured, "athena_workgroup", "") or "primary",
+            # Under the prefix the 14-day lifecycle rule covers, so results expire and the Iceberg
+            # warehouse sharing the same bucket does not.
+            output_location=f"s3://{bucket}/athena-results/",
+            # The graph's region rather than a separate setting: one deployment, one region, and a
+            # second knob to keep in step would only ever be wrong.
+            region=getattr(services.config.graph, "region", "") or "",
+        ),
+        SQLFirewall(allowed_tables=allowed),
+    )
 
 
 def build_router_indexer(services: Services) -> Any | None:

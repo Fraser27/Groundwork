@@ -41,6 +41,8 @@ class MetricMatch:
     catalog: SchemaCatalog
     registry: MetricRegistry
     time_grain: str | None = None
+    _executor: Any | None = None
+    """Injected by the matcher. Absent means the SQL is returned unrun."""
 
     warnings: list[str] = field(default_factory=list)
     """Populated by `compile()`. The compiler's governance warnings — fan-out risk,
@@ -59,13 +61,41 @@ class MetricMatch:
         return result.sql
 
     def run(self, sql: str) -> Any:
-        """Execution is the executor's job; tier 1 stops at the SQL.
+        """Run the compiled SQL, or return None when there is no warehouse to run it against.
 
-        Returning None rather than raising keeps `execute=True` honest: the SQL is
-        real and reviewable, there is simply no Athena to run it against locally.
+        None rather than raising keeps `execute=True` honest locally: the SQL is real and
+        reviewable, there is simply nothing to execute it. For most of this project's life that
+        was the *only* path -- no executor was ever constructed -- so a governed metric compiled
+        correctly and never returned a figure.
+
+        A failed query returns its result object rather than None, because "the warehouse refused
+        this" and "there is no warehouse" are different answers and the first one names a
+        column or a permission the reader can go and fix.
         """
-        logger.info("metric %s compiled; no executor wired", self.metric.metric_id)
-        return None
+        if self._executor is None:
+            logger.info("metric %s compiled; no executor wired", self.metric.metric_id)
+            return None
+
+        result = self._executor.execute(sql)
+        if not result.success:
+            logger.warning(
+                "metric %s failed to run (%s): %s",
+                self.metric.metric_id,
+                result.error_code,
+                result.error,
+            )
+            self.warnings.append(
+                f"The metric compiled but the query did not run ({result.error_code}): "
+                f"{result.error}"
+            )
+            return None
+        if result.truncated:
+            # A silently truncated aggregate is a wrong number, not a partial one.
+            self.warnings.append(
+                f"Only the first {result.row_count} rows were returned, so any total below is "
+                "computed over a prefix rather than the whole result."
+            )
+        return {"columns": result.columns, "rows": result.rows}
 
 
 #: Time words in a question, mapped to the grain a metric may be sliced by. Checked
@@ -94,10 +124,14 @@ class MetricMatcher:
         self,
         metrics: list[MetricDefinition],
         catalog: SchemaCatalog,
+        executor: Any | None = None,
     ) -> None:
         self._metrics = metrics
         self._catalog = catalog
         self._registry = MetricRegistry.from_list(metrics)
+        # Optional. Without it a metric still compiles and returns its SQL, which is the
+        # reviewable half; the number is what needs a warehouse to reach.
+        self._executor = executor
 
     @property
     def catalog(self) -> SchemaCatalog:
@@ -170,6 +204,7 @@ class MetricMatcher:
             catalog=self._catalog,
             registry=self._registry,
             time_grain=self._grain_for(metric, terms),
+            _executor=self._executor,
         )
 
     def _grain_for(self, metric: MetricDefinition, terms: list[str]) -> str | None:
