@@ -31,11 +31,11 @@ import FieldHelp from './FieldHelp'
 import { TierBadge } from './Shared'
 import { epiStyle } from '../format'
 
-const TIER_NUMBERS: ResolutionTier[] = [1, 2, 3, 4]
+const TIER_NUMBERS: ResolutionTier[] = [1, 2, 3]
 
 /** A layer's `tier` is nullable: a kind the response names but this build does not map has none. */
-function isTier(n: number | null | undefined): n is ResolutionTier {
-  return n === 1 || n === 2 || n === 3 || n === 4
+function isTier(n: number | null | undefined): n is number {
+  return typeof n === 'number' && n > 0
 }
 
 export default function QueryTrace({
@@ -649,14 +649,8 @@ function LaneCard({
           {lane.sql && (
             <>
               <div className="qtrace-sublabel">
-                {lane.tier === 4 ? 'Generated SQL' : 'Compiled SQL'}
-                <FieldHelp
-                  text={
-                    lane.tier === 4
-                      ? 'Written by a language model against the real schema, then checked by the query firewall.'
-                      : 'Compiled from the governed metric definition. The same definition always produces this query, with no model involved.'
-                  }
-                />
+                Compiled SQL
+                <FieldHelp text="Compiled from the governed metric definition. The same definition always produces this query, with no model involved." />
               </div>
               <pre className="code-block">{lane.sql}</pre>
             </>

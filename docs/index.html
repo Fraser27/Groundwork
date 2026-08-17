@@ -86,7 +86,7 @@ and to keep those categories apart at the moment a question is answered rather t
 report afterwards. LexGraph makes that distinction the primary key of its data model. A fact
 that a string search confirmed is on page 7 is a different kind of object from a model's view
 that one holding undercuts another, and the system will not let them be mistaken for each other.
-Everything else — the review queue, the ethical walls, the trust thresholds, the four-tier read
+Everything else — the review queue, the ethical walls, the trust thresholds, the three-tier read
 path — follows from that one decision.</p>
 </div>
 
@@ -135,11 +135,11 @@ the five invariants the system enforces and why review state is derived rather t
 
 <h2 id="how-a-question-is-answered">How a question is answered</h2>
 
-<p>Questions are resolved by trying four routes in order, most precise first, and the route that
+<p>Questions are resolved by trying three routes in order, most precise first, and the route that
 succeeded is reported back as part of the answer. That is not an implementation detail leaking
-out: "this came from an approved metric" and "a model wrote this SQL" are different claims about
-how much the number can be trusted, and the person reading it is entitled to know which one they
-have.</p>
+out: "this came from an approved metric" and "similarity search chose which passages to read"
+are different claims about how much the answer can be trusted, and the person reading it is
+entitled to know which one they have.</p>
 
 <div class="tier t1">
   <div class="n">1</div>
@@ -163,23 +163,15 @@ have.</p>
   <div class="n">3</div>
   <div>
     <h3>Hybrid</h3>
-    <p>Relevant passages were retrieved by similarity, then expanded along verified
-    relationships out from them.</p>
-    <p class="trust">Sources are cited; the expansion only follows trusted edges.</p>
-  </div>
-</div>
-<div class="tier t4">
-  <div class="n">4</div>
-  <div>
-    <h3>Generated SQL</h3>
-    <p>No approved metric matched, so a model wrote SQL against the real schema. It is checked
-    by a query firewall before running.</p>
-    <p class="trust">Not a governed answer. An administrator can switch this tier off entirely.</p>
+    <p>Relevant passages were retrieved by similarity, expanded along verified relationships out
+    from them, and the data catalogue supplied the definitions of any tables the question named.</p>
+    <p class="trust">Sources are cited; the expansion only follows trusted edges; the catalogue
+    returns column definitions and never rows.</p>
   </div>
 </div>
 
 <p><a href="asking-questions.html">Asking questions</a> explains what each tier means for trust,
-and the kill switch that turns the fourth one off.</p>
+and the kill switch that governs model-written SQL.</p>
 
 <h2 id="what-is-not-built">What is not built yet</h2>
 
@@ -192,8 +184,10 @@ honest about the gaps than to describe an intention as a feature. The significan
 <li><strong>Tier 1 returns SQL but not a result.</strong> The Athena executor is written and
 tested, including the firewall check inside it, but nothing connects it to the metric path, so a
 governed metric compiles to SQL that is never run. This is now the largest gap.</li>
-<li><strong>Tier 4 has no SQL generator wired up</strong>, so in practice it always declines. The
-query firewall it would be checked against does exist and is tested.</li>
+<li><strong>Nothing writes SQL from a question.</strong> Where no approved metric matches, no query
+is generated at all: tier 3 answers from passages, the graph and table definitions. A generator
+belongs inside tier 3, which already holds the catalogue it would need, and is not built. The
+query firewall that would check its output does exist and is tested.</li>
 <li><strong>One task only.</strong> Live ingest progress arrives over a WebSocket served by a
 single process, and ingestion itself runs as a background task inside the API container, so it
 dies with the container. The durable job store makes a failed run retryable, not resumable. The

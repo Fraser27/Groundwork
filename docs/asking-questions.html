@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Asking questions — LexGraph documentation</title>
-<meta name="description" content="The four resolution tiers, what each means for trust, and the ungoverned-query kill switch.">
+<meta name="description" content="The three resolution tiers, what each means for trust, and the ungoverned-query kill switch.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="assets/docs.css">
 <script src="assets/nav.js"></script>
@@ -17,13 +17,13 @@
 
 <p class="eyebrow">Using it</p>
 <h1>Asking questions</h1>
-<p class="lede">A question is tried against four routes, most precise first. Which route answered is
-part of the answer, because "this came from an approved definition" and "a model wrote this query"
-are different claims about how much the number can be trusted.</p>
+<p class="lede">A question is tried against three routes, most precise first. Which route answered is
+part of the answer, because "this came from an approved definition" and "similarity search chose
+what to read" are different claims about how much the answer can be trusted.</p>
 
 <p class="source-ref">src/query/resolver.py</p>
 
-<h2 id="the-four-tiers">The four tiers</h2>
+<h2 id="the-three-tiers">The three tiers</h2>
 
 <p>Each route is attempted in turn and declines if it cannot answer. The first one that can, does,
 and reports itself.</p>
@@ -54,30 +54,27 @@ and reports itself.</p>
   <div class="n">3</div>
   <div>
     <h3>Hybrid</h3>
-    <p>Relevant passages are retrieved by similarity, then the graph is expanded outward from the
-    documents they came from, following only trusted relationships.</p>
+    <p>Relevant passages are retrieved by similarity, the graph is expanded outward from the
+    documents they came from following only trusted relationships, and the data catalogue supplies
+    the definitions of any tables the question resembles.</p>
     <p class="trust"><strong>Trust:</strong> sources are cited, and the expansion cannot pull in facts
-    that fail the trust filters. Less precise than tier 2 because similarity search decides what to
-    look at.</p>
+    that fail the trust filters. The catalogue half returns table and column definitions only, never
+    rows. Less precise than tier 2 because similarity search decides what to look at.</p>
   </div>
 </div>
 
-<div class="tier t4">
-  <div class="n">4</div>
-  <div>
-    <h3>Generated SQL</h3>
-    <p>No approved definition matched, so a model writes SQL against the real schema. It is checked
-    against a query firewall before it runs.</p>
-    <p class="trust"><strong>Trust:</strong> not a governed answer. Treat it as a starting point, read
-    the SQL, and check it before relying on the number. This is the only tier an administrator can
-    switch off.</p>
-  </div>
-</div>
-
-<p>If all four decline, the answer says so plainly rather than producing something: <em>no approved
+<p>If all three decline, the answer says so plainly rather than producing something: <em>no approved
 metric matched and nothing relevant was found in the graph.</em> Rephrasing may help, or the question
 may need a metric definition that does not exist yet. An empty answer that admits it is empty is
 worth considerably more than a plausible one.</p>
+
+<div class="note">
+<div class="note-title">There used to be a fourth</div>
+<p>A fourth route let a model write SQL against the schema. It is retired, and the numbering is not
+reused: the question log is append-only, and answers recorded before the change still name tier 4, so
+a 4 that came to mean something else would misdescribe them. Those rows read as a retired route in the
+interface. Nothing can be answered that way now.</p>
+</div>
 
 <h2 id="tier-2-is-the-point">Why tier 2 is the differentiating one</h2>
 
@@ -104,25 +101,25 @@ Semantics enter at tier 3, where they are labelled as such.</p>
 
 <h2 id="the-kill-switch">The kill switch</h2>
 
-<p>Tier 4 can be switched off per firm. When it is, a question that reaches it is refused rather than
-answered:</p>
+<p>A firm can refuse, in advance, to have a question answered with SQL a model wrote. When the switch
+is on, a question no approved metric can answer is refused rather than answered that way:</p>
 
 <blockquote>This question could not be answered from an approved metric or the knowledge graph, and
 ungoverned queries are switched off. An administrator can review blocked questions in Governance.</blockquote>
 
-<p>The reason only tier 4 has a switch is that it is the only tier where the system is
-<em>guessing at intent</em> rather than executing something a person approved. Tiers 1 through 3
-execute definitions, traversals and retrievals that a human designed. Tier 4 asks a model to invent a
-query, and the model's understanding of the question is the only thing standing between the user and a
-wrong number that looks right.</p>
+<p>Model-written SQL is the one place the system would be <em>guessing at intent</em> rather than
+executing something a person approved. Metrics, traversals and retrievals run definitions and indexes
+a human designed. Asking a model to invent a query makes the model's reading of the question the only
+thing standing between the user and a wrong number that looks right, so it is the one capability with
+its own switch.</p>
 
 <p>Some firms will accept that trade for the coverage. Some will not, particularly during onboarding
 or in a regulated practice area. The switch makes that a policy choice rather than a product choice,
 and the application explains it to administrators this way:</p>
 
-<blockquote>Refuses any question that no approved governed metric can answer, rather than falling back
-to model-generated SQL. Governed metrics keep working. Refused questions are logged and make a good
-backlog of metrics worth defining.</blockquote>
+<blockquote>Governs whether a question no approved metric can answer may be answered with SQL a model
+wrote. On, it is refused instead. Governed metrics keep working: they compile from a definition and never
+depended on a model. Refused questions are logged and make a good backlog of metrics worth defining.</blockquote>
 
 <div class="note">
 <div class="note-title">The refusal log is a backlog</div>
@@ -135,10 +132,9 @@ gets refused, and the list of definitions worth building writes itself in the us
 
 <h2 id="the-firewall">The query firewall</h2>
 
-<p>When tier 4 does run, the SQL a model produces is checked before it is executed. The check parses
-the query into a syntax tree and walks it, extracting every table referenced anywhere — including
-inside joins, common table expressions, subqueries and unions — and validates them against what the
-caller may read.</p>
+<p>Any SQL the system is about to execute is checked first. The check parses the query into a syntax
+tree and walks it, extracting every table referenced anywhere — including inside joins, common table
+expressions, subqueries and unions — and validates them against what the caller may read.</p>
 
 <p>Two properties are worth calling out, because a simpler check misses both:</p>
 
@@ -153,9 +149,12 @@ refused.</li>
 
 <div class="note gap">
 <div class="note-title">Not built yet</div>
-<p>Tier 4 has no SQL generator wired up, so in practice it always declines. The firewall exists and is
-tested; the model-backed generator that would feed it does not. The kill switch, however, is fully
-wired and does refuse — so a firm that turns it on gets the refusal and the audit entry today.</p>
+<p>Nothing generates SQL from a question today. The firewall exists and is tested; the model-backed
+generator it would check does not, and a route that claimed to have one was withdrawn rather than
+left in the documentation. When generation returns it will sit inside tier 3, where the catalogue it
+needs already lives, and it will be checked at the level of the parsed syntax tree before it runs.
+The kill switch is wired ahead of it — a firm that turns it on gets the refusal and the audit entry
+today.</p>
 </div>
 
 <h2 id="governed-metrics">What makes a metric governed</h2>
@@ -241,7 +240,7 @@ check, and an unchecked governed metric is a governed metric in name only.</p>
 <li><strong>the assertions used</strong>, each of which can be opened to its provenance</li>
 <li><strong>the tiers attempted</strong>, so a tier-3 answer visibly shows that tiers 1 and 2
 declined</li>
-<li><strong>warnings</strong>, including the explicit one attached to every tier-4 answer</li>
+<li><strong>warnings</strong>, including anything withheld by an ethical wall</li>
 </ul>
 
 <p>The tier list being visible matters more than it looks. A user who sees that the governed route was

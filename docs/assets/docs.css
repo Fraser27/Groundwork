@@ -408,7 +408,6 @@ dl.glossary dd + dd { margin-top: 6px; font-size: 13px; color: var(--text-faint)
 .tier.t1 .n { color: var(--green); border-color: var(--green); }
 .tier.t2 .n { color: var(--epi-declared); border-color: var(--epi-declared); }
 .tier.t3 .n { color: var(--purple); border-color: var(--purple); }
-.tier.t4 .n { color: var(--orange); border-color: var(--orange); }
 .tier h3 { margin: 0 0 4px; font-size: 15px; }
 .tier p { margin: 0 0 6px; }
 .tier p:last-child { margin-bottom: 0; }

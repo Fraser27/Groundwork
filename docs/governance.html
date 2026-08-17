@@ -133,9 +133,9 @@ importer ever declared governing relationships directly, since those would other
 <h2 id="kill-switches">Kill switches</h2>
 
 <h3><code>block_ungoverned_queries</code> — default off</h3>
-<p>Refuse tier-4 model-generated SQL entirely. Governed metrics and graph traversal keep working. Refusals
-are recorded — the firm, the user, the question, the reason, the time — so an administrator can see what
-people are trying to ask.</p>
+<p>Refuse to answer a question with SQL a model wrote. Governed metrics, graph traversal and passage
+retrieval keep working. Refusals are recorded — the firm, the user, the question, the reason, the time —
+so an administrator can see what people are trying to ask.</p>
 
 <p>Treat that log as a backlog rather than an incident report. A question people keep asking is a governed
 metric waiting to be written. See <a href="asking-questions.html#the-kill-switch">the kill switch</a>.</p>
@@ -165,7 +165,8 @@ correct; the explanation is out of date.</p>
 <table>
 <thead><tr><th>Setting</th><th>Used for</th></tr></thead>
 <tbody>
-<tr><td><code>query_model</code></td><td>Interpreting questions and generating SQL.</td></tr>
+<tr><td><code>query_model</code></td><td>Reserved for the read path. Stored and validated; nothing
+consults it, because nothing on the read path writes a query.</td></tr>
 <tr><td><code>extraction_model</code></td><td>Reading documents and proposing facts.</td></tr>
 <tr><td><code>enrichment_model</code></td><td>Writing descriptions for database tables and columns. A
 smaller, cheaper model is usually enough.</td></tr>

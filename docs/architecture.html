@@ -312,7 +312,9 @@ pages. The test suite runs 1,168 tests and is green.</p>
 <ul>
 <li>No query executor wired to the metric path, so governed metrics compile SQL that is never run.
 The Athena executor itself exists and is tested.</li>
-<li>No model-backed SQL generator, so tier 4 always declines.</li>
+<li>No model-backed SQL generator. Nothing turns a question into SQL, so a question no approved metric
+matches is answered from the graph, the passages and the table definitions, or not at all. A generator
+is planned inside tier 3, checked against the parsed syntax tree before it runs; it is not built.</li>
 <li>No authorisation policies authored.</li>
 <li>Ingestion and live progress events both depend on there being a single task.</li>
 <li>Nothing deployed. The infrastructure has been synthesised and never applied.</li>

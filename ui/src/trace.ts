@@ -18,7 +18,7 @@ import type {
   QueryRows,
   RouterTrace,
 } from './api'
-import { LANES, TIERS } from './epistemic'
+import { LANES } from './epistemic'
 
 /**
  * `answer` is shaped by whichever tier answered, so it is narrowed rather than rendered.
@@ -101,7 +101,8 @@ export function laneCount(lane: TraceLane): number {
   )
 }
 
-const LANE_TIER: Record<Lane, number> = { metric: 1, graph: 2, passages: 3, catalog: 2 }
+/** Fallback only: a part carries its own tier. Catalogue is tier 3, alongside the passages. */
+const LANE_TIER: Record<Lane, number> = { metric: 1, graph: 2, passages: 3, catalog: 3 }
 
 /**
  * The single tier that answered, as lanes.
@@ -125,18 +126,9 @@ export function lanesFromResult(result: QueryResult): TraceLane[] {
     if (facts.length > 0) lanes.push({ ...laneShell('graph'), tier: 3, ran: true, facts })
     return lanes
   }
-  return [
-    {
-      key: 'generated',
-      label: 'Generated SQL',
-      colour: TIERS[4].colour,
-      tier: 4,
-      ran: true,
-      rows,
-      sql: result.sql ?? null,
-      provenance: 'model-written',
-    },
-  ]
+  // A tier this build does not know, which today means a retired one. No lane is claimed for it:
+  // drawing a passage lane would assert that passages were searched, and nothing here knows that.
+  return []
 }
 
 function laneShell(lane: Lane): TraceLane {

@@ -560,7 +560,7 @@ export default function Metrics() {
             <div className="form-group">
               <label>
                 Synonyms
-                <FieldHelp text="Alternative wordings that should match this metric. Adding the words your firm actually uses is what keeps questions on the governed path instead of falling through to generated SQL." />
+                <FieldHelp text="Alternative wordings that should match this metric. Adding the words your firm actually uses is what keeps questions on the deterministic path instead of falling through to the graph and the documents." />
               </label>
               <input
                 value={form.synonyms}

@@ -133,6 +133,8 @@ class GovernanceSettings:
 
     # ── Models ────────────────────────────────────────────────────────────────
     query_model: str = DEFAULT_QUERY_MODEL
+    """Reserved, and read by nothing. Kept rather than deleted because it is the setting a
+    question-to-SQL step would use, and a tenant may already have it set from env."""
 
     ocr_model: str = DEFAULT_OCR_MODEL
     """Vision model that transcribes document pages. Deliberately separate from the
@@ -328,7 +330,11 @@ FIELD_HELP: dict[str, str] = {
         "search keep working, so documents stay findable, but no new relationships are "
         "proposed from them."
     ),
-    "query_model": "The AI model used to interpret questions and generate SQL.",
+    "query_model": (
+        "Reserved. Nothing reads this today: questions are matched by term overlap and by "
+        "similarity, and no SQL is generated from a question, so changing it has no effect. It "
+        "is the setting a future question-to-SQL step would use."
+    ),
     "ocr_model": (
         "The AI model that reads document pages and turns them into text. It also "
         "describes charts, diagrams, signature blocks and handwriting, which plain OCR "

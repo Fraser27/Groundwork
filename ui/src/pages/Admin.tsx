@@ -622,9 +622,9 @@ export default function Admin() {
             <span>Refuse questions no approved metric can answer</span>
           </label>
           <p className="card-note">
-            When on, a question that matches no approved governed metric is refused instead of being
-            answered with model-generated SQL, in the web UI and over the API alike. Governed metrics
-            are unaffected: they compile deterministically and never depended on a model.
+            When on, a question that matches no approved governed metric is refused rather than
+            answered with SQL a model wrote, in the web UI and over the API alike. Governed metrics
+            are unaffected: they compile from a definition and never depended on a model.
           </p>
           <p className="card-note" style={{ marginTop: 9 }}>
             Refused questions are logged. They are the best available backlog of metrics worth
@@ -768,7 +768,8 @@ export default function Admin() {
                 and schemas come back from Glue, so Replay restores everything else on this list. A
                 metric definition was authored in this app and has no upstream source, so deleting
                 it is permanent: the expression, grain, filters, synonyms and approval history are
-                gone, and every question that resolved through it falls back to model-generated SQL.
+                gone, and every question that resolved through it falls through to the graph and the
+                documents, which cannot produce the figure it produced.
                 <label className="checkbox-row" style={{ marginTop: 9 }}>
                   <input
                     type="checkbox"

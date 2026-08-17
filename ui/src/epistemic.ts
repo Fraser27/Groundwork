@@ -147,7 +147,7 @@ export const HELP = {
   governedMetric:
     'A metric definition that compiles to SQL deterministically. The same question always produces the same SQL, and no language model is involved in generating it.',
   resolutionTier:
-    'Which part of the read path answered the question. The lower the tier, the less of the answer was generated: tier 1 is compiled SQL with no model at all, tier 4 is a model writing SQL against the real schema.',
+    'Which part of the read path answered the question. The lower the tier, the less of the answer was generated: tier 1 is SQL compiled from an approved definition with no model at all, tier 2 walks facts already in the graph, tier 3 retrieves passages and the table definitions around them. None of the three lets a model write a query.',
   vectorRouter:
     'How the system decides which parts of itself to search. Your question is compared against short descriptions of this firm’s metrics, entities, tables and documents, and only the parts that came back close to it are searched. It chooses where to look; it never decides what is true, and it cannot let a part answer that your tenant is not permitted to use.',
   routerLayer:
@@ -167,7 +167,7 @@ export const HELP = {
   ethicalGate:
     'The last step before you are shown anything: the graph, not a model, decides what may be included. It runs after retrieval and before any summary is written, so nothing the wall refused ever reaches the model. Both halves are recorded, what it refused and what it let through, because a gate that is only visible when it blocks reads as an exception rather than as something everything passed through.',
   ungovernedKillSwitch:
-    'Refuses any question that no approved governed metric can answer, rather than falling back to model-generated SQL. Governed metrics keep working. Refused questions are logged and make a good backlog of metrics worth defining.',
+    'Governs whether a question no approved metric can answer may be answered with SQL a model wrote. On, it is refused instead. Governed metrics keep working: they compile from a definition and never depended on a model. Refused questions are logged and make a good backlog of metrics worth defining.',
   ontologyDomain:
     'Which vocabulary of entities, relationships and rules this tenant uses. The platform is domain-agnostic; the legal pack is simply the default.',
   graphLayer:
@@ -319,16 +319,29 @@ export const TIERS: Record<ResolutionTier, TierMeta> = {
     label: 'Hybrid',
     colour: 'var(--purple)',
     detail:
-      'A graph traversal supplied the entities and relationships; a governed metric or query supplied the numbers.',
-    llm: 'A model combined the two; both halves are traceable.',
+      'Passages were retrieved, the graph was walked out from them, and the catalogue supplied the definitions of any tables the question named. No SQL is written here.',
+    llm: 'A model combined the parts; each one is traceable to its own source.',
   },
+}
+
+/** Tiers that no longer exist.
+ *
+ * Kept because the question log is append-only: rows recorded before a tier was retired still
+ * name it, and they have to read as history rather than as a rendering fault.
+ */
+export const RETIRED_TIERS: Record<number, TierMeta> = {
   4: {
-    label: 'Generated SQL',
-    colour: 'var(--orange)',
+    label: 'Generated SQL (retired)',
+    colour: 'var(--text-dim)',
     detail:
-      'No governed metric matched, so a model wrote SQL against the real schema. The SQL is shown in full and passes the query firewall before running.',
-    llm: 'A model wrote this query. Read it before relying on the number.',
+      'A route that let a model write SQL against the schema. Retired: no new question can be answered this way, so this can only be an answer given before it was withdrawn.',
+    llm: 'A model wrote this query, and it was never a governed answer.',
   },
+}
+
+export function tierMeta(tier: number): TierMeta | null {
+  if (tier === 1 || tier === 2 || tier === 3) return TIERS[tier]
+  return RETIRED_TIERS[tier] ?? null
 }
 
 // ── The router's layers, and the lanes they turn into ───────────────────────

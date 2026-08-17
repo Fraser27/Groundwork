@@ -452,8 +452,14 @@ export interface Metric {
 
 // ── Query resolution ─────────────────────────────────────────────────────────
 
-/** Which tier of the read path answered. Tier 1 is the only LLM-free one. */
-export type ResolutionTier = 1 | 2 | 3 | 4
+/**
+ * Which tier of the read path answered. Tier 1 is the only one with no model anywhere in it.
+ *
+ * 4 was a retired tier and is deliberately not in the union: nothing can answer that way now.
+ * The question log still holds rows naming it, so anything reading a recorded tier takes a
+ * `number` and goes through `tierMeta`.
+ */
+export type ResolutionTier = 1 | 2 | 3
 
 /**
  * A document span the answer rests on. Only tier 3 sends any.
@@ -552,10 +558,7 @@ export interface RouterLayer {
   kind: RouterLayerKind
   /** The tier a reader thinks of this layer as. `tiers` is authoritative. */
   tier: number | null
-  /**
-   * Every tier this layer justifies running. A catalogued table is two: the graph holds its
-   * schema as declared facts, and tier 4 writes SQL against it.
-   */
+  /** Every tier this layer justifies running. A layer can justify more than one. */
   tiers?: number[]
   score: number
   /** Before the boost, so the trace can show what the boost did rather than only its effect. */
@@ -614,11 +617,11 @@ export interface GateTrace {
 export interface QueryResult {
   tier: ResolutionTier
   tier_name: string
-  /** False only for tier 4, the one that lets a model write the SQL. */
+  /** True for all three tiers today. Read rather than assumed: it is the server's claim, not ours. */
   governed: boolean
   explanation: string
   answer: QueryAnswer
-  /** Present for tiers 1 and 4. Tier 1 SQL is compiled, never generated. */
+  /** Tier 1 only, and compiled from a metric definition rather than generated. */
   sql?: string | null
   citations: QueryCitation[]
   assertions_used: string[]

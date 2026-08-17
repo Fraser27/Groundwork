@@ -18,10 +18,11 @@ import {
   EPISTEMIC,
   EPISTEMIC_ORDER,
   HELP,
+  RETIRED_TIERS,
   REVIEW_STATE_LABEL,
   TIERS,
 } from '../epistemic'
-import type { EpistemicClass, ResolutionTier, ReviewState } from '../api'
+import type { EpistemicClass, ReviewState } from '../api'
 
 interface Term {
   term: string
@@ -371,14 +372,14 @@ export default function Glossary() {
       <section className="card">
         <h2>How a question gets answered</h2>
         <p className="text-dim">
-          Four routes, tried in order from most to least trustworthy. Every answer tells
+          Three routes, tried in order from most to least trustworthy. Every answer tells
           you which one produced it.
         </p>
         <dl className="glossary-list">
-          {(Object.keys(TIERS) as unknown as ResolutionTier[]).map((t) => {
+          {([1, 2, 3] as const).map((t) => {
             const meta = TIERS[t]
             return (
-              <div key={String(t)} className="glossary-item">
+              <div key={t} className="glossary-item">
                 <dt>
                   <span className="tier-chip" style={{ ['--tier' as string]: meta.colour }}>
                     Tier {t}
@@ -392,6 +393,24 @@ export default function Glossary() {
               </div>
             )
           })}
+          {/* Listed, and only listed, because the question log still names it. */}
+          {Object.entries(RETIRED_TIERS).map(([t, meta]) => (
+            <div key={t} className="glossary-item">
+              <dt className="text-dim">
+                <span className="tier-chip" style={{ ['--tier' as string]: meta.colour }}>
+                  Tier {t}
+                </span>{' '}
+                {meta.label}
+              </dt>
+              <dd className="text-dim">
+                {meta.detail}
+                <div className="glossary-why">
+                  It appears in the question log against answers given before it was withdrawn, and
+                  nowhere else.
+                </div>
+              </dd>
+            </div>
+          ))}
         </dl>
       </section>
 

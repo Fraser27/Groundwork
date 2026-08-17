@@ -1,9 +1,9 @@
 /** Small presentational pieces used on more than one page. */
 
 import type { ReactNode } from 'react'
-import type { IngestState, ResolutionTier } from '../api'
+import type { IngestState } from '../api'
 import { INGEST_STATES } from '../api'
-import { INGEST_STEP_HELP, INGEST_STEP_LABEL, TIERS, failureStep, ingestPhase } from '../epistemic'
+import { INGEST_STEP_HELP, INGEST_STEP_LABEL, failureStep, ingestPhase, tierMeta } from '../epistemic'
 import { isPlatformAdmin } from '../auth'
 
 export function Spinner() {
@@ -122,8 +122,10 @@ export function Pipeline({ state }: { state: IngestState }) {
   )
 }
 
-export function TierBadge({ tier }: { tier: ResolutionTier }) {
-  const meta = TIERS[tier]
+/** `number`, not `ResolutionTier`: the question log is append-only and holds retired tiers. */
+export function TierBadge({ tier }: { tier: number }) {
+  const meta = tierMeta(tier)
+  if (meta === null) return <span className="tag tag-neutral">Tier {tier}</span>
   return (
     <span
       className="tag"

@@ -630,7 +630,7 @@ function Questions({
                 <th>Question</th>
                 <th>
                   Answered by
-                  <FieldHelp text="Which tier produced the answer. A governed metric is deterministic; an AI-written query is not, and the distinction is recorded rather than inferred later." />
+                  <FieldHelp text="Which tier produced the answer. A governed metric is deterministic; an AI-written query is not, and the distinction is recorded rather than inferred later. A route marked retired no longer exists: the log is append-only, so an answer given while it did still says so." />
                 </th>
                 <th className="num">Facts used</th>
               </tr>
@@ -684,12 +684,16 @@ function Questions({
   )
 }
 
-/** Plain language for the tier numbers, matching src/query/resolver.py :: Tier. */
+/** Plain language for the tier numbers, matching src/query/resolver.py :: Tier.
+ *
+ * 4 is here and nowhere else in the app: the log is append-only, so rows naming the retired
+ * route still have to read as history rather than as a gap.
+ */
 const TIER_LABEL: Record<number, string> = {
   1: 'approved metric',
   2: 'knowledge graph',
   3: 'passages and graph',
-  4: 'AI-written query',
+  4: 'AI-written query (retired route)',
 }
 
 /** Plain language for the stored action names. */

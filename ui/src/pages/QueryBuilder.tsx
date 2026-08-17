@@ -2,9 +2,9 @@
  * QueryBuilder — ask a question, and see which part of the system answered it.
  *
  * The tier is not a diagnostic detail: it tells the reader how much of the answer
- * was generated. Tier 1 is a compiled metric with no model involved; tier 4 is a
- * model writing SQL. Both are legitimate, and a reader is entitled to know which
- * one they got before relying on the number.
+ * was generated. Tier 1 is a compiled metric with no model involved; tier 3 leans
+ * on similarity to decide what to read. Both are legitimate, and a reader is
+ * entitled to know which one they got before relying on the number.
  */
 
 import { useEffect, useState, type CSSProperties } from 'react'
@@ -19,7 +19,7 @@ import {
   type TenantSettings,
 } from '../api'
 import { getTenantId } from '../auth'
-import { HELP, TIERS } from '../epistemic'
+import { HELP, TIERS, tierMeta } from '../epistemic'
 import { asHits, asPassages, asRows, lanesFromComposed, lanesFromResult } from '../trace'
 import { useProvenance } from '../useProvenance'
 import ConfidenceBar from '../components/ConfidenceBar'
@@ -58,10 +58,6 @@ const EXAMPLES: { q: string; tier: ResolutionTier }[] = [
   {
     q: 'Which open matters have unbilled work and an adverse party we also act for?',
     tier: 3,
-  },
-  {
-    q: 'What is the average number of days between opening a matter and the first invoice?',
-    tier: 4,
   },
 ]
 
@@ -128,13 +124,13 @@ export default function QueryBuilder() {
     }
   }
 
-  const tierMeta = result ? TIERS[result.tier] : null
+  const answerTier = result ? tierMeta(result.tier) : null
   const rows = result ? asRows(result.answer) : null
   const hits = result ? asHits(result.answer) : []
   const passages = result ? asPassages(result.answer) : []
   // `assertions_used` is the recorded audit trail and the thing worth deep-linking; it is
-  // empty for tiers 1 and 4, and the hits are the same ids for 2 and 3, so fall back rather
-  // than lose the action if the field ever arrives absent.
+  // empty for tier 1, and the hits are the same ids for 2 and 3, so fall back rather than
+  // lose the action if the field ever arrives absent.
   const usedIds = result?.assertions_used?.length
     ? result.assertions_used
     : hits.map((h) => h.assertion_id)
@@ -291,23 +287,23 @@ export default function QueryBuilder() {
 
       {running && <Spinner />}
 
-      {result && tierMeta && (
+      {result && answerTier && (
         <>
             <div
               className="tier-banner"
-              style={{ marginTop: 16, '--tier-colour': tierMeta.colour } as CSSProperties}
+              style={{ marginTop: 16, '--tier-colour': answerTier.colour } as CSSProperties}
             >
               <div className="tier-num">{result.tier}</div>
               <div className="tier-text">
                 <h4>
-                  {tierMeta.label}
+                  {answerTier.label}
                   <FieldHelp text={HELP.resolutionTier} />
                   <span className={`tag ${result.governed ? 'tag-green' : 'tag-orange'}`}>
                     {result.governed ? 'governed' : 'ungoverned'}
                   </span>
                 </h4>
                 <p>{result.explanation}</p>
-                <p style={{ color: tierMeta.colour, fontWeight: 550 }}>{tierMeta.llm}</p>
+                <p style={{ color: answerTier.colour, fontWeight: 550 }}>{answerTier.llm}</p>
               </div>
             </div>
 
@@ -470,7 +466,7 @@ export default function QueryBuilder() {
                   <h3>Answer</h3>
                 </div>
                 <div className="answer-block">
-                  Nothing came back. The question reached {tierMeta.label.toLowerCase()}, but no
+                  Nothing came back. The question reached {answerTier.label.toLowerCase()}, but no
                   row, fact or passage cleared the trust floor of {floor.toFixed(2)}.
                   {blocks.length > 0 && (
                     <>
@@ -488,18 +484,10 @@ export default function QueryBuilder() {
               <div className="card">
                 <div className="card-header">
                   <h3>
-                    {result.tier === 4 ? 'Generated SQL' : 'Compiled SQL'}
-                    <FieldHelp
-                      text={
-                        result.tier === 4
-                          ? 'Written by a language model against the real schema, then checked by the query firewall. It is shown in full because you should read it before relying on the figure.'
-                          : 'Compiled from the governed metric definition. Deterministic: the same definition always produces this query, with no model involved.'
-                      }
-                    />
+                    Compiled SQL
+                    <FieldHelp text="Compiled from the governed metric definition. Deterministic: the same definition always produces this query, with no model involved." />
                   </h3>
-                  <span className={`tag ${result.tier === 4 ? 'tag-orange' : 'tag-green'}`}>
-                    {result.tier === 4 ? 'model-written' : 'deterministic'}
-                  </span>
+                  <span className="tag tag-green">deterministic</span>
                 </div>
                 <pre className="code-block">{result.sql}</pre>
               </div>
@@ -508,12 +496,12 @@ export default function QueryBuilder() {
             <div className="card">
               <div className="card-header">
                 <h3>
-                  The four routes
+                  The three routes
                   <FieldHelp text={HELP.resolutionTier} />
                 </h3>
               </div>
               <div className="tier-ladder">
-                {([1, 2, 3, 4] as const).map((t) => (
+                {([1, 2, 3] as const).map((t) => (
                   <div
                     key={t}
                     className={`tier-ladder-row${result.tier === t ? ' active' : ''}`}
