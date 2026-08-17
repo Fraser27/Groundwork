@@ -73,6 +73,11 @@ export default function QueryBuilder() {
   const [composed, setComposed] = useState<ComposedResult | null>(null)
   /** Run every lane instead of stopping at the first tier that can answer. */
   const [everyLane, setEveryLane] = useState(false)
+  /**
+   * Off by default: the parts and their citations are the reviewable answer, and a summary is a
+   * model writing over evidence that already carries its own provenance.
+   */
+  const [summarise, setSummarise] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
   // The matter list and trust floor, not the answer. Asking still works without them.
@@ -106,7 +111,7 @@ export default function QueryBuilder() {
     setOpenProvenance(null)
     try {
       if (everyLane) {
-        setComposed(await api.compose(tenant, { question: q }))
+        setComposed(await api.compose(tenant, { question: q, synthesise: summarise }))
       } else {
         setResult(
           await api.query(tenant, {
@@ -244,6 +249,23 @@ export default function QueryBuilder() {
             </span>
           </span>
         </label>
+
+        {everyLane && (
+          <label className="checkbox-row" style={{ marginLeft: 22, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={summarise}
+              onChange={(e) => setSummarise(e.target.checked)}
+            />
+            <span>
+              Summarise the parts in prose
+              <FieldHelp text="A model reads the parts below and writes a paragraph over them. It sees only what survived the ethical wall, so it cannot reason about a blocked fact even accidentally, and it is told to cite each part rather than merge them. Leaving this off is the reviewable form: every part is already an answer carrying its own provenance, and prose is the one element of the response no citation stands behind." />
+              <span className="dim" style={{ display: 'block', fontSize: 11.5 }}>
+                Adds a model to the response. The parts below are unaffected either way.
+              </span>
+            </span>
+          </label>
+        )}
 
         {asOf && (
           <div className="banner banner-info" style={{ marginBottom: 0 }}>

@@ -24,7 +24,14 @@ import type {
   ResolutionTier,
 } from '../api'
 import { HELP, ROUTER_LAYERS, PART_PROVENANCE_LABEL, TIERS } from '../epistemic'
-import { droppedTiers, isForbidden, laneCount, marginCutoff, type TraceLane } from '../trace'
+import {
+  droppedTiers,
+  isForbidden,
+  laneCount,
+  marginCutoff,
+  routerDecided,
+  type TraceLane,
+} from '../trace'
 import ConfidenceBar from './ConfidenceBar'
 import EpistemicBadge from './EpistemicBadge'
 import FieldHelp from './FieldHelp'
@@ -79,10 +86,17 @@ export default function QueryTrace({
           tag={
             router == null ? null : router.degraded ? (
               <span className="tag tag-orange">degraded</span>
-            ) : router.enabled ? (
-              <span className="tag tag-green">chose</span>
-            ) : (
+            ) : !router.enabled ? (
               <span className="tag tag-neutral">off</span>
+            ) : router.applied === false ? (
+              <span
+                className="tag tag-blue"
+                title="Scored, and recorded rather than acted on: every permitted lane ran."
+              >
+                scored
+              </span>
+            ) : (
+              <span className="tag tag-green">chose</span>
             )
           }
         >
@@ -184,7 +198,11 @@ function routerSummary(router?: RouterTrace | null): string {
   }
   const layers = router.layers ?? []
   const chosen = layers.filter((l) => l.selected).length
-  return `${layers.length} ${layers.length === 1 ? 'layer' : 'layers'} scored, ${chosen} searched.`
+  const noun = layers.length === 1 ? 'layer' : 'layers'
+  if (router.applied === false) {
+    return `${layers.length} ${noun} scored, ${chosen} above the margin. Every permitted lane ran.`
+  }
+  return `${layers.length} ${noun} scored, ${chosen} searched.`
 }
 
 function RouterStep({ router }: { router?: RouterTrace | null }) {
@@ -201,9 +219,22 @@ function RouterStep({ router }: { router?: RouterTrace | null }) {
 
   const layers = router.layers ?? []
   const cutoff = marginCutoff(router)
+  const decided = routerDecided(router)
 
   return (
     <>
+      {!router.degraded && router.applied === false && (
+        <div className="banner banner-info" style={{ marginBottom: 12 }}>
+          <span>
+            <strong>Scored, but not acted on.</strong> This view searches everything the firm
+            permits, so these scores explain where the question resembles the system rather than
+            deciding where it looked. A layer below the margin was still searched, and its results
+            are in step 3.
+            <FieldHelp text={HELP.routerRecorded} />
+          </span>
+        </div>
+      )}
+
       {router.degraded && (
         <div className="banner banner-warn" style={{ marginBottom: 12 }}>
           <span>
@@ -256,9 +287,10 @@ function RouterStep({ router }: { router?: RouterTrace | null }) {
       ) : (
         <div className="qtrace-layers">
           {layers.map((layer) => (
-            // `selected` is not honoured while degraded: every tier ran, so labelling one layer
-            // "searched" and another "not searched" would describe a decision that was not taken.
-            <Layer key={layer.kind} layer={layer} cutoff={cutoff} degraded={router.degraded} />
+            // `selected` is only an outcome when the decision was acted on. Degraded, or recorded
+            // on compose, every tier ran -- so labelling one layer "searched" and another "not
+            // searched" would describe a decision that was never taken.
+            <Layer key={layer.kind} layer={layer} cutoff={cutoff} decided={decided} />
           ))}
         </div>
       )}
@@ -275,11 +307,12 @@ function RouterStep({ router }: { router?: RouterTrace | null }) {
 function Layer({
   layer,
   cutoff,
-  degraded,
+  decided,
 }: {
   layer: RouterLayer
   cutoff: number
-  degraded: boolean
+  /** False when the scores decided nothing: the router degraded, or the caller only recorded it. */
+  decided: boolean
 }) {
   const [open, setOpen] = useState(false)
   const meta = layer.kind in ROUTER_LAYERS ? ROUTER_LAYERS[layer.kind] : null
@@ -287,14 +320,14 @@ function Layer({
 
   return (
     <div
-      className={`qtrace-layer${layer.selected && !degraded ? ' is-selected' : ''}`}
+      className={`qtrace-layer${layer.selected && decided ? ' is-selected' : ''}`}
       style={{ '--layer-colour': meta?.colour ?? 'var(--text-dim)' } as CSSProperties}
     >
       <div className="qtrace-layer-head">
         <span className="qtrace-layer-name">{meta?.label ?? layer.kind}</span>
         {isTier(layer.tier) && <TierBadge tier={layer.tier} />}
-        {degraded ? (
-          <span className="tag tag-orange" title="The router degraded, so this score decided nothing.">
+        {!decided ? (
+          <span className="tag tag-orange" title="This score decided nothing: every tier ran.">
             scored only
           </span>
         ) : (
@@ -376,7 +409,9 @@ function Layer({
 // ── Step 2: which tiers that chose ──────────────────────────────────────────
 
 function tiersSummary(router: RouterTrace | null | undefined, ran: TraceLane[]): string {
-  const selected = router?.tiers_selected ?? []
+  // Only when the decision was acted on. `tiers_selected` on compose is what scored well, not what
+  // ran, and reporting it as "ran" is the bug this whole distinction exists to prevent.
+  const selected = routerDecided(router) ? (router?.tiers_selected ?? []) : []
   if (selected.length > 0) {
     const dropped = droppedTiers(router as RouterTrace)
     const forbidden = dropped.filter((d) => isForbidden(router, d.tier, d.reason)).length
@@ -388,16 +423,37 @@ function tiersSummary(router: RouterTrace | null | undefined, ran: TraceLane[]):
     )
   }
   const tiers = [...new Set(ran.map((l) => l.tier))].filter((t) => t > 0).sort()
-  if (tiers.length === 0) return 'No tier is recorded as having run.'
-  return `Tier ${tiers.join(', ')} ran. Nothing records what was dropped.`
+  const forbidden = (router?.tiers_forbidden ?? []).length
+  if (tiers.length === 0) {
+    return forbidden > 0
+      ? `No tier ran. ${forbidden} ${forbidden === 1 ? 'is' : 'are'} not permitted here.`
+      : 'No tier is recorded as having run.'
+  }
+  const tail = forbidden > 0
+    ? ` ${forbidden} ${forbidden === 1 ? 'tier is' : 'tiers are'} not permitted here.`
+    : router == null
+      ? ' Nothing records what was dropped.'
+      : ''
+  return `Tier ${tiers.join(', ')} ran.${tail}`
 }
 
 function TiersStep({ router, lanes }: { router?: RouterTrace | null; lanes: TraceLane[] }) {
-  const selected = new Set(router?.tiers_selected ?? lanes.filter((l) => l.ran).map((l) => l.tier))
+  // What ran, not what scored well. On compose the router's `tiers_selected` is advice and every
+  // permitted lane ran anyway, so trusting it here would grey out a tier whose results are visible
+  // in the step below.
+  const selected = new Set(
+    routerDecided(router)
+      ? (router?.tiers_selected ?? lanes.filter((l) => l.ran).map((l) => l.tier))
+      : lanes.filter((l) => l.ran).map((l) => l.tier),
+  )
   // Selected is the router's decision; answered is the outcome. A tier can be searched and come
   // back empty, and calling that "searched" without more reads as though it contributed.
   const answered = new Set(lanes.filter((l) => l.ran && laneCount(l) > 0).map((l) => l.tier))
-  const dropped = router ? droppedTiers(router) : []
+  // A low score is only a reason a tier did not run when the decision was acted on. Otherwise the
+  // tier ran regardless and the only real refusals left are the tenant's.
+  const dropped = (router ? droppedTiers(router) : []).filter(
+    (d) => routerDecided(router) || isForbidden(router, d.tier, d.reason),
+  )
   const reasonFor = new Map(dropped.map((d) => [d.tier, d.reason]))
   // A lane the planner skipped is a fifth story: the tier was permitted and chosen, and its
   // collaborator was missing. Kept beside the tier reasons rather than merged into them.

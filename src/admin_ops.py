@@ -63,6 +63,12 @@ class ResetReport:
     jobs_dropped: int = 0
     tables_forgotten: int = 0
     routing_dropped: int = 0
+    routing_reindexed: int = 0
+    """Routing descriptions rebuilt for the metrics that survived. A preserved metric whose
+    description was dropped is still approved and still answers a question that reaches tier 1
+    -- but the router no longer knows it exists, so fewer questions reach tier 1 at all. The
+    reset would silently narrow governance while reporting the metric as preserved."""
+
     metrics_dropped: int = 0
     metrics_preserved: int = 0
     errors: list[str] = field(default_factory=list)
@@ -83,6 +89,7 @@ class ResetReport:
             "jobs_dropped": self.jobs_dropped,
             "tables_forgotten": self.tables_forgotten,
             "routing_dropped": self.routing_dropped,
+            "routing_reindexed": self.routing_reindexed,
             "metrics_dropped": self.metrics_dropped,
             "metrics_preserved": self.metrics_preserved,
             "errors": self.errors,
@@ -200,6 +207,11 @@ def reset_derived(services: Any, ctx: AuthContext, scope: ResetScope | None = No
             report.routing_dropped = services.router_indexer.drop_tenant(ctx.tenant_id)
         except Exception as e:
             report.errors.append(f"routing index: {e}")
+        # Rebuilt for whatever survived, in the same operation. Entities and tables are gone and
+        # come back with Replay and a scan, but a preserved metric is here *now* -- and a metric
+        # that is approved with no routing description is one the router cannot steer toward, so
+        # the reset would narrow governance while reporting the metric as preserved.
+        _reindex_surviving_metrics(services, ctx, report)
 
     if scope.jobs:
         try:
@@ -305,6 +317,35 @@ def replay(services: Any, ctx: AuthContext, *, run_model_extraction: bool = True
         report.documents_found,
     )
     return report
+
+
+def _reindex_surviving_metrics(services: Any, ctx: AuthContext, report: ResetReport) -> None:
+    """Re-describe the metrics that outlived the reset, so the router can still steer to them.
+
+    Reported rather than raised: the reset has already happened, and failing here would leave
+    the caller unsure what was removed. A metric with no description still answers when a
+    question reaches tier 1 -- it is the reaching that degrades, which is why this is loud.
+    """
+    indexer = getattr(services, "router_indexer", None)
+    if indexer is None or services.graph is None:
+        return
+
+    from src.metrics.graph_store import GraphMetricStore
+
+    # The indexer is built before the graph connects, so its metric store may be unset -- the
+    # same reason `build_router_indexer` attaches one per request.
+    if getattr(indexer, "metric_store", None) is None:
+        indexer.metric_store = GraphMetricStore(services.graph)
+    if getattr(indexer, "graph", None) is None:
+        indexer.graph = services.graph
+
+    try:
+        report.routing_reindexed = indexer.reindex_metrics(ctx)
+    except Exception as e:  # noqa: BLE001
+        report.errors.append(
+            f"metrics survived but the router cannot steer to them until Rebuild is run: {e}"
+        )
+        logger.warning("routing reindex after reset failed for %s: %s", ctx.tenant_id, e)
 
 
 def _count_metrics(services: Any, ctx: AuthContext) -> int:

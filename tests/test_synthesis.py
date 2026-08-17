@@ -127,10 +127,22 @@ class TestWhatTheModelIsGiven:
         assert "ONLY the parts" in system
         assert "disagree" in system
 
-    def test_temperature_is_zero_by_default(self):
-        """Two identical questions over identical evidence should not read differently."""
+    def test_temperature_is_omitted_by_default(self):
+        """This test used to assert `== 0.0` and so pinned the bug in place. Sonnet 5 rejects the
+        field outright, so sending it failed every summary the deployment ever attempted while
+        the parts beside it were complete -- the failure looked like a flaky model, not a body
+        the API refuses. Determinism is not what is traded away: the field is gone because the
+        model no longer accepts being asked."""
         bedrock = FakeBedrock()
         Synthesiser(model_id="m", bedrock=bedrock).summarise("q", parts=[_part()])
+        assert "temperature" not in bedrock.request
+
+    def test_temperature_is_sent_when_explicitly_set(self):
+        """Kept settable for an older model that does accept one."""
+        bedrock = FakeBedrock()
+        Synthesiser(model_id="m", bedrock=bedrock, temperature=0.0).summarise(
+            "q", parts=[_part()]
+        )
         assert bedrock.request["temperature"] == 0.0
 
 

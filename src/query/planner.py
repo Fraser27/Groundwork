@@ -41,9 +41,20 @@ from typing import Any
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
 from src.query.blocks import Block, Screen, blocks_for, seeds_from
+from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 from src.query.resolver import Tier
 
 logger = logging.getLogger(__name__)
+
+#: Whether the router may remove a lane from a composed answer, or is only recorded in the trace.
+#:
+#: Recorded. `/query` exists to answer from the first tier that can, and compose exists so a reader
+#: can see everything the system found -- a lane the router quietly dropped would be invisible in
+#: the one place whose entire purpose is visibility, and "the router scored it low" is not a fact
+#: the reader gets to check if the lane never ran. The cost is a round trip on a lane that scored
+#: badly. Flip this to True to trade that completeness for the saved latency; the trace then says
+#: `applied: true` and the UI reads the router's tiers as what ran rather than as advice.
+ROUTER_NARROWS_LANES = False
 
 
 class Lane(str, Enum):
@@ -62,11 +73,30 @@ class Provenance(str, Enum):
     DETERMINISTIC = "deterministic"
     """Compiled SQL or a DECLARED fact. Same inputs, same output, no model."""
 
+    MODEL_SELECTED = "model_selected"
+    """Compiled SQL, but a model chose *which* approved definition to compile.
+
+    A metric no question word matched, reached by similarity to its description. The figure is an
+    exact aggregate over a definition a human approved -- nothing in it is a model's reading, so it
+    is not `INFERRED` -- but the same question worded differently could reach a different metric, so
+    it is not `DETERMINISTIC` either. Folding it into `DETERMINISTIC` would let a fully-governed
+    label rest on a cosine, which is the distinction this enum exists to hold."""
+
     VERBATIM = "verbatim"
     """Text quoted exactly from a document. Retrieval chose it; nothing rewrote it."""
 
     INFERRED = "inferred"
     """A model's reading. Carries a confidence and sits under the review gate."""
+
+
+#: What each provenance is called in `governance_label`, which a lawyer reads. The enum values are
+#: wire identifiers, and "model_selected" is not a phrase to put in front of a client.
+_PROVENANCE_LABEL = {
+    Provenance.DETERMINISTIC: "deterministic",
+    Provenance.MODEL_SELECTED: "deterministic SQL, metric chosen by similarity",
+    Provenance.VERBATIM: "verbatim",
+    Provenance.INFERRED: "inferred",
+}
 
 
 @dataclass
@@ -84,6 +114,10 @@ class Part:
     """None for a deterministic part. A number here means the part is a model's reading, and
     the absence of a number is not the same as certainty about a fuzzy thing."""
 
+    metric_selection: dict[str, Any] | None = None
+    """Metric lane only: which metric, and whether the choice of it was deterministic. The same
+    shape `Resolution.metric_selection` carries, from `metric_matcher.selection_of`."""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "lane": self.lane.value,
@@ -94,6 +128,7 @@ class Part:
             "citations": self.citations,
             "assertion_ids": self.assertion_ids,
             "confidence": self.confidence,
+            "metric_selection": self.metric_selection,
         }
 
 
@@ -107,6 +142,10 @@ class ComposedAnswer:
     lanes_skipped: dict[str, str] = field(default_factory=dict)
     synthesis: str | None = None
     warnings: list[str] = field(default_factory=list)
+
+    router: Any | None = None
+    """Why these lanes and not others. None means no router was wired, which is a different
+    statement from a router that ran and could not choose -- see `RouterDecision.degraded`."""
 
     @property
     def is_fully_deterministic(self) -> bool:
@@ -129,7 +168,7 @@ class ComposedAnswer:
             return "no answer"
         if self.is_fully_deterministic:
             return "governed"
-        kinds = sorted({p.provenance.value for p in self.parts})
+        kinds = sorted({_PROVENANCE_LABEL[p.provenance] for p in self.parts})
         label = " + ".join(kinds)
         return f"{label} + synthesised" if self.synthesis else label
 
@@ -139,6 +178,7 @@ class ComposedAnswer:
             "blocks": [b.to_dict() for b in self.blocks],
             "lanes_run": [lane.value for lane in self.lanes_run],
             "lanes_skipped": self.lanes_skipped,
+            "router": self.router.to_dict() if self.router is not None else None,
             "synthesis": self.synthesis,
             "governance": self.governance_label,
             "fully_deterministic": self.is_fully_deterministic,
@@ -151,6 +191,20 @@ class ComposedAnswer:
                 "dropped."
             ),
         }
+
+
+def _skipped(tier: int, allowed: set[int], decision: Any | None) -> str:
+    """Why a lane did not run. The tenant cap is named first, and named as the cap.
+
+    "Your administrator turned this off" and "this did not look relevant" are different facts, and
+    a lane skipped for the first reason must never be described in the words of the second.
+    """
+    if tier not in allowed:
+        return f"tier {tier} is not permitted for this tenant"
+    reason = (getattr(decision, "dropped", None) or {}).get(str(tier))
+    if reason:
+        return f"the router did not select tier {tier}: {reason}"
+    return f"tier {tier} was not selected by the router"
 
 
 class Planner:
@@ -169,12 +223,16 @@ class Planner:
         vector_search: Any | None = None,
         catalog: Any | None = None,
         synthesiser: Any | None = None,
+        router: Any | None = None,
     ) -> None:
         self._metrics = metric_matcher
         self._graph = graph_reader
         self._vectors = vector_search
         self._catalog = catalog
         self._synthesiser = synthesiser
+        # Optional, and absent means what compose did before it existed: every permitted lane runs
+        # and the trace cannot say why those lanes.
+        self._router = router
 
     def plan(
         self,
@@ -188,49 +246,53 @@ class Planner:
         answer = ComposedAnswer()
         allowed = {int(t) for t in settings.allowed_tiers}
 
+        decision = self._route(ctx, question, settings)
+        answer.router = decision
+        runnable = self._runnable(allowed, decision)
+
         # A governed metric that matches is the whole answer. Fanning out anyway would pay
         # Athena plus Neptune plus OpenSearch latency to add nothing: the metric is exact and
         # the question named it.
-        if 1 in allowed:
-            part = self._metric_part(question, execute=execute)
+        if 1 in runnable:
+            part = self._metric_part(ctx, question, settings, execute=execute)
             if part is not None:
                 answer.parts.append(part)
                 answer.lanes_run.append(Lane.METRIC)
                 return answer
         else:
-            answer.lanes_skipped[Lane.METRIC.value] = "tier 1 is not permitted for this tenant"
+            answer.lanes_skipped[Lane.METRIC.value] = _skipped(1, allowed, decision)
 
         # No metric matched. Traverse for candidates, then retrieve against them.
         seeds: list[str] = []
-        if 2 in allowed:
+        if 2 in runnable:
             graph_part = self._graph_part(ctx, question, settings)
             if graph_part is not None:
                 answer.parts.append(graph_part)
                 answer.lanes_run.append(Lane.GRAPH)
                 seeds = self._seeds_from(graph_part)
         else:
-            answer.lanes_skipped[Lane.GRAPH.value] = "tier 2 is not permitted for this tenant"
+            answer.lanes_skipped[Lane.GRAPH.value] = _skipped(2, allowed, decision)
 
-        if 3 in allowed:
+        if 3 in runnable:
             passage_part = self._passage_part(ctx, question, settings)
             if passage_part is not None:
                 answer.parts.append(passage_part)
                 answer.lanes_run.append(Lane.PASSAGES)
                 seeds.extend(self._seeds_from(passage_part))
         else:
-            answer.lanes_skipped[Lane.PASSAGES.value] = "tier 3 is not permitted for this tenant"
+            answer.lanes_skipped[Lane.PASSAGES.value] = _skipped(3, allowed, decision)
 
         # Gated on tier 3, like the passage lane. It ran with no gate at all, so a tenant who had
         # forbidden every tier still received catalog schema -- a small cap bypass -- and it stamped
         # tier 2 on a part nothing checked against tier 2. Catalog is part of what tier 3 means now:
         # passages, the relationships around them, and the schema of the tables involved.
-        if 3 in allowed:
+        if 3 in runnable:
             catalog_part = self._catalog_part(ctx, question)
             if catalog_part is not None:
                 answer.parts.append(catalog_part)
                 answer.lanes_run.append(Lane.CATALOG)
         else:
-            answer.lanes_skipped[Lane.CATALOG.value] = "tier 3 is not permitted for this tenant"
+            answer.lanes_skipped[Lane.CATALOG.value] = _skipped(3, allowed, decision)
 
         # Grounding. Deterministic, and it runs before synthesis so a model never sees
         # evidence the graph refused.
@@ -252,21 +314,64 @@ class Planner:
             )
         return answer
 
+    # ── Routing ──────────────────────────────────────────────────────────────
+
+    def _route(
+        self, ctx: AuthContext, question: str, settings: GovernanceSettings
+    ) -> Any | None:
+        """The routing decision, or None when there is no router. Never raises."""
+        if self._router is None:
+            return None
+        try:
+            decision = self._router.route(ctx, question, settings)
+        except Exception as e:  # noqa: BLE001
+            # `TierRouter.route` is documented never to raise, so this is the guard against a
+            # future one that does. An optimisation must not be able to fail a question.
+            logger.warning("router failed, composing every permitted lane: %s", e)
+            return None
+        # Whoever consumes a decision declares whether it acted on it. The resolver does; compose
+        # does not, and a trace that did not say so would have the UI report a lane as unsearched
+        # while the lane below it shows its results.
+        decision.applied = ROUTER_NARROWS_LANES
+        return decision
+
+    @staticmethod
+    def _runnable(allowed: set[int], decision: Any | None) -> set[int]:
+        """Which tiers may run. Intersection only -- the router narrows, never widens."""
+        if not ROUTER_NARROWS_LANES or decision is None:
+            return allowed
+        # A degraded decision carries every permitted tier, so this is already a no-op for it.
+        # Intersecting rather than trusting `decision.tiers` keeps the tenant cap authoritative
+        # even if a router ever reports a tier outside it.
+        narrowed = allowed & {int(t) for t in getattr(decision, "tiers", ()) or ()}
+        # Empty means routing would have cost the answer entirely, which it may never do.
+        return narrowed or allowed
+
     # ── Lanes ────────────────────────────────────────────────────────────────
 
-    def _metric_part(self, question: str, *, execute: bool) -> Part | None:
-        if self._metrics is None:
-            return None
-        match = self._metrics.match(question)
+    def _metric_part(
+        self,
+        ctx: AuthContext,
+        question: str,
+        settings: GovernanceSettings,
+        *,
+        execute: bool,
+    ) -> Part | None:
+        # Same call `Resolver._try_metric` makes, with the same two arguments, so a question that
+        # is governed on one endpoint is governed on the other. The two have disagreed before.
+        match = match_metric(self._metrics, question, ctx, settings) if self._metrics else None
         if match is None:
             return None
         sql = match.compile()
         return Part(
             lane=Lane.METRIC,
-            provenance=Provenance.DETERMINISTIC,
+            provenance=Provenance.DETERMINISTIC
+            if chosen_deterministically(match)
+            else Provenance.MODEL_SELECTED,
             tier=Tier.GOVERNED_METRIC,
             content=match.run(sql) if execute else None,
             sql=sql,
+            metric_selection=selection_of(match),
         )
 
     def _graph_part(
@@ -420,8 +525,11 @@ class Planner:
             )
         except Exception as e:
             logger.warning("synthesis failed: %s", e)
+            # The reason travels with the warning. It reached only the log for the life of this
+            # route, so an API body the model refuses outright looked exactly like a flaky
+            # model, and the one detail that identified it took a CloudWatch search to find.
             answer.warnings.append(
-                "The parts below are complete, but writing a summary of them failed."
+                f"The parts below are complete, but writing a summary of them failed: {e}"
             )
             return None
 

@@ -124,7 +124,11 @@ class Synthesiser:
     bedrock: BedrockLike | None = None
     bedrock_factory: Callable[[], BedrockLike] | None = None
     max_tokens: int = MAX_TOKENS
-    temperature: float | None = 0.0
+    temperature: float | None = None
+    """None by default: newer Anthropic models reject `temperature` outright, and Sonnet 5 --
+    the configured default -- answers `ValidationException: temperature is deprecated for this
+    model`, which failed every summary this deployment attempted. `parse.py` already omits it
+    for the same reason. Still settable for an older model that accepts one."""
 
     @property
     def client(self) -> BedrockLike:

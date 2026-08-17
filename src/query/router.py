@@ -8,8 +8,15 @@ maintenance gap silently downgrades governance, which is the wrong direction for
 
 So the question is embedded once and matched against a routing index of the things it could be
 about, and only the layers that scored well are searched. **Recall is what this widens; nothing
-here decides an answer.** A metric still has to be chosen by the deterministic matcher and
-compiled with no model in the path, so the SQL remains exactly as reproducible as before.
+here decides an answer.**
+
+`metric_candidates` is the one place that comes close, and it stops short deliberately: it offers
+metric ids the question resembles, and `MetricMatcher` applies its own floor and margin before any
+may be selected. Selecting a metric that way is *not* deterministic -- embedding the question is a
+model call -- so a match reached through it is labelled `selected_by="router"` everywhere it is
+reported, even though its SQL is still compiled from an approved definition with no model in the
+path. The SQL being reproducible does not make the choice of SQL reproducible, and only the first
+of those was ever the claim.
 
 Three things this module is careful about, in descending order of how much they would cost:
 
@@ -37,6 +44,7 @@ from typing import Any
 
 from src.governance import KNOWN_TIERS, GovernanceSettings
 from src.graph.scope import AuthContext
+from src.query.metric_matcher import MetricCandidate
 from src.query.router_index import KIND_ENTITY, KIND_METRIC, KIND_TABLE
 from src.query.router_scoring import LayerScore, cosine_of, score_layers
 
@@ -110,6 +118,11 @@ class RouterDecision:
 
     degraded: bool = False
     reason: str | None = None
+    applied: bool = True
+    """Whether the caller acted on this decision or only recorded it. The resolver acts on it;
+    compose records it and runs every permitted lane regardless. Without this the trace would say
+    "not searched" beside a lane that is visibly showing its results two steps below."""
+
     enabled: bool = True
     best_score: float = 0.0
     margin: float = 0.0
@@ -120,6 +133,7 @@ class RouterDecision:
         return {
             "enabled": self.enabled,
             "degraded": self.degraded,
+            "applied": self.applied,
             "reason": self.reason,
             "margin": self.margin,
             "min_similarity": self.min_similarity,
@@ -283,6 +297,49 @@ class TierRouter:
             min_similarity=base.min_similarity,
             metric_boost=base.metric_boost,
         )
+
+    def metric_candidates(
+        self, ctx: AuthContext, question: str, *, top_k: int = 5
+    ) -> list[MetricCandidate]:
+        """Metrics the question resembles, best first. Offers; never selects.
+
+        Only the metric layer is searched, so this cannot return an entity name -- which matters
+        because the caller is tier 1 and an entity label is a subject name subject to the matter
+        wall. The wall is still passed to the search, for the same reason `route` does: not
+        queried beats queried and discarded.
+
+        Never raises. A failed candidate search must leave tier 1 exactly as it was without one.
+        """
+        if self._routing is None or self._embedder is None:
+            return []
+
+        from src.query.router_index import routing_index_name
+
+        try:
+            vector = self._embedder.embed_query(question)
+            hits = self._routing.search(
+                routing_index_name(ctx),
+                vector,
+                top_k=top_k,
+                kinds=frozenset({KIND_METRIC}),
+                matter_allowlist=ctx.matter_allowlist,
+                matter_denylist=ctx.matter_denylist,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("router could not search for metric candidates: %s", e)
+            return []
+
+        out = [
+            MetricCandidate(
+                metric_id=hit.record.item_id,
+                similarity=cosine_of(hit.raw_score),
+                label=hit.record.label,
+            )
+            for hit in hits
+            if hit.record.kind == KIND_METRIC and hit.record.item_id
+        ]
+        out.sort(key=lambda c: -c.similarity)
+        return out
 
     def _probe_routing(
         self,

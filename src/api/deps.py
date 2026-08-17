@@ -277,7 +277,13 @@ def build_metric_matcher(services: Services, tenant_id: str) -> MetricMatcher | 
         logger.debug("no schema catalog available: %s", e)
 
     return MetricMatcher(
-        metrics, StaticCatalog(tables=tables), executor=build_athena_executor(services, tenant_id)
+        metrics,
+        StaticCatalog(tables=tables),
+        executor=build_athena_executor(services, tenant_id),
+        # The router again, as a *candidate* source for when no metric word matches the question.
+        # None where there is no vector store, which is keyword-only matching -- the behaviour
+        # before this existed.
+        candidate_source=services.build_tier_router(),
     )
 
 

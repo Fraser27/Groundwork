@@ -173,6 +173,10 @@ async def compose_query(
         # change rather than a release. This was `None` for the life of the route, so compose
         # always answered "no synthesis model is configured": the seam existed with nothing in it.
         synthesiser=_synthesiser_for(services) if body.synthesise else None,
+        # Recorded, not obeyed: `ROUTER_NARROWS_LANES` is False, so every permitted lane still
+        # runs. Compose had no router at all, which meant the one page whose purpose is showing
+        # everything the system found could not say why it looked where it looked.
+        router=services.build_tier_router(),
     )
     answer = planner.plan(
         ctx,

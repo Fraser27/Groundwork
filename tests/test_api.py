@@ -637,6 +637,78 @@ class TestTheQueryEndpointSendsItsBlocks:
         assert set(r.json()["blocks"][0]) == {"subject", "reason", "rule", "matter_id", "contact"}
 
 
+class _EmptyRoutingIndex:
+    """Reachable and empty, which is the degrading case: routing must not cost an answer."""
+
+    def search(self, *a, **kw) -> list:
+        return []
+
+
+def _fake_embedder():
+    """An embedder whose Bedrock call is replaced, so `build_tier_router` returns a real router."""
+    from src.documents.embed import Embedder, InMemoryVectorStore
+
+    embedder = Embedder(InMemoryVectorStore(), model_id="test-model")
+    embedder.embed_query = lambda text: [0.1, 0.2, 0.3]  # type: ignore[method-assign]
+    return embedder
+
+
+class TestTheComposeEndpointSendsItsRoutingTrace:
+    """`ComposedResult.router` is read by the trace diagram on the compose tab.
+
+    Asserted at the HTTP boundary, not on `ComposedAnswer`: the `Planner` took no router at all for
+    the life of this route, so a field the planner now carries is worth something only if the route
+    threads it. A type declaring it is a claim about the response body.
+    """
+
+    def _compose(self, client) -> dict:
+        r = client.post(
+            f"/api/tenants/{TENANT}/query/compose",
+            json={"query": "anything", "synthesise": False},
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    def _routed(self, client) -> dict:
+        services = get_services()
+        previous = (services.embedder, services.routing_index)
+        try:
+            services.embedder = _fake_embedder()
+            services.routing_index = _EmptyRoutingIndex()
+            return self._compose(client)
+        finally:
+            services.embedder, services.routing_index = previous
+
+    def test_the_key_is_always_present(self, client):
+        """Null is a statement -- no router is wired. A missing key is a gap the page cannot tell
+        apart from a backend that is simply older."""
+        assert "router" in self._compose(client)
+
+    def test_a_wired_router_produces_a_trace(self, client):
+        body = self._routed(client)
+        assert body["router"] is not None
+        assert body["router"]["applied"] is False
+
+    def test_the_shape_matches_what_the_ui_reads(self, client):
+        """Every field `RouterTrace` in api.ts declares as non-optional. A key the diagram reads
+        and the API never sends is the recurring crash here: tsc stays clean, the render throws."""
+        trace = self._routed(client)["router"]
+        assert {
+            "enabled",
+            "degraded",
+            "applied",
+            "reason",
+            "margin",
+            "min_similarity",
+            "metric_boost",
+            "best_score",
+            "layers",
+            "tiers_selected",
+            "tiers_dropped",
+            "tiers_forbidden",
+        } <= set(trace)
+
+
 class TestSettingsProjectsWhatThePageCanChange:
     """The Admin page re-reads `/settings` after every save rather than trusting the patch.
 

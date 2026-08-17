@@ -21,6 +21,7 @@ import pytest
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
 from src.query.planner import Lane, Planner, Provenance
+from src.query.router import RouterDecision
 
 TENANT = "demo-firm"
 
@@ -346,6 +347,164 @@ class TestGovernanceLabel:
         answer = Planner().plan(ctx, "q", GovernanceSettings())
         assert answer.governance_label == "no answer"
         assert answer.is_fully_deterministic is False
+
+
+class FakeRouter:
+    """A router that returns whatever decision the test wants, and records that it was asked."""
+
+    def __init__(self, decision: Any = None, fail: bool = False) -> None:
+        self.decision = decision
+        self.fail = fail
+        self.calls: list[str] = []
+
+    def route(self, ctx: AuthContext, question: str, settings: GovernanceSettings) -> Any:
+        self.calls.append(question)
+        if self.fail:
+            raise RuntimeError("router exploded")
+        return self.decision
+
+
+def decision(tiers: list[int], **over: Any) -> RouterDecision:
+    return RouterDecision(tiers=tiers, **over)
+
+
+class TestComposeRecordsWhyItLookedWhereItDid:
+    """The gap this closes: compose ran lanes and its trace could not say why those lanes."""
+
+    def test_the_router_is_asked(self, ctx):
+        router = FakeRouter(decision([1, 2, 3]))
+        Planner(router=router, graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}])).plan(
+            ctx, "who represents northwind", GovernanceSettings()
+        )
+        assert router.calls == ["who represents northwind"]
+
+    def test_the_decision_reaches_the_response_body(self, ctx):
+        """`ComposedResult.router` is what the trace diagram reads. Compose sent no such field, so
+        step 1 said no routing trace was recorded -- honest, and the wrong answer."""
+        router = FakeRouter(decision([2], best_score=0.71))
+        answer = Planner(router=router, graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}])).plan(
+            ctx, "q", GovernanceSettings()
+        )
+
+        body = answer.to_dict()
+        assert body["router"] is not None
+        assert body["router"]["tiers_selected"] == [2]
+
+    def test_no_router_still_sends_the_field_as_null(self, ctx):
+        """The UI reads `router` on every response. A missing key and a null are the same to it,
+        but the key existing is what makes "no router" a statement rather than a gap."""
+        answer = Planner(graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}])).plan(
+            ctx, "q", GovernanceSettings()
+        )
+        assert answer.to_dict()["router"] is None
+
+    def test_the_trace_says_the_decision_was_not_acted_on(self, ctx):
+        """Without this the diagram labels a tier "not selected" while the step below it shows what
+        that tier returned -- the page contradicting the system it is describing."""
+        router = FakeRouter(decision([1], dropped={"2": "entity: scored 0.11"}))
+        answer = Planner(router=router, graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}])).plan(
+            ctx, "q", GovernanceSettings()
+        )
+        assert answer.to_dict()["router"]["applied"] is False
+
+
+class TestRoutingNeverNarrowsCompose:
+    """Compose exists so a reader can see everything the system found. A lane dropped on a score
+    would be invisible in the one view whose purpose is visibility."""
+
+    def test_a_lane_the_router_did_not_select_still_runs(self, ctx):
+        graph, vectors = (
+            FakeGraph(hits=[{"assertion_id": "a1"}]),
+            FakeVectors([{"document_id": "d1"}]),
+        )
+        router = FakeRouter(decision([2], dropped={"3": "passages: scored 0.09"}))
+        answer = Planner(router=router, graph_reader=graph, vector_search=vectors).plan(
+            ctx, "q", GovernanceSettings()
+        )
+
+        assert vectors.searched is True
+        assert Lane.PASSAGES in answer.lanes_run
+
+    def test_a_metric_still_short_circuits_when_the_router_dropped_tier_1(self, ctx):
+        matcher = FakeMatcher()
+        router = FakeRouter(decision([3], dropped={"1": "metric: scored 0.10"}))
+        answer = Planner(router=router, metric_matcher=matcher, graph_reader=FakeGraph()).plan(
+            ctx, "fees billed", GovernanceSettings()
+        )
+        assert [p.lane for p in answer.parts] == [Lane.METRIC]
+
+    def test_a_router_that_selects_nothing_costs_no_lane(self, ctx):
+        """The precedent for getting this wrong is real, and an optimisation that can refuse to
+        answer is a liability."""
+        vectors = FakeVectors([{"document_id": "d1"}])
+        router = FakeRouter(decision([], degraded=True, reason="nothing resembled the question"))
+        answer = Planner(
+            router=router, graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]),
+            vector_search=vectors,
+        ).plan(ctx, "q", GovernanceSettings())
+
+        assert {p.lane for p in answer.parts} == {Lane.GRAPH, Lane.PASSAGES}
+
+    def test_a_router_that_raises_costs_no_lane(self, ctx):
+        """`TierRouter.route` is documented never to raise. This is the guard against a future one
+        that does, because a 500 from an optimisation is the worst outcome available."""
+        vectors = FakeVectors([{"document_id": "d1"}])
+        answer = Planner(router=FakeRouter(fail=True), vector_search=vectors).plan(
+            ctx, "q", GovernanceSettings()
+        )
+
+        assert Lane.PASSAGES in answer.lanes_run
+        assert answer.to_dict()["router"] is None
+
+
+class TestTheRouterCannotWidenTheTenantCap:
+    """The router narrows; it must never expand. Compose gates on `allowed_tiers`, and a router
+    reporting a tier outside the cap must not be the thing that lets it run."""
+
+    def test_a_forbidden_tier_the_router_selected_is_still_not_queried(self, ctx):
+        vectors = FakeVectors([{"document_id": "d1"}])
+        router = FakeRouter(decision([1, 2, 3]))
+        answer = Planner(
+            router=router, metric_matcher=FakeMatcher(matches=False), vector_search=vectors
+        ).plan(ctx, "q", GovernanceSettings(allowed_tiers=frozenset({1})))
+
+        assert vectors.searched is False
+        assert Lane.PASSAGES.value in answer.lanes_skipped
+
+    def test_an_empty_cap_runs_nothing_however_the_router_scored(self, ctx):
+        graph, vectors = FakeGraph(hits=[{"assertion_id": "a1"}]), FakeVectors([{"document_id": "d"}])
+        matcher = FakeMatcher()
+
+        class Catalog:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def tables(self, tenant_id: str) -> list[Any]:
+                self.calls += 1
+                return []
+
+        catalog = Catalog()
+        answer = Planner(
+            router=FakeRouter(decision([1, 2, 3])),
+            metric_matcher=matcher,
+            graph_reader=graph,
+            vector_search=vectors,
+            catalog=catalog,
+        ).plan(ctx, "q", GovernanceSettings(allowed_tiers=frozenset()))
+
+        assert answer.parts == []
+        assert (graph.searched, vectors.searched, catalog.calls) == (False, False, 0)
+
+    def test_a_capped_lane_is_named_as_the_cap_not_as_a_low_score(self, ctx):
+        """"Your administrator turned this off" and "this did not look relevant" are different
+        facts, and a UI that cannot tell them apart tells the user to rephrase a question no
+        rephrasing will help."""
+        router = FakeRouter(decision([2, 3], dropped={"1": "tier 1 is not permitted for this tenant"}))
+        answer = Planner(
+            router=router, metric_matcher=FakeMatcher(), graph_reader=FakeGraph()
+        ).plan(ctx, "q", GovernanceSettings(allowed_tiers=frozenset({2, 3})))
+
+        assert answer.lanes_skipped[Lane.METRIC.value] == "tier 1 is not permitted for this tenant"
 
 
 class TestCitations:

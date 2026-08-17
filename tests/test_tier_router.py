@@ -351,6 +351,15 @@ class TestTheTrace:
 
         assert len(decision.items.get(KIND_ENTITY, [])) <= TRACE_ITEMS
 
+    def test_a_decision_is_acted_on_unless_a_caller_says_otherwise(self):
+        """`/query` obeys the decision and compose only records it, so the trace has to carry which
+        of the two happened -- otherwise the diagram labels a tier "not selected" beside the
+        results that tier returned. Defaulting to True keeps `/query` exactly as it was."""
+        routing = FakeRoutingIndex({KIND_ENTITY: STRONG})
+        body = router(routing).route(ctx(), "anything", settings()).to_dict()
+
+        assert body["applied"] is True
+
     def test_similarity_is_reported_as_a_cosine_not_a_raw_score(self):
         """An admin reading 0.83 where the cosine is 0.80 would tune against the wrong number."""
         routing = FakeRoutingIndex({KIND_ENTITY: STRONG})

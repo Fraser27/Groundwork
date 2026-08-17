@@ -34,6 +34,7 @@ from typing import Any
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
 from src.query.blocks import Block, Screen, blocks_for, seeds_from
+from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +95,25 @@ class Resolution:
     populates it yet -- SQL generation lands in tier 3 in a later stage -- so `is_governed` has a
     single definition from the start rather than being rewritten when the generator arrives."""
 
+    metric_selection: dict[str, Any] | None = None
+    """Tier 1 only: how the metric was chosen, and whether that choice was deterministic.
+
+    Separate from `is_governed`, which asks who *wrote* the answer. A metric reached by similarity
+    was still compiled from a definition a human approved, so nothing about the SQL is a model's --
+    but the choice of which approved metric to compile was, and a reader gating on reproducibility
+    needs that fact in the response rather than in a log line."""
+
     @property
     def explanation(self) -> str:
+        if self.tier is Tier.GOVERNED_METRIC and not self.selected_deterministically:
+            # The stock tier-1 wording promises the same answer every time, which is true of the
+            # SQL and not of which metric was picked. One sentence per claim.
+            return (
+                "Answered from an approved metric definition. The SQL was compiled from that "
+                "definition with no AI involved, but no approved metric shared a word with the "
+                "question, so which metric to use was chosen by similarity -- a differently "
+                "worded question could reach a different metric."
+            )
         return TIER_EXPLANATION[self.tier]
 
     @property
@@ -106,14 +124,29 @@ class Resolution:
         `tier is not LLM_SQL`, which was equivalent while exactly one tier could involve a
         model -- but tier 3 will gain SQL generation, so a tier number stops being a proxy for
         governance and a per-answer check is the only one that stays true.
+
+        A metric selected by similarity is still governed by this test, and deliberately: its SQL
+        came from an approved definition with no model in the path. What a model did was *choose*
+        between approved definitions, which is a different and weaker claim -- so it is reported in
+        `metric_selection` rather than folded in here, where it would either overstate that choice
+        as reproducible or understate the SQL as model-written.
         """
         return self.generated_sql is None
+
+    @property
+    def selected_deterministically(self) -> bool:
+        """Whether the same question would reach the same tier-1 metric with no model involved."""
+        if self.metric_selection is None:
+            return True
+        return bool(self.metric_selection.get("deterministic"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "tier": int(self.tier),
             "tier_name": self.tier.name,
             "governed": self.is_governed,
+            "deterministic_selection": self.selected_deterministically,
+            "metric_selection": self.metric_selection,
             "explanation": self.explanation,
             "answer": self.answer,
             "sql": self.sql,
@@ -352,22 +385,42 @@ class Resolver:
         execute: bool,
     ) -> Resolution | None:
         if tier is Tier.GOVERNED_METRIC:
-            return self._try_metric(ctx, question, execute=execute)
+            return self._try_metric(ctx, question, settings, execute=execute)
         if tier is Tier.GRAPH_TRAVERSAL:
             return self._try_graph(ctx, question, settings)
         return self._try_hybrid(ctx, question, settings)
 
-    def _try_metric(self, ctx: AuthContext, question: str, *, execute: bool) -> Resolution | None:
+    def _try_metric(
+        self,
+        ctx: AuthContext,
+        question: str,
+        settings: GovernanceSettings,
+        *,
+        execute: bool,
+    ) -> Resolution | None:
         if self._metrics is None:
             return None
-        match = self._metrics.match(question)
+        # `ctx` and `settings` reach the matcher so it can fall back to routing candidates when no
+        # metric word matched. `Planner._metric_part` passes the same two, because a question being
+        # governed must not depend on which endpoint asked.
+        match = match_metric(self._metrics, question, ctx, settings)
         if match is None:
             return None
         sql = match.compile()
         # `execute=False` returns the SQL for review without running it — the point
         # of a governed metric is that a human can read what it will do.
         answer = match.run(sql) if execute else None
-        return Resolution(tier=Tier.GOVERNED_METRIC, answer=answer, sql=sql)
+        return Resolution(
+            tier=Tier.GOVERNED_METRIC,
+            answer=answer,
+            sql=sql,
+            metric_selection=selection_of(match),
+            # A warning rather than only a field, because a caller reading the number needs to be
+            # told the choice was a model's without going looking for it.
+            warnings=[]
+            if chosen_deterministically(match)
+            else [getattr(match, "selection_note", "")],
+        )
 
     def _try_graph(
         self, ctx: AuthContext, question: str, settings: GovernanceSettings

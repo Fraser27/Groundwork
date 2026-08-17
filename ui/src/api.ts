@@ -594,6 +594,15 @@ export interface RouterLayer {
 export interface RouterTrace {
   enabled: boolean
   degraded: boolean
+  /**
+   * Whether the caller acted on this decision or only recorded it.
+   *
+   * False on `/query/compose`, which runs every permitted lane whatever the scores say — so the
+   * step must not label a tier "not selected" while the step below it shows what that tier
+   * returned. Optional because an older response omits it; absent reads as true, which is what
+   * `/query` has always done.
+   */
+  applied?: boolean
   reason?: string | null
   margin: number
   min_similarity: number
@@ -630,6 +639,17 @@ export interface QueryResult {
   tier_name: string
   /** True for all three tiers today. Read rather than assumed: it is the server's claim, not ours. */
   governed: boolean
+  /**
+   * Whether the same question would reach the same answer with no model involved.
+   *
+   * A narrower claim than `governed`, and it can be false while that is true: a tier-1 metric no
+   * question word matched was chosen by similarity, so the SQL is still compiled from an approved
+   * definition while the choice of definition is not reproducible. Optional because an older
+   * response omits it; absent reads as true, which is what tier 1 always was.
+   */
+  deterministic_selection?: boolean
+  /** Tier 1 only. Which metric, and how it was reached. */
+  metric_selection?: MetricSelection | null
   explanation: string
   answer: QueryAnswer
   /** Tier 1 only, and compiled from a metric definition rather than generated. */
@@ -652,8 +672,24 @@ export interface QueryResult {
 export type Lane = 'metric' | 'graph' | 'passages' | 'catalog'
 
 /** How much of a part a model wrote. Separate from the lane: retrieval can be fuzzy and the
- *  text it returned still exact. Mirrors planner.py :: Provenance. */
-export type PartProvenance = 'deterministic' | 'verbatim' | 'inferred'
+ *  text it returned still exact. Mirrors planner.py :: Provenance.
+ *
+ *  `model_selected` is a compiled metric whose *definition* a model chose — no question word
+ *  matched, so similarity picked between approved metrics. The figure is exact; which figure was
+ *  computed is not reproducible, which is why it is neither 'deterministic' nor 'inferred'. */
+export type PartProvenance = 'deterministic' | 'model_selected' | 'verbatim' | 'inferred'
+
+/** How tier 1 reached its metric. Mirrors metric_matcher.py :: selection_of. */
+export interface MetricSelection {
+  metric_id: string
+  selected_by: 'keyword' | 'router'
+  /** False means an embedding narrowed the choice, so the same question worded differently could
+   *  reach a different metric. The SQL is compiled from the approved definition either way. */
+  deterministic: boolean
+  similarity?: number | null
+  matched_on?: string[]
+  note?: string
+}
 
 /** Schema the catalog lane offered. Columns only — rows never leave the warehouse. */
 export interface CatalogSchemaRef {
@@ -679,6 +715,8 @@ export interface AnswerPart {
   citations?: QueryCitation[]
   assertion_ids?: string[]
   confidence?: number | null
+  /** Metric lane only. */
+  metric_selection?: MetricSelection | null
 }
 
 export interface ComposedResult {

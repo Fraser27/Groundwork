@@ -197,6 +197,18 @@ export function isForbidden(router: RouterTrace | null | undefined, tier: number
   return /not permitted|not allowed|not enabled|forbidden|disabled for/i.test(reason)
 }
 
+/**
+ * Whether the router's scores decided anything, or were only recorded.
+ *
+ * Two ways they decide nothing and they are not the same story: `degraded` is the router failing
+ * to choose, `applied: false` is the caller choosing not to act on a decision it did get. Compose
+ * is the second — it runs every permitted lane on purpose. Either way `selected` on a layer is a
+ * score, not an outcome, and the diagram must not render it as one.
+ */
+export function routerDecided(router: RouterTrace | null | undefined): boolean {
+  return router != null && !router.degraded && router.applied !== false
+}
+
 /** The score a layer had to reach to stay within the margin of the best one. */
 export function marginCutoff(router: RouterTrace): number {
   const best = router.best_score ?? 0

@@ -162,6 +162,8 @@ export const HELP = {
     'A fixed amount added to the governed-metric layer’s score, so a near-tie is resolved towards the deterministic answer. Governed metrics compile to SQL with no model involved, which makes them the better tie-break on principle rather than on score. It cannot promote a metric that matched nothing.',
   routerDegraded:
     'The router could not choose, so every permitted tier was run. It happens when nothing resembled the question, or when the search index is unreachable. The answer is not worse for it, but it is a different fact about the system than a router that chose, so it is stated rather than left to look like a choice.',
+  routerRecorded:
+    'The router scored the question but did not narrow anything. This view exists so you can see everything the firm’s data holds on a question, so it searches every permitted source and reports each separately; narrowing it would hide a source on the strength of a score you could then no longer check. The scores are still worth reading: they say where your wording resembles the system, which is often why one source came back richer than another.',
   tierForbidden:
     'This way of answering is switched off for your firm, so it was never tried. It says nothing about whether it would have been relevant, which is why it reads differently from a tier that was tried and scored too low.',
   ethicalGate:
@@ -418,6 +420,10 @@ export const LANES: Record<Lane, LaneMeta> = {
 
 export const PART_PROVENANCE_LABEL: Record<string, string> = {
   deterministic: 'deterministic',
+  // Not 'deterministic'. The figure is an exact aggregate over an approved definition, but no
+  // question word matched it, so similarity chose which definition — and a tag reading
+  // deterministic would rest a keyword match's guarantee on a cosine.
+  model_selected: 'exact figure, metric chosen by similarity',
   verbatim: 'quoted verbatim',
   inferred: 'a model’s reading',
 }
