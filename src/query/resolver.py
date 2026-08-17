@@ -1,18 +1,20 @@
 """Tiered query resolution.
 
-Four tiers, tried most-precise-first, each falling through on a miss:
+Three tiers, tried most-precise-first, each falling through on a miss:
 
 1. **Governed metric** — YAML compiled to SQL. Deterministic, no model involved.
 2. **Graph traversal** — openCypher over assertions that pass `scope.edge_scope`.
-3. **Hybrid** — vector retrieval, then expansion along verified edges.
-4. **LLM SQL** — ad-hoc, firewalled, and refusable by the kill switch.
+3. **Hybrid** — vector retrieval, expansion along verified edges, and the catalogued
+   schema of the tables involved.
 
 The tier is part of the answer, not an implementation detail. "This came from an
-approved metric" and "an LLM wrote this SQL" are different claims about
+approved metric" and "a model read this out of a document" are different claims about
 trustworthiness, and the caller is entitled to know which one they are getting.
 
-Tier 4 is the only tier that can be switched off, because it is the only one where
-the system is guessing at intent rather than executing something a human approved.
+There was a fourth tier where a model wrote SQL. It was never implemented -- the generator was
+`None` at its only construction site -- so the system documented a capability it did not have,
+which is the wrong direction for a governance claim to be wrong in. SQL generation returns
+inside tier 3, where the catalogued schema it needs already lives.
 
 Whatever a tier returns is then screened by `src.query.blocks`, the same veto the planner
 applies. Matter scoping already runs inside the reader, so this is defence in depth — but the
@@ -25,7 +27,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC
+from datetime import UTC, datetime
 from enum import IntEnum
 from typing import Any
 
@@ -40,7 +42,15 @@ class Tier(IntEnum):
     GOVERNED_METRIC = 1
     GRAPH_TRAVERSAL = 2
     HYBRID = 3
-    LLM_SQL = 4
+
+    # 4 was LLM_SQL, and it is retired rather than reused. Renumbering would make the
+    # append-only question log lie: rows already recorded `tier: 4`, and a 4 that came to mean
+    # something else would misdescribe every answer given before the change. A gap in a sequence
+    # is a smaller cost than a log that cannot be read literally.
+    #
+    # It was also never implemented -- the generator was `None` at its only construction site --
+    # so the tier documented a capability the system did not have. SQL generation returns inside
+    # tier 3, where the catalog it needs already lives.
 
 
 TIER_EXPLANATION = {
@@ -53,13 +63,8 @@ TIER_EXPLANATION = {
         "above the confidence floor, and approved where approval was required, were used."
     ),
     Tier.HYBRID: (
-        "Answered by finding relevant passages and then following verified relationships "
-        "out from them. Sources are cited."
-    ),
-    Tier.LLM_SQL: (
-        "No approved metric matched, so an AI model wrote the SQL. It was checked against "
-        "the query firewall before running, but it is not a governed answer, treat it as "
-        "a starting point."
+        "Answered by finding relevant passages, following verified relationships out from "
+        "them, and reading the catalogued schema of the tables involved. Sources are cited."
     ),
 }
 
@@ -84,13 +89,25 @@ class Resolution:
     router: Any | None = None
     """How the tiers were chosen, when a router chose them. None means they were tried in order."""
 
+    generated_sql: Any | None = None
+    """Set when a model wrote the query, which is what makes an answer ungoverned. Nothing
+    populates it yet -- SQL generation lands in tier 3 in a later stage -- so `is_governed` has a
+    single definition from the start rather than being rewritten when the generator arrives."""
+
     @property
     def explanation(self) -> str:
         return TIER_EXPLANATION[self.tier]
 
     @property
     def is_governed(self) -> bool:
-        return self.tier is not Tier.LLM_SQL
+        """Whether a model wrote any part of the answer.
+
+        Judged on what contributed rather than on which tier answered. It used to be
+        `tier is not LLM_SQL`, which was equivalent while exactly one tier could involve a
+        model -- but tier 3 will gain SQL generation, so a tier number stops being a proxy for
+        governance and a per-answer check is the only one that stays true.
+        """
+        return self.generated_sql is None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -127,8 +144,9 @@ class BlockedQuery:
 def _evidence(answer: Any) -> list[Any]:
     """The id-bearing rows in an answer, whatever shape the tier gave it.
 
-    Tier 2 answers with a list of hits and tier 3 with `{passages, related}`. Tier 4 answers
-    with Athena columns and rows, which carry no ids at all and so cannot be screened row-wise.
+    Tier 2 answers with a list of hits and tier 3 with `{passages, related}`. Athena columns and
+    rows carry no ids at all and so cannot be screened row-wise, which is why a tier that
+    executes SQL needs its safety from somewhere other than this veto.
     """
     if isinstance(answer, list):
         return answer
@@ -252,6 +270,21 @@ class Resolver:
                 result.router = decision
                 return self._screened(ctx, result, settings)
 
+        # A question no tier could answer is a governed metric waiting to be written, so it is
+        # recorded for an administrator to read. This used to happen only when the kill switch
+        # refused it, which meant the backlog was empty for every tenant that had the switch off
+        # -- the majority, and the ones most likely to need a new metric.
+        self.blocked.append(
+            BlockedQuery(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                question=question,
+                reason="no tier could answer this question",
+                at=datetime.now(UTC).isoformat(),
+            )
+        )
+        logger.info("no tier answered for %s: %s", ctx.tenant_id, question)
+
         # Screened even though nothing matched. "Nothing found" while a wall is in force is the
         # exact shape of the harm: a conflict check reads as clean when it is only incomplete.
         return self._screened(
@@ -322,9 +355,7 @@ class Resolver:
             return self._try_metric(ctx, question, execute=execute)
         if tier is Tier.GRAPH_TRAVERSAL:
             return self._try_graph(ctx, question, settings)
-        if tier is Tier.HYBRID:
-            return self._try_hybrid(ctx, question, settings)
-        return self._try_llm_sql(ctx, question, settings, execute=execute)
+        return self._try_hybrid(ctx, question, settings)
 
     def _try_metric(self, ctx: AuthContext, question: str, *, execute: bool) -> Resolution | None:
         if self._metrics is None:
@@ -387,52 +418,4 @@ class Resolver:
                 for p in passages
             ],
             assertions_used=[e["assertion_id"] for e in expanded if "assertion_id" in e],
-        )
-
-    def _try_llm_sql(
-        self,
-        ctx: AuthContext,
-        question: str,
-        settings: GovernanceSettings,
-        *,
-        execute: bool,
-    ) -> Resolution | None:
-        if settings.block_ungoverned_queries:
-            from datetime import datetime
-
-            reason = "ungoverned queries are disabled for this tenant"
-            self.blocked.append(
-                BlockedQuery(
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
-                    question=question,
-                    reason=reason,
-                    at=datetime.now(UTC).isoformat(),
-                )
-            )
-            logger.info("blocked ungoverned query for %s: %s", ctx.tenant_id, question)
-            raise QueryBlocked(
-                "This question could not be answered from an approved metric or the "
-                "knowledge graph, and ungoverned queries are switched off. An "
-                "administrator can review blocked questions in Governance."
-            )
-
-        if self._sql_gen is None:
-            return None
-
-        sql = self._sql_gen.generate(question)
-        if self._firewall is not None:
-            self._firewall.validate(sql)
-
-        answer = self._sql_gen.run(sql) if execute else None
-        return Resolution(
-            tier=Tier.LLM_SQL,
-            answer=answer,
-            sql=sql,
-            warnings=[
-                (
-                    "This SQL was written by an AI model, not compiled from an approved "
-                    "metric. Check it before relying on the result."
-                )
-            ],
         )

@@ -51,13 +51,13 @@ KIND_PASSAGES = "passages"
 
 #: Which tiers a layer justifies running.
 #:
-#: `table` maps to both 2 and 4 because a catalogued table is reachable two ways: the graph holds
-#: its schema as DECLARED facts, and tier 4 writes SQL against it. A question that looks like it is
-#: about a table should be allowed to try either.
+#: `table` maps to both 2 and 3 because a catalogued table is reachable two ways: the graph holds
+#: its schema as DECLARED facts, and tier 3 reads that schema alongside passages. It used to map
+#: to 4, which was the tier where a model wrote SQL -- retired, because it was never built.
 _LAYER_TIERS: dict[str, tuple[int, ...]] = {
     KIND_METRIC: (1,),
     KIND_ENTITY: (2,),
-    KIND_TABLE: (2, 4),
+    KIND_TABLE: (2, 3),
     KIND_PASSAGES: (3,),
 }
 

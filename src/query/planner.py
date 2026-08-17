@@ -220,10 +220,17 @@ class Planner:
         else:
             answer.lanes_skipped[Lane.PASSAGES.value] = "tier 3 is not permitted for this tenant"
 
-        catalog_part = self._catalog_part(ctx, question)
-        if catalog_part is not None:
-            answer.parts.append(catalog_part)
-            answer.lanes_run.append(Lane.CATALOG)
+        # Gated on tier 3, like the passage lane. It ran with no gate at all, so a tenant who had
+        # forbidden every tier still received catalog schema -- a small cap bypass -- and it stamped
+        # tier 2 on a part nothing checked against tier 2. Catalog is part of what tier 3 means now:
+        # passages, the relationships around them, and the schema of the tables involved.
+        if 3 in allowed:
+            catalog_part = self._catalog_part(ctx, question)
+            if catalog_part is not None:
+                answer.parts.append(catalog_part)
+                answer.lanes_run.append(Lane.CATALOG)
+        else:
+            answer.lanes_skipped[Lane.CATALOG.value] = "tier 3 is not permitted for this tenant"
 
         # Grounding. Deterministic, and it runs before synthesis so a model never sees
         # evidence the graph refused.
@@ -345,7 +352,9 @@ class Planner:
         return Part(
             lane=Lane.CATALOG,
             provenance=Provenance.DETERMINISTIC,
-            tier=Tier.GRAPH_TRAVERSAL,
+            # Tier 3, matching the gate above. It claimed tier 2 while nothing checked it against
+            # tier 2, so the reported tier was unbacked by any permission check.
+            tier=Tier.HYBRID,
             content=relevant,
         )
 

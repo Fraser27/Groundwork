@@ -186,14 +186,14 @@ class TestRoutingNeverCostsAnAnswer:
         decision = TierRouter().route(ctx(), "anything", settings())
 
         assert decision.degraded is True
-        assert decision.tiers == [1, 2, 3, 4]
+        assert decision.tiers == [1, 2, 3]
         assert decision.reason and "no vector store" in decision.reason
 
     def test_an_empty_index_degrades(self):
         decision = router(FakeRoutingIndex({})).route(ctx(), "anything", settings())
 
         assert decision.degraded is True
-        assert decision.tiers == [1, 2, 3, 4]
+        assert decision.tiers == [1, 2, 3]
 
     def test_nothing_above_the_floor_degrades(self):
         """Similarity is not calibrated, so "everything scored badly" means the question is not
@@ -202,7 +202,7 @@ class TestRoutingNeverCostsAnAnswer:
         decision = router(routing).route(ctx(), "anything", settings(router_min_similarity=0.5))
 
         assert decision.degraded is True
-        assert decision.tiers == [1, 2, 3, 4]
+        assert decision.tiers == [1, 2, 3]
 
     def test_an_unreachable_index_degrades_rather_than_raising(self):
         class Broken:
@@ -212,7 +212,7 @@ class TestRoutingNeverCostsAnAnswer:
         decision = router(Broken()).route(ctx(), "anything", settings())
 
         assert decision.degraded is True
-        assert decision.tiers == [1, 2, 3, 4]
+        assert decision.tiers == [1, 2, 3]
 
     def test_a_failed_embedding_degrades(self):
         decision = router(embedder=FakeEmbedder(fail=True)).route(ctx(), "anything", settings())
@@ -248,13 +248,13 @@ class TestTheDecision:
 
         assert 1 in decision.tiers
 
-    def test_a_table_layer_justifies_both_tier_2_and_tier_4(self):
-        """A catalogued table is reachable two ways: its schema is in the graph, and tier 4 writes
-        SQL against it."""
+    def test_a_table_layer_justifies_both_tier_2_and_tier_3(self):
+        """A catalogued table is reachable two ways: its schema is in the graph, and tier 3 reads
+        that schema alongside passages."""
         routing = FakeRoutingIndex({KIND_TABLE: STRONG})
         decision = router(routing).route(ctx(), "anything", settings())
 
-        assert decision.tiers == [2, 4]
+        assert decision.tiers == [2, 3]
 
     def test_passages_are_scored_from_the_chunk_index(self):
         """Nothing in the routing index can score tier 3, so a summary of passages there would be a
@@ -288,7 +288,7 @@ class TestTheDecision:
         decision = router(routing, FakeChunks(STRONG)).route(ctx(), "anything", settings())
 
         assert decision.tiers == sorted(decision.tiers)
-        assert decision.tiers[-1] == 4
+        assert decision.tiers[-1] == 3
 
 
 class TestTheMatterWallAppliesToRoutingToo:
@@ -328,7 +328,7 @@ class TestTheTrace:
         body = router(routing).route(ctx(), "anything", settings()).to_dict()
 
         table = next(layer for layer in body["layers"] if layer["kind"] == KIND_TABLE)
-        assert table["tiers"] == [2, 4]
+        assert table["tiers"] == [2, 3]
 
     def test_items_are_capped(self):
         """Enough to see why a layer won; not a wall of near-identical rows."""

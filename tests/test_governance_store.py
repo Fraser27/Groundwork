@@ -288,12 +288,14 @@ class TestTheBlockedList:
         """End to end rather than by calling `record_blocked` directly: the wiring from the
         resolver's per-request list into the process-level one is the part that was missing."""
         client, _ = _client()
-        client.patch(f"/api/tenants/{TENANT}/governance", json={"block_ungoverned_queries": True})
 
-        refused = client.post(
+        # No switch needed: a question no tier could answer reaches the backlog on the ordinary
+        # path now, which is the case that matters -- most tenants have the switch off, and they
+        # are the ones whose unanswerable questions should be turning into metrics.
+        answered = client.post(
             f"/api/tenants/{TENANT}/query", json={"query": "what were total fees last quarter?"}
         )
-        assert refused.status_code == 403
+        assert answered.status_code == 200
 
         body = client.get(f"/api/tenants/{TENANT}/governance/blocked").json()
         assert body["count"] >= 1

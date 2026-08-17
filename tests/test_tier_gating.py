@@ -48,8 +48,8 @@ def attempted(resolution) -> list[int]:
 
 
 class TestDefaults:
-    def test_all_four_tiers_are_tried_by_default(self, resolver, ctx):
-        assert attempted(resolver.resolve(ctx, "q", GovernanceSettings())) == [1, 2, 3, 4]
+    def test_every_tier_is_tried_by_default(self, resolver, ctx):
+        assert attempted(resolver.resolve(ctx, "q", GovernanceSettings())) == [1, 2, 3]
 
     def test_tiers_are_tried_most_precise_first(self, resolver, ctx):
         """Order is the governance property: a governed metric must get the chance to
@@ -67,8 +67,8 @@ class TestTenantCap:
     def test_a_cap_can_exclude_a_middle_tier(self, resolver, ctx):
         """A firm may want metrics and graph traversal but not hybrid retrieval, so the
         cap is a set rather than a maximum."""
-        capped = GovernanceSettings(allowed_tiers=frozenset({1, 2, 4}))
-        assert attempted(resolver.resolve(ctx, "q", capped)) == [1, 2, 4]
+        capped = GovernanceSettings(allowed_tiers=frozenset({1, 3}))
+        assert attempted(resolver.resolve(ctx, "q", capped)) == [1, 3]
 
     def test_an_empty_cap_refuses_every_question(self, resolver, ctx):
         """Answering anyway would make the setting decorative."""
@@ -85,9 +85,9 @@ class TestCallerSubset:
 
     def test_a_subset_is_still_ordered_most_precise_first(self, resolver, ctx):
         res = resolver.resolve(
-            ctx, "q", GovernanceSettings(), tiers_requested=[Tier.LLM_SQL, Tier.GOVERNED_METRIC]
+            ctx, "q", GovernanceSettings(), tiers_requested=[Tier.HYBRID, Tier.GOVERNED_METRIC]
         )
-        assert attempted(res) == [1, 4]
+        assert attempted(res) == [1, 3]
 
     def test_a_duplicate_tier_is_tried_once(self, resolver, ctx):
         res = resolver.resolve(
@@ -98,18 +98,18 @@ class TestCallerSubset:
 
 class TestRefusalIsVisible:
     def test_asking_for_a_forbidden_tier_is_refused(self, resolver, ctx):
-        """Not silently answered at another tier. A caller who pinned tier 4 and got a
+        """Not silently answered at another tier. A caller who pinned tier 3 and got a
         tier 2 answer has been given something they did not ask for."""
         capped = GovernanceSettings(allowed_tiers=frozenset({1, 2}))
-        with pytest.raises(QueryBlocked, match="tier 4 is not permitted"):
-            resolver.resolve(ctx, "q", capped, tier_override=Tier.LLM_SQL)
+        with pytest.raises(QueryBlocked, match="tier 3 is not permitted"):
+            resolver.resolve(ctx, "q", capped, tier_override=Tier.HYBRID)
 
     def test_the_refusal_names_what_is_permitted(self, resolver, ctx):
         """An administrator controls this, so the user needs to know what to ask for
         instead rather than just that they were refused."""
         capped = GovernanceSettings(allowed_tiers=frozenset({1, 2}))
         with pytest.raises(QueryBlocked, match="Permitted tiers: 1, 2"):
-            resolver.resolve(ctx, "q", capped, tier_override=Tier.LLM_SQL)
+            resolver.resolve(ctx, "q", capped, tier_override=Tier.HYBRID)
 
     def test_a_subset_containing_a_forbidden_tier_is_refused(self, resolver, ctx):
         capped = GovernanceSettings(allowed_tiers=frozenset({1, 2}))
@@ -136,7 +136,7 @@ class TestOverrideStillWorks:
             "q",
             GovernanceSettings(),
             tier_override=Tier.GOVERNED_METRIC,
-            tiers_requested=[Tier.HYBRID, Tier.LLM_SQL],
+            tiers_requested=[Tier.GRAPH_TRAVERSAL, Tier.HYBRID],
         )
         assert attempted(res) == [1]
 
@@ -155,3 +155,39 @@ class TestEnvParsing:
     def test_an_unset_cap_permits_all_tiers(self, monkeypatch):
         monkeypatch.delenv("LEXGRAPH_ALLOWED_TIERS", raising=False)
         assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2, 3, 4})
+
+
+class TestTheFourthTierStaysRetired:
+    """It was never implemented, and the ways it could come back are all quiet ones.
+
+    A number that used to be a tier is more dangerous than one that never was: env vars,
+    persisted settings rows and stale callers all still carry 4, and `Tier(4)` now raises. Each
+    of these is a path by which a retired tier reappears as a 500 rather than a refusal.
+    """
+
+    def test_the_enum_has_no_fourth_member(self):
+        assert [int(t) for t in Tier] == [1, 2, 3]
+
+    def test_every_tier_has_an_explanation(self):
+        """A missing entry is a KeyError on `Resolution.explanation`, which is on every answer."""
+        from src.query.resolver import TIER_EXPLANATION
+
+        assert set(TIER_EXPLANATION) == set(Tier)
+
+    def test_a_stale_env_var_does_not_resurrect_it(self, monkeypatch):
+        monkeypatch.setenv("LEXGRAPH_ALLOWED_TIERS", "1,2,3,4")
+        assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2, 3})
+
+    def test_a_persisted_row_does_not_resurrect_it(self):
+        """A tenant whose row was written while the fourth tier existed still has [1,2,3,4] in
+        DynamoDB. Passing it through would let storage reintroduce a tier the code lacks."""
+        from src.governance_store import _decode
+
+        decoded = _decode("allowed_tiers", [1, 2, 3, 4], frozenset({1, 2, 3}))
+        assert decoded == frozenset({1, 2, 3})
+
+    def test_asking_for_it_is_refused_not_crashed(self, resolver, ctx):
+        """Through the enum rather than the route validator: `Tier(4)` raises ValueError, and a
+        stale caller deserves a refusal rather than a 500."""
+        with pytest.raises(ValueError):
+            Tier(4)

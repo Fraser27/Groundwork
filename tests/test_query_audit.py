@@ -80,13 +80,18 @@ class TestWhatIsRecorded:
             True,
         )
 
+        # Ungoverned is now a property of the answer rather than of the tier: `generated_sql`
+        # set means a model wrote the query. It was `tier is not LLM_SQL`, which held only while
+        # exactly one tier could involve a model.
         model = event_for(
             TENANT,
             "alice",
             "fees by month",
-            Resolution(tier=Tier.LLM_SQL, answer=[], sql="SELECT 1"),
+            Resolution(
+                tier=Tier.HYBRID, answer=[], sql="SELECT 1", generated_sql={"sql": "SELECT 1"}
+            ),
         )
-        assert (model.tier, model.governed) == (4, False)
+        assert (model.tier, model.governed) == (3, False)
 
     def test_an_empty_answer_is_still_recorded_and_marked(self):
         """Having no answer is part of the record. Dropping it would make the log read as though
@@ -257,16 +262,30 @@ class TestOverHttp:
         assert row["governed"] is True
         assert row["at"]
 
-    def test_a_refused_question_is_not_recorded_twice(self, client):
-        """The kill switch already records it, and it produced no answer. Counting it here as well
-        would make the question log overstate what was answered."""
-        client.patch(f"/api/tenants/{TENANT}/governance", json={"block_ungoverned_queries": True})
+    def test_an_unanswerable_question_reaches_both_logs(self, client):
+        """Two logs, two meanings. The question log records what was answered and on what basis;
+        the backlog records what nobody could answer, because a question people keep asking is a
+        governed metric waiting to be written.
+
+        This used to depend on the kill switch raising. The switch has nothing to refuse until
+        tier 3 generates SQL, so the backlog is now written on the ordinary no-answer path -- and
+        the route has to drain it there too, or it would be lost for every tenant with the switch
+        off, which is the majority and the ones most likely to need a new metric.
+        """
         r = client.post(
             f"/api/tenants/{TENANT}/query", json={"query": "zzzq nonexistent gibberish topic"}
         )
-        assert r.status_code == 403
+        assert r.status_code == 200
+        assert r.json()["answer"] is None
 
-        assert client.get(f"/api/tenants/{TENANT}/audit/questions").json()["count"] == 0
+        # In both logs, for different reasons. The question log records that somebody asked and
+        # got nothing -- `answered: false` exists for exactly this -- because a read that leaves no
+        # trace cannot answer "what did we tell the client". The backlog records it as a metric
+        # worth writing. Neither is a duplicate of the other.
+        asked_log = client.get(f"/api/tenants/{TENANT}/audit/questions").json()
+        assert asked_log["count"] == 1
+        assert asked_log["questions"][0]["answered"] is False
+
         blocked = client.get(f"/api/tenants/{TENANT}/governance/blocked").json()
         assert blocked["count"] == 1
 

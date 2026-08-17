@@ -47,15 +47,16 @@ Every fact this server returns carries provenance: a document page and the verba
 quote, or the proof tree of an inference. When a client asks "how do you know that?",
 call `get_provenance` and you will have a real answer.
 
-Start with `ask`. It routes through four tiers and tells you which one answered:
+Start with `ask`. It routes through three tiers and tells you which one answered:
 
   1. governed metric — SQL compiled from an approved definition, no AI in the path
   2. graph traversal — verified relationships only
-  3. hybrid          — passages, then verified relationships out from them
-  4. AI-written SQL  — ungoverned, and switchable off per firm
+  3. hybrid          — passages, the verified relationships out from them, and the
+                      catalogued schema of the tables involved
 
-Tiers 1-3 are governed. Tier 4 is a starting point, not an answer. Always relay the tier,
-and never present a tier-4 result as established.
+All three are governed. Always relay the tier, and relay `governed` with it: it is false
+when a model wrote any part of the answer, and that is a claim about trustworthiness rather
+than about which tier ran.
 
 Authorization is the user's, not yours. You see exactly what the person whose token you
 are carrying sees — same firm, same ethical screens. If a question returns nothing, that may
@@ -100,13 +101,12 @@ def _principal(ctx: Context) -> tuple[Services, AuthContext]:
 async def ask(ctx: Context, question: str, execute: bool = False) -> dict[str, Any]:
     """Answer a question through the governed resolver, and report how it was answered.
 
-    TRUST: varies by tier, and the result says which. `tier_name` is GOVERNED_METRIC (SQL
-    compiled from a definition a human approved — no AI wrote it, and the same question
-    always returns the same number), GRAPH_TRAVERSAL or HYBRID (verified facts above the
-    firm's confidence floor, each one traceable), or LLM_SQL (an AI model wrote the SQL; it
-    passed the query firewall but nobody approved it — treat it as a draft). `governed` is
-    false only for LLM_SQL. `assertions_used` lists the facts the answer rests on; pass any
-    of them to `get_provenance` for the document page and quote behind it.
+    TRUST: varies, and the result says how. `tier_name` is GOVERNED_METRIC (SQL compiled from
+    a definition a human approved — no AI wrote it, and the same question always returns the
+    same number), GRAPH_TRAVERSAL or HYBRID (verified facts above the firm's confidence floor,
+    each one traceable). `governed` is false when a model wrote part of the answer; treat such
+    a result as a draft. `assertions_used` lists the facts the answer rests on; pass any of
+    them to `get_provenance` for the document page and quote behind it.
 
     Scoped to the calling user: their firm, and only the matters they may see. An empty
     answer may mean "not permitted for you" rather than "does not exist".

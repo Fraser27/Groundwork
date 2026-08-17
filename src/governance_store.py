@@ -81,7 +81,12 @@ def _decode(name: str, value: Any, template: Any) -> Any:
     if isinstance(template, bool):
         return bool(value)
     if isinstance(template, frozenset):
-        return frozenset(int(v) for v in value or ())
+        stored = frozenset(int(v) for v in value or ())
+        # Narrowed to what the default permits. A tenant whose row was written while a fourth
+        # tier existed still has `[1,2,3,4]` in DynamoDB, and passing it through would let a
+        # persisted setting resurrect a tier the code no longer has -- `Tier(4)` then raises deep
+        # inside the resolver. Values the current build does not recognise are dropped, not kept.
+        return frozenset(stored & template) if template else stored
     if isinstance(template, float):
         return float(value)
     if isinstance(template, int):

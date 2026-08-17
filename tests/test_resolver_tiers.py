@@ -183,22 +183,25 @@ class TestTierOrdering:
 
 
 class TestKillSwitch:
-    def test_blocks_only_when_no_tier_answered(self, matcher, reader, ctx):
+    def test_an_unanswerable_question_is_not_refused(self, matcher, reader, ctx):
+        """The switch refuses SQL a model wrote. There is none to refuse until tier 3 generates
+        it, so a question no tier could answer comes back empty rather than as a 403 -- refusing
+        would misdescribe "nobody could answer this" as "you are not allowed to ask"."""
         settings = GovernanceSettings(block_ungoverned_queries=True)
         r = Resolver(metric_matcher=matcher, graph_reader=reader)
-        with pytest.raises(QueryBlocked):
-            r.resolve(ctx, "zzzq unrelated gibberish", settings)
+        assert r.resolve(ctx, "zzzq unrelated gibberish", settings).answer is None
 
     def test_governed_metric_unaffected_by_switch(self, matcher, reader, ctx):
         settings = GovernanceSettings(block_ungoverned_queries=True)
         r = Resolver(metric_matcher=matcher, graph_reader=reader)
         assert r.resolve(ctx, "fees billed by month", settings).tier is Tier.GOVERNED_METRIC
 
-    def test_refusal_is_recorded_for_review(self, matcher, ctx):
-        """A question people keep asking is a metric waiting to be written."""
+    def test_an_unanswerable_question_is_recorded_for_review(self, matcher, ctx):
+        """A question people keep asking is a metric waiting to be written, and that is true
+        whether or not the switch is on -- it used to be recorded only when the switch refused,
+        so the backlog was empty for every tenant that had it off."""
         r = Resolver(metric_matcher=matcher)
-        with pytest.raises(QueryBlocked):
-            r.resolve(ctx, "zzzq gibberish", GovernanceSettings(block_ungoverned_queries=True))
+        r.resolve(ctx, "zzzq gibberish", GovernanceSettings())
         assert r.blocked and r.blocked[0].question == "zzzq gibberish"
 
 

@@ -73,10 +73,16 @@ class GovernanceSettings:
 
     # ── Kill switches ─────────────────────────────────────────────────────────
     block_ungoverned_queries: bool = False
-    """Refuse tier-4 LLM-generated SQL entirely. Refusals are recorded so an admin
-    can see what users are trying to ask."""
+    """Refuse SQL that a model wrote, rather than a metric compiled.
 
-    allowed_tiers: frozenset[int] = frozenset({1, 2, 3, 4})
+    It gated the retired fourth tier, and it will gate tier 3's SQL generation when that is
+    built. In between there is nothing to refuse, so it does not refuse: a question no tier
+    could answer is still recorded for an administrator to read, because a question people keep
+    asking is a governed metric waiting to be written and that backlog is the setting's other
+    half. Refusing a whole tier was never the intent and would take passages and graph facts
+    down with the generator."""
+
+    allowed_tiers: frozenset[int] = frozenset({1, 2, 3})
     """Which resolution tiers may ever run for this tenant. A hard cap, not a default:
     a caller asking for a tier that is not in here is refused rather than silently
     served a different one, because "answered at a tier you disallowed" and "answered
@@ -208,7 +214,9 @@ class GovernanceSettings:
             raw = os.getenv(name)
             if not raw:
                 return default
-            parsed = {int(p) for p in re.findall(r"[1-4]", raw)}
+            # `[1-3]`, so a stale `LEXGRAPH_ALLOWED_TIERS=1,2,3,4` from before the fourth tier
+            # was retired drops the 4 rather than resurrecting a tier that no longer exists.
+            parsed = {int(p) for p in re.findall(r"[1-3]", raw)}
             return frozenset(parsed) if parsed else default
 
         return cls(

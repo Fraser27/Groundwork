@@ -25,7 +25,7 @@ class QueryRequest(BaseModel):
     execute: bool = True
     """False returns the SQL without running it — the reviewability that makes a
     governed metric governed."""
-    tier_override: int | None = Field(default=None, ge=1, le=4)
+    tier_override: int | None = Field(default=None, ge=1, le=3)
     """Pin exactly one tier. Kept for callers that want a single tier."""
 
     tiers: list[int] | None = Field(default=None)
@@ -40,9 +40,11 @@ class QueryRequest(BaseModel):
     def _valid_tiers(cls, v: list[int] | None) -> list[int] | None:
         if v is None:
             return v
-        bad = [t for t in v if t not in (1, 2, 3, 4)]
+        bad = [t for t in v if t not in (1, 2, 3)]
         if bad:
-            raise ValueError(f"tiers must be in 1-4, got {bad}")
+            # 422 rather than a 500 from `Tier(4)` deep inside the resolver. 4 was a tier once,
+            # so a stale caller asking for it must be told, not crashed at.
+            raise ValueError(f"tiers must be in 1-3, got {bad}")
         return sorted(set(v))
 
 
@@ -84,6 +86,21 @@ async def run_query(
             )
         # 403, not 400: the request was well-formed and deliberately refused.
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from e
+
+    # Also drained on the success path. A question no tier could answer no longer raises -- the
+    # kill switch has nothing to refuse until tier 3 generates SQL -- so a resolver that recorded
+    # a backlog entry and returned normally would have lost it here, and the Governance screen
+    # would show an empty backlog for exactly the tenants most in need of a new metric.
+    for entry in resolver.blocked:
+        services.record_blocked(
+            ctx.tenant_id,
+            {
+                "question": entry.question,
+                "user_id": entry.user_id,
+                "reason": entry.reason,
+                "at": entry.at,
+            },
+        )
 
     # A read that leaves no trace cannot answer "what did we tell the client, and on what
     # basis?". Refusals are not recorded here: `record_blocked` above already has them, and a

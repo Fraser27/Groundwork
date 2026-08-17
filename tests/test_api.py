@@ -252,20 +252,18 @@ class TestGovernance:
 
 
 class TestQuery:
-    def test_kill_switch_refuses_only_ungoverned(self, client):
-        """403 for a question no tier can answer — well-formed, deliberately refused.
-
-        The phrasing matters: a question a *governed metric* can answer is unaffected
-        by the switch, which is the whole point of the switch. So this uses a question
-        with no metric and no matching assertions.
-        """
+    def test_an_unanswerable_question_answers_emptily_rather_than_refusing(self, client):
+        """The switch refuses SQL a model wrote, and there is none to refuse until tier 3
+        generates it. So "no tier could answer" comes back as an empty answer with a warning,
+        not a 403 -- a 403 would tell the user they are not allowed to ask, which is untrue."""
         client.patch(f"/api/tenants/{TENANT}/governance", json={"block_ungoverned_queries": True})
         r = client.post(
             f"/api/tenants/{TENANT}/query",
             json={"query": "zzzq nonexistent gibberish topic"},
         )
-        assert r.status_code == 403
-        assert "administrator" in r.json()["detail"].lower()
+        assert r.status_code == 200
+        assert r.json()["answer"] is None
+        assert r.json()["warnings"]
 
     def test_kill_switch_does_not_block_governed_metrics(self, client):
         """A governed answer is still allowed while ungoverned queries are off."""

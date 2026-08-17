@@ -600,13 +600,13 @@ class TestGraphNeighbourhood:
 
 
 class TestKillSwitch:
-    def test_refusal_names_the_remedy(self):
-        """A blocked question is a deliberate refusal, so the agent should be able to tell
-        its user what to ask an administrator for."""
+    def test_an_unanswerable_question_is_not_an_error(self):
+        """An agent must be able to tell "nobody could answer that" from "you may not ask that".
+        The switch refuses model-written SQL, and there is none to refuse until tier 3 generates
+        it, so this comes back as an empty answer rather than a tool error."""
         get_services().settings_for(TENANT_A).block_ungoverned_queries = True
         result = _call(TOKEN_A, "ask", {"question": "zzzq unrelated gibberish"})
-        assert result.isError
-        assert "administrator" in _text(result).lower()
+        assert not result.isError
 
     def test_governed_metric_is_unaffected(self):
         get_services().settings_for(TENANT_A).block_ungoverned_queries = True
