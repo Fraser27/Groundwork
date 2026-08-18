@@ -48,6 +48,26 @@ class QueryRequest(BaseModel):
         return sorted(set(v))
 
 
+def _drain_blocked(services: Any, tenant_id: str, blocked: list[Any]) -> None:
+    """Move a request's refusals onto `Services`, which outlives it.
+
+    A resolver and a planner are both built per request and discarded, so their lists died with
+    them and the Governance screen could only ever show an empty backlog. A refusal is the signal
+    the kill switch exists to produce: a question people keep asking is a metric waiting to be
+    written.
+    """
+    for entry in blocked:
+        services.record_blocked(
+            tenant_id,
+            {
+                "question": entry.question,
+                "user_id": entry.user_id,
+                "reason": entry.reason,
+                "at": entry.at,
+            },
+        )
+
+
 @router.post("/tenants/{tenant}/query")
 async def run_query(
     services: ServicesDep,
@@ -71,36 +91,14 @@ async def run_query(
             execute=body.execute,
         )
     except QueryBlocked as e:
-        # Recorded before raising. The resolver keeps its own list, but a resolver is built per
-        # request and discarded, so that list died with it and the Governance screen could only
-        # ever show an empty backlog. A refusal is the signal the kill switch exists to produce.
-        for entry in resolver.blocked:
-            services.record_blocked(
-                ctx.tenant_id,
-                {
-                    "question": entry.question,
-                    "user_id": entry.user_id,
-                    "reason": entry.reason,
-                    "at": entry.at,
-                },
-            )
+        _drain_blocked(services, ctx.tenant_id, resolver.blocked)
         # 403, not 400: the request was well-formed and deliberately refused.
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from e
 
-    # Also drained on the success path. A question no tier could answer no longer raises -- the
-    # kill switch has nothing to refuse until tier 3 generates SQL -- so a resolver that recorded
-    # a backlog entry and returned normally would have lost it here, and the Governance screen
-    # would show an empty backlog for exactly the tenants most in need of a new metric.
-    for entry in resolver.blocked:
-        services.record_blocked(
-            ctx.tenant_id,
-            {
-                "question": entry.question,
-                "user_id": entry.user_id,
-                "reason": entry.reason,
-                "at": entry.at,
-            },
-        )
+    # Also drained on the success path, and that is the whole of what the kill switch does: it
+    # skips the SQL lane and records the refusal, and tier 3 still answers with its passages and
+    # its graph facts. A refusal that raised would have taken those down with it.
+    _drain_blocked(services, ctx.tenant_id, resolver.blocked)
 
     # A read that leaves no trace cannot answer "what did we tell the client, and on what
     # basis?". Refusals are not recorded here: `record_blocked` above already has them, and a
@@ -177,6 +175,9 @@ async def compose_query(
         # runs. Compose had no router at all, which meant the one page whose purpose is showing
         # everything the system found could not say why it looked where it looked.
         router=services.build_tier_router(),
+        # The same lane `/query` gets, from `Services`, so the two endpoints cannot disagree about
+        # whether a question got model-written SQL.
+        sql_lane=services.build_sql_lane(ctx.tenant_id),
     )
     answer = planner.plan(
         ctx,
@@ -185,4 +186,5 @@ async def compose_query(
         execute=body.execute,
         allow_synthesis=body.synthesise,
     )
+    _drain_blocked(services, ctx.tenant_id, planner.blocked)
     return answer.to_dict()

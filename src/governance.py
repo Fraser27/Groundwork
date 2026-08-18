@@ -85,12 +85,16 @@ class GovernanceSettings:
     block_ungoverned_queries: bool = False
     """Refuse SQL that a model wrote, rather than a metric compiled.
 
-    It gated the retired fourth tier, and it will gate tier 3's SQL generation when that is
-    built. In between there is nothing to refuse, so it does not refuse: a question no tier
-    could answer is still recorded for an administrator to read, because a question people keep
-    asking is a governed metric waiting to be written and that backlog is the setting's other
-    half. Refusing a whole tier was never the intent and would take passages and graph facts
-    down with the generator."""
+    Gates tier 3's SQL lane and nothing else. Not the tier: on, the question still returns its
+    passages and its graph facts, `lanes_skipped["sql"]` names the reason, and the attempt is
+    recorded for an administrator -- a question people keep asking is a governed metric waiting to
+    be written, and that backlog is the setting's other half. Refusing the whole tier would turn a
+    switch that removes an ungoverned capability into one that removes governed answers.
+
+    It gated the retired fourth tier before that tier was found never to have existed, so for a
+    time it was a control that reported itself active over nothing. For a legal product that is the
+    worst direction for a failure, which is why it is tested against the lane rather than the
+    setting."""
 
     allowed_tiers: frozenset[int] = frozenset({1, 2, 3})
     """Which resolution tiers may ever run for this tenant. A hard cap, not a default:
@@ -143,8 +147,11 @@ class GovernanceSettings:
 
     # ── Models ────────────────────────────────────────────────────────────────
     query_model: str = DEFAULT_QUERY_MODEL
-    """Reserved, and read by nothing. Kept rather than deleted because it is the setting a
-    question-to-SQL step would use, and a tenant may already have it set from env."""
+    """The model that writes tier 3's SQL when no approved metric covers the question.
+
+    Read by `Services.build_sql_lane`. It was reserved and read by nothing for most of this
+    project's life, which is the same failure shape as the kill switch above: a setting an
+    administrator can change and that controls nothing."""
 
     ocr_model: str = DEFAULT_OCR_MODEL
     """Vision model that transcribes document pages. Deliberately separate from the
@@ -313,15 +320,17 @@ FIELD_HELP: dict[str, str] = {
         "deadlines. Recommended on."
     ),
     "block_ungoverned_queries": (
-        "Refuse any question that cannot be answered from an approved metric or the "
-        "knowledge graph, instead of letting the AI write its own SQL. Blocked attempts "
-        "are recorded so you can see what people are asking for."
+        "Stop the AI writing its own database queries. Questions are still answered from "
+        "approved metrics, the knowledge graph and document passages, so this removes one way "
+        "of answering rather than refusing the question. Blocked attempts are recorded so you "
+        "can see which figures people want and write a metric for them."
     ),
     "allowed_tiers": (
         "Which ways of answering a question are permitted at all. Users choose freely "
         "within this list; anything outside it is refused rather than quietly answered "
         "a different way. 1 is an approved metric, 2 is the knowledge graph, 3 combines "
-        "passages with graph relationships, 4 lets the AI write SQL."
+        "passages, graph relationships and table schemas. Removing 3 also removes AI-written "
+        "SQL; to keep 3 and remove only that, use the ungoverned-queries switch above."
     ),
     "router_enabled": (
         "Choose which ways of answering to try by comparing the question against what this "

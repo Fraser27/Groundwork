@@ -418,6 +418,9 @@ export const LANES: Record<Lane, LaneMeta> = {
   graph: { label: 'Graph', colour: 'var(--epi-declared)', returns: 'facts, each one an assertion' },
   passages: { label: 'Documents', colour: 'var(--purple)', returns: 'passages, each with its page' },
   catalog: { label: 'Catalogue', colour: 'var(--teal)', returns: 'table and column definitions' },
+  // Orange, alone among the lanes. The others return something a human approved or something
+  // quoted; this returns a query nothing approved, and the colour is the disclosure.
+  sql: { label: 'AI-written query', colour: 'var(--orange)', returns: 'rows, and the SQL to check' },
 }
 
 export const PART_PROVENANCE_LABEL: Record<string, string> = {
@@ -428,4 +431,7 @@ export const PART_PROVENANCE_LABEL: Record<string, string> = {
   model_selected: 'exact figure, metric chosen by similarity',
   verbatim: 'quoted verbatim',
   inferred: 'a model’s reading',
+  // Not 'exact figure' either. model_selected picks between sums a person approved; this one wrote
+  // the sum. The arithmetic is the thing to check, so the label points at it.
+  model_written: 'query written by AI — read the SQL',
 }

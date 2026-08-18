@@ -469,3 +469,160 @@ class TestTheExecutorIsBuiltFromConfig:
         ex = build_athena_executor(self._services(bucket="b"), "demo-firm")
         assert ex._firewall.validate("SELECT count(*) FROM lexgraph_legal.time_entries").allowed
         assert not ex._firewall.validate("SELECT count(*) FROM other.payroll").allowed
+
+
+class TestAggregateOnly:
+    """The rule that closes the ethical wall's structural gap for model-written SQL.
+
+    `blocks.py` screens rows by assertion, document or matter id. Athena rows carry none of those,
+    so a walled matter's row cannot be filtered out after the fact -- the only control available is
+    to refuse a query that could return one. `matters` is a legitimate table, so the allowlist
+    cannot do it, which is why this is a separate rule and not a widening of that one.
+    """
+
+    @pytest.fixture
+    def strict(self) -> SQLFirewall:
+        return SQLFirewall(ALLOWED, require_aggregate=True)
+
+    def test_select_star_is_refused(self, strict):
+        """The case the table allowlist happily permits, because the table is real."""
+        result = strict.validate("SELECT * FROM legal_ops.matters")
+        assert not result.allowed
+        assert "aggregate" in result.reason
+
+    def test_a_bare_column_list_is_refused(self, strict):
+        assert not strict.validate("SELECT matter_id, client FROM legal_ops.matters").allowed
+
+    def test_distinct_is_not_an_aggregate(self, strict):
+        """DISTINCT reduces duplicates, not rows: one walled matter still comes back as one row."""
+        assert not strict.validate("SELECT DISTINCT client FROM legal_ops.matters").allowed
+
+    def test_count_passes(self, strict):
+        assert strict.validate("SELECT COUNT(*) FROM legal_ops.matters").allowed
+
+    def test_group_by_passes(self, strict):
+        result = strict.validate(
+            "SELECT client, SUM(hours) FROM legal_ops.time_entries GROUP BY client"
+        )
+        assert result.allowed, result.reason
+
+    def test_an_enclosing_aggregate_covers_a_row_wise_subquery(self, strict):
+        """The inner rows are never emitted, so refusing this would refuse legitimate SQL."""
+        result = strict.validate("SELECT COUNT(*) FROM (SELECT * FROM legal_ops.matters)")
+        assert result.allowed, result.reason
+
+    def test_a_subquerys_aggregate_does_not_vouch_for_the_outer_select(self, strict):
+        """The exposure this rule exists to stop, dressed as an aggregate: one row per matter,
+        with a SUM in a column. `parent_select` is what tells the two apart."""
+        result = strict.validate(
+            "SELECT m.client, (SELECT SUM(hours) FROM legal_ops.time_entries) "
+            "FROM legal_ops.matters m"
+        )
+        assert not result.allowed
+        assert "matters" in result.reason
+
+    def test_a_row_wise_union_arm_is_refused(self, strict):
+        """Every arm is checked. One aggregate arm must not carry a row-wise one."""
+        assert not strict.validate(
+            "SELECT COUNT(*) FROM legal_ops.matters "
+            "UNION ALL SELECT matter_id FROM legal_ops.invoices"
+        ).allowed
+
+    def test_a_row_wise_cte_body_is_refused(self, strict):
+        assert not strict.validate(
+            "WITH leak AS (SELECT * FROM legal_ops.matters) SELECT * FROM leak"
+        ).allowed
+
+    def test_an_aggregating_cte_passes(self, strict):
+        result = strict.validate(
+            "WITH totals AS (SELECT SUM(hours) AS h FROM legal_ops.time_entries) "
+            "SELECT h FROM totals"
+        )
+        assert result.allowed, result.reason
+
+    def test_the_rule_is_off_for_compiled_metric_sql(self, firewall):
+        """A metric was read by a human who could see what it exposed, and may legitimately list
+        rows. Turning this on globally would refuse governed SQL to constrain generated SQL."""
+        assert firewall.validate("SELECT * FROM legal_ops.matters").allowed
+
+
+class TestBoundedByALimit:
+    """Rejected rather than injected. Rewriting a model's query to mean something it did not say
+    would put the firewall in the business of authoring SQL, and the artefact shown to a lawyer
+    beside the figures would no longer be the query that produced them."""
+
+    @pytest.fixture
+    def bounded(self) -> SQLFirewall:
+        return SQLFirewall(ALLOWED, require_limit=True)
+
+    def test_an_unbounded_statement_is_refused(self, bounded):
+        result = bounded.validate("SELECT COUNT(*) FROM legal_ops.matters")
+        assert not result.allowed
+        assert "LIMIT" in result.reason
+
+    def test_a_limit_passes(self, bounded):
+        assert bounded.validate("SELECT COUNT(*) FROM legal_ops.matters LIMIT 10").allowed
+
+    def test_a_limit_inside_a_subquery_does_not_bound_the_statement(self, bounded):
+        """The outer SELECT is what returns rows to the caller, so that is what must be bounded."""
+        assert not bounded.validate(
+            "SELECT COUNT(*) FROM (SELECT * FROM legal_ops.matters LIMIT 10)"
+        ).allowed
+
+    def test_a_union_needs_its_own_limit(self, bounded):
+        assert not bounded.validate(
+            "SELECT COUNT(*) FROM legal_ops.matters UNION SELECT COUNT(*) FROM legal_ops.invoices"
+        ).allowed
+
+    def test_the_query_is_never_rewritten(self, bounded):
+        """Injecting a LIMIT would make the SQL on screen different from the SQL that ran."""
+        sql = "SELECT COUNT(*) FROM legal_ops.matters LIMIT 5"
+        bounded.validate(sql)
+        assert sql == "SELECT COUNT(*) FROM legal_ops.matters LIMIT 5"
+
+    def test_the_rule_is_off_for_compiled_metric_sql(self, firewall):
+        """A metric may legitimately return every month in a series."""
+        assert firewall.validate("SELECT COUNT(*) FROM legal_ops.matters").allowed
+
+
+class TestTableRulesStillComeFirst:
+    """Order matters for the message. "unauthorized table" and "must aggregate" send a reader to
+    different places, and the table is the more fundamental refusal."""
+
+    def test_an_unauthorized_table_is_reported_as_such_not_as_a_missing_aggregate(self):
+        strict = SQLFirewall(ALLOWED, require_aggregate=True, require_limit=True)
+        result = strict.validate("SELECT * FROM hr.salaries")
+        assert result.denied_tables == ["hr.salaries"]
+        assert "aggregate" not in result.reason
+
+
+class TestGeneratedSQLNeverReachesAthenaUnchecked:
+    """The executor enforces both rules, because a caller cannot be trusted to have done it."""
+
+    def _strict_executor(self, client):
+        return executor(
+            client, SQLFirewall(ALLOWED, require_aggregate=True, require_limit=True)
+        )
+
+    def test_a_row_wise_query_never_starts_an_execution(self):
+        """No Athena call at all: the refusal costs nothing and scans nothing."""
+        client = FakeAthena()
+        result = self._strict_executor(client).execute("SELECT * FROM legal_ops.matters LIMIT 10")
+        assert not result.success
+        assert result.error_code == "blocked"
+        assert client.started == []
+
+    def test_an_unbounded_query_never_starts_an_execution(self):
+        client = FakeAthena()
+        result = self._strict_executor(client).execute("SELECT COUNT(*) FROM legal_ops.matters")
+        assert not result.success
+        assert result.error_code == "blocked"
+        assert client.started == []
+
+    def test_a_query_clearing_both_rules_runs(self):
+        client = FakeAthena()
+        result = self._strict_executor(client).execute(
+            "SELECT COUNT(*) FROM legal_ops.matters LIMIT 10"
+        )
+        assert result.success, result.error
+        assert len(client.started) == 1

@@ -10,6 +10,7 @@ import type {
   AnswerPart,
   CatalogSchemaRef,
   ComposedResult,
+  GeneratedSQLResult,
   Lane,
   QueryAnswer,
   QueryHit,
@@ -42,6 +43,14 @@ export function asHits(answer: QueryAnswer): QueryHit[] {
 export function asPassages(answer: QueryAnswer): QueryPassage[] {
   if (answer && typeof answer === 'object' && 'passages' in answer) return answer.passages ?? []
   return []
+}
+
+/** Tier 3's AI-written query, or null when none was written. Absent on every older response. */
+export function asGenerated(answer: QueryAnswer): GeneratedSQLResult | null {
+  if (!answer || typeof answer !== 'object' || !('generated' in answer)) return null
+  const generated = answer.generated
+  if (!generated || typeof generated.sql !== 'string') return null
+  return generated
 }
 
 /** `content` is free-form per lane, so every field is checked before it is read. */
@@ -80,7 +89,12 @@ export interface TraceLane {
   colour: string
   tier: number
   ran: boolean
-  /** Only when it did not run. Verbatim from the response — never paraphrased. */
+  /**
+   * Why there is nothing here. Verbatim from the response — never paraphrased.
+   *
+   * Set when the lane did not run, and also when it ran and failed: the SQL lane can produce a
+   * query that errors at Athena, and a lane that failed must not render as one that found nothing.
+   */
   reason?: string
   /** `deterministic` | `verbatim` | `inferred`, when the response says. */
   provenance?: string
@@ -101,8 +115,9 @@ export function laneCount(lane: TraceLane): number {
   )
 }
 
-/** Fallback only: a part carries its own tier. Catalogue is tier 3, alongside the passages. */
-const LANE_TIER: Record<Lane, number> = { metric: 1, graph: 2, passages: 3, catalog: 3 }
+/** Fallback only: a part carries its own tier. Catalogue and the SQL lane are tier 3, alongside
+ *  the passages — the catalogue finds the schema and the SQL lane is what writes over it. */
+const LANE_TIER: Record<Lane, number> = { metric: 1, graph: 2, passages: 3, catalog: 3, sql: 3 }
 
 /**
  * The single tier that answered, as lanes.
@@ -124,6 +139,18 @@ export function lanesFromResult(result: QueryResult): TraceLane[] {
   if (result.tier === 3) {
     const lanes: TraceLane[] = [{ ...laneShell('passages'), tier: 3, ran: true, passages }]
     if (facts.length > 0) lanes.push({ ...laneShell('graph'), tier: 3, ran: true, facts })
+    const generated = asGenerated(result.answer)
+    if (generated) {
+      lanes.push({
+        ...laneShell('sql'),
+        tier: 3,
+        ran: true,
+        provenance: 'model_written',
+        sql: generated.sql,
+        rows: generated.rows ?? undefined,
+        reason: generated.error ?? undefined,
+      })
+    }
     return lanes
   }
   // A tier this build does not know, which today means a retired one. No lane is claimed for it:
@@ -176,6 +203,11 @@ function fromPart(part: AnswerPart): TraceLane {
   if (part.lane === 'graph') return { ...base, facts: asFacts(part.content) }
   if (part.lane === 'passages') return { ...base, passages: asPassageList(part.content) }
   if (part.lane === 'catalog') return { ...base, schema: asSchema(part.content) }
+  // `content` is null when the query errored, and the error is what there is to show. Falling
+  // through to an empty rows table would read as "no data" for a query that never ran.
+  if (part.lane === 'sql') {
+    return { ...base, rows: asRows(part.content as QueryAnswer), reason: part.error ?? undefined }
+  }
   return base
 }
 

@@ -612,7 +612,16 @@ function LaneCard({
 
       {open && (
         <div className="qtrace-lane-body">
-          {count === 0 && (
+          {/* A lane that ran and failed is not a lane that found nothing. The SQL lane can do
+              either: the firewall validates tables but not columns, so a query naming a column
+              that does not exist errors at Athena, and calling that an empty result would read as
+              "no data" for a question nothing ever answered. */}
+          {count === 0 && lane.reason && (
+            <p className="qtrace-note qtrace-note-warn">
+              This lane ran and did not return a result: {lane.reason}
+            </p>
+          )}
+          {count === 0 && !lane.reason && (
             <p className="qtrace-note">
               This lane ran and returned nothing. Read that as an empty result from a real search,
               not as a search that did not happen.
@@ -712,8 +721,14 @@ function LaneCard({
           {lane.sql && (
             <>
               <div className="qtrace-sublabel">
-                Compiled SQL
-                <FieldHelp text="Compiled from the governed metric definition. The same definition always produces this query, with no model involved." />
+                {lane.key === 'sql' ? 'AI-written SQL' : 'Compiled SQL'}
+                <FieldHelp
+                  text={
+                    lane.key === 'sql'
+                      ? 'Written by AI for this question, not compiled from an approved metric. It was checked against the tables it was allowed to read and required to aggregate, but nobody approved what it measures. Read it before relying on the figures.'
+                      : 'Compiled from the governed metric definition. The same definition always produces this query, with no model involved.'
+                  }
+                />
               </div>
               <pre className="code-block">{lane.sql}</pre>
             </>

@@ -20,7 +20,14 @@ import {
 } from '../api'
 import { getTenantId } from '../auth'
 import { HELP, TIERS, tierMeta } from '../epistemic'
-import { asHits, asPassages, asRows, lanesFromComposed, lanesFromResult } from '../trace'
+import {
+  asGenerated,
+  asHits,
+  asPassages,
+  asRows,
+  lanesFromComposed,
+  lanesFromResult,
+} from '../trace'
 import { useProvenance } from '../useProvenance'
 import ConfidenceBar from '../components/ConfidenceBar'
 import DocumentViewer from '../components/DocumentViewer'
@@ -133,6 +140,7 @@ export default function QueryBuilder() {
   const rows = result ? asRows(result.answer) : null
   const hits = result ? asHits(result.answer) : []
   const passages = result ? asPassages(result.answer) : []
+  const generated = result ? asGenerated(result.answer) : null
   // `assertions_used` is the recorded audit trail and the thing worth deep-linking; it is
   // empty for tier 1, and the hits are the same ids for 2 and 3, so fall back rather than
   // lose the action if the field ever arrives absent.
@@ -482,7 +490,7 @@ export default function QueryBuilder() {
               </div>
             )}
 
-            {!rows && hits.length === 0 && passages.length === 0 && (
+            {!rows && hits.length === 0 && passages.length === 0 && !generated && (
               <div className="card">
                 <div className="card-header">
                   <h3>Answer</h3>
@@ -512,6 +520,58 @@ export default function QueryBuilder() {
                   <span className="tag tag-green">deterministic</span>
                 </div>
                 <pre className="code-block">{result.sql}</pre>
+              </div>
+            )}
+
+            {generated && (
+              <div className="card" style={{ borderColor: 'var(--orange)' }}>
+                <div className="card-header">
+                  <h3>
+                    AI-written SQL
+                    <FieldHelp text="Written by AI for this question, because no approved metric covers it. It could only name the tables listed below, and had to aggregate rather than return individual rows — both enforced on the query itself, not asked for in the prompt. Nobody approved what it measures, so read it." />
+                  </h3>
+                  <span className="tag tag-orange">not from an approved metric</span>
+                </div>
+                <pre className="code-block">{generated.sql}</pre>
+                <div className="dim" style={{ fontSize: 11.5, marginTop: 8 }}>
+                  Tables it was allowed to read: {generated.tables_offered.join(', ') || 'none'}
+                </div>
+                {/* The error, never an empty table. Columns are not validated by the firewall, so
+                    a query naming one that does not exist fails here — and showing that as no rows
+                    would read as "no data" for a question that was never answered. */}
+                {generated.error && (
+                  <div className="banner banner-error" style={{ marginTop: 10 }}>
+                    This query did not run: {generated.error}
+                  </div>
+                )}
+                {generated.rows && generated.rows.rows.length > 0 && (
+                  <div style={{ overflowX: 'auto', marginTop: 10 }}>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          {generated.rows.columns.map((c) => (
+                            <th key={c}>{c}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {generated.rows.rows.map((r, i) => (
+                          <tr key={i}>
+                            {r.map((cell, j) => (
+                              <td key={j}>{cell ?? '-'}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {generated.rows && generated.rows.rows.length === 0 && !generated.error && (
+                  <p className="qtrace-note" style={{ marginTop: 10 }}>
+                    The query ran and matched no rows. That is an empty result from a real query,
+                    not a query that failed.
+                  </p>
+                )}
               </div>
             )}
 

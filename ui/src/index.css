@@ -1549,6 +1549,8 @@ code, pre { font-family: var(--mono); }
 .qtrace-detail { padding: 12px 0 2px 11px; }
 .qtrace-note { font-size: 12px; color: var(--text-dim); line-height: 1.55; max-width: 760px; margin-top: 10px; }
 .qtrace-note:first-child { margin-top: 0; }
+/* A lane that failed reads differently from one that found nothing, so it looks different. */
+.qtrace-note-warn { color: var(--orange); }
 .qtrace-list { font-size: 12px; color: var(--text-dim); line-height: 1.6; margin: 8px 0 0 18px; }
 .qtrace-list strong { color: var(--text); }
 .qtrace-sublabel {

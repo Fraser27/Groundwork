@@ -4,8 +4,8 @@ Three tiers, tried most-precise-first, each falling through on a miss:
 
 1. **Governed metric** — YAML compiled to SQL. Deterministic, no model involved.
 2. **Graph traversal** — openCypher over assertions that pass `scope.edge_scope`.
-3. **Hybrid** — vector retrieval, expansion along verified edges, and the catalogued
-   schema of the tables involved.
+3. **Hybrid** — vector retrieval, expansion along verified edges, the catalogued schema of
+   the tables involved, and a query a model writes over that schema.
 
 The tier is part of the answer, not an implementation detail. "This came from an
 approved metric" and "a model read this out of a document" are different claims about
@@ -13,8 +13,9 @@ trustworthiness, and the caller is entitled to know which one they are getting.
 
 There was a fourth tier where a model wrote SQL. It was never implemented -- the generator was
 `None` at its only construction site -- so the system documented a capability it did not have,
-which is the wrong direction for a governance claim to be wrong in. SQL generation returns
-inside tier 3, where the catalogued schema it needs already lives.
+which is the wrong direction for a governance claim to be wrong in. SQL generation lives inside
+tier 3 instead, where the catalogued schema it needs already is, and it is refusable on its own
+without taking the passages and graph facts beside it down.
 
 Whatever a tier returns is then screened by `src.query.blocks`, the same veto the planner
 applies. Matter scoping already runs inside the reader, so this is defence in depth — but the
@@ -66,13 +67,31 @@ TIER_EXPLANATION = {
     ),
     Tier.HYBRID: (
         "Answered by finding relevant passages, following verified relationships out from "
-        "them, and reading the catalogued schema of the tables involved. Sources are cited."
+        "them, and reading the catalogued schema of the tables involved. Sources are cited. "
+        "Where the question needed a figure no approved metric covers, an AI may also have "
+        "written a query over that schema; if it did, the query is shown and labelled."
     ),
 }
 
 
 class QueryBlocked(PermissionError):
-    """Raised when the kill switch refuses an ungoverned query."""
+    """Raised when a tenant's tier cap refuses a question outright."""
+
+
+UNGOVERNED_BLOCKED = "ungoverned queries are disabled for this tenant"
+"""Why the SQL lane did not run when `block_ungoverned_queries` is on.
+
+A recorded skip and never an exception. The switch removes one lane of tier 3, not the tier: a
+raise would take passages and graph facts down with it, so a control meant to remove an ungoverned
+capability would remove governed answers instead."""
+
+GENERATED_SQL_WARNING = (
+    "Part of this answer comes from a query an AI wrote, not from an approved metric. It was "
+    "checked against the tables it was allowed to read and required to be an aggregate, but the "
+    "figures are only as right as the question it asked. Read the SQL before relying on them."
+)
+"""Carried in `warnings`, not only in `governed`. A reader looking at a number needs telling in
+words; a boolean in the response body is not a disclosure."""
 
 
 @dataclass
@@ -99,9 +118,10 @@ class Resolution:
     """How the tiers were chosen, when a router chose them. None means they were tried in order."""
 
     generated_sql: Any | None = None
-    """Set when a model wrote the query, which is what makes an answer ungoverned. Nothing
-    populates it yet -- SQL generation lands in tier 3 in a later stage -- so `is_governed` has a
-    single definition from the start rather than being rewritten when the generator arrives."""
+    """The `GeneratedSQL` when a model wrote part of the query, which is what makes an answer
+    ungoverned. Set by tier 3's SQL lane; None everywhere else, including when the kill switch
+    refused the lane -- a refused lane produced no model-written SQL, so the answer beside it is
+    governed and says so."""
 
     metric_selection: dict[str, Any] | None = None
     """Tier 1 only: how the metric was chosen, and whether that choice was deterministic.
@@ -235,15 +255,18 @@ class Resolver:
         metric_matcher: Any | None = None,
         graph_reader: Any | None = None,
         vector_search: Any | None = None,
-        sql_generator: Any | None = None,
-        firewall: Any | None = None,
+        catalog: Any | None = None,
+        sql_lane: Any | None = None,
         router: Any | None = None,
     ) -> None:
         self._metrics = metric_matcher
         self._graph = graph_reader
         self._vectors = vector_search
-        self._sql_gen = sql_generator
-        self._firewall = firewall
+        # Schemas for the SQL lane. Not a lane of its own here: `/query` returns one tier's answer,
+        # so schema with no query over it would be an answer no lawyer asked for.
+        self._catalog = catalog
+        # The `SqlLane` from `sql_generation`, shared with `Planner`.
+        self._sql = sql_lane
         # Optional, and absent means the previous behaviour: try every permitted tier in order.
         self._router = router
         self.blocked: list[BlockedQuery] = []
@@ -450,24 +473,44 @@ class Resolver:
     def _try_hybrid(
         self, ctx: AuthContext, question: str, settings: GovernanceSettings
     ) -> Resolution | None:
-        if self._vectors is None or self._graph is None:
+        passages: list[dict[str, Any]] = []
+        expanded: list[dict[str, Any]] = []
+        if self._vectors is not None and self._graph is not None:
+            passages = self._vectors.search(ctx, question, top_k=settings.vector_top_k)
+            if passages:
+                # Ids the passages already carry, both bare and prefixed, and no model between
+                # retrieval and traversal -- see `passage_seeds`. Shared with
+                # `Planner._graph_part` so the two endpoints walk from the same frontier.
+                expanded = self._graph.expand(
+                    ctx,
+                    passage_seeds(passages),
+                    depth=settings.graph_expand_depth,
+                    min_confidence=settings.min_confidence_floor,
+                )
+
+        # Attempted even with no passages, and that is the point: "how much have we billed" is
+        # answered by the warehouse and may match no document at all. Returning None here because
+        # retrieval found nothing would make the SQL lane unreachable on `/query` for exactly the
+        # questions it exists to answer, while compose ran it -- the endpoints would disagree.
+        generated = self._generated_sql(ctx, question, settings)
+        if not passages and generated is None:
             return None
-        passages = self._vectors.search(ctx, question, top_k=settings.vector_top_k)
-        if not passages:
-            return None
-        # Ids the passages already carry, both bare and prefixed, and no model between retrieval
-        # and traversal -- see `passage_seeds`. Shared with `Planner._graph_part` so the two
-        # endpoints walk from the same frontier for the same question.
-        seeds = passage_seeds(passages)
-        expanded = self._graph.expand(
-            ctx,
-            seeds,
-            depth=settings.graph_expand_depth,
-            min_confidence=settings.min_confidence_floor,
-        )
+
+        answer: dict[str, Any] = {"passages": passages, "related": expanded}
+        if generated is not None:
+            # Reported beside the passages rather than as the answer. The passages are quoted and
+            # the facts are verified; this is neither, so merging them would make one label cover
+            # two kinds of claim.
+            answer["generated"] = {
+                "sql": generated.generated.sql,
+                "tables_offered": list(generated.generated.tables_offered),
+                "rows": generated.rows,
+                "error": generated.error,
+                "error_code": generated.error_code,
+            }
         return Resolution(
             tier=Tier.HYBRID,
-            answer={"passages": passages, "related": expanded},
+            answer=answer,
             citations=[
                 {
                     "document_id": p["document_id"],
@@ -478,4 +521,39 @@ class Resolver:
                 for p in passages
             ],
             assertions_used=[e["assertion_id"] for e in expanded if "assertion_id" in e],
+            generated_sql=generated.generated if generated is not None else None,
+            warnings=[GENERATED_SQL_WARNING] if generated is not None else [],
         )
+
+    def _generated_sql(
+        self, ctx: AuthContext, question: str, settings: GovernanceSettings
+    ) -> Any | None:
+        """Model-written SQL for the structured half, or None.
+
+        The same `SqlLane` the planner runs, so `/query` and `/query/compose` cannot disagree about
+        whether a question got model-written SQL -- which would make `governed` mean different
+        things depending on which endpoint was asked.
+
+        The kill switch is checked here and not in `_attempt`: it refuses this lane, so tier 3 still
+        returns its passages and its walked facts. Refusing the tier would trade an ungoverned
+        capability for the governed answers beside it.
+        """
+        if self._sql is None or self._catalog is None:
+            return None
+        if settings.block_ungoverned_queries:
+            self.blocked.append(
+                BlockedQuery(
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    question=question,
+                    reason=UNGOVERNED_BLOCKED,
+                    at=datetime.now(UTC).isoformat(),
+                )
+            )
+            return None
+        try:
+            tables = self._catalog.tables(ctx.tenant_id)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("SQL lane unavailable, no catalog: %s", e)
+            return None
+        return self._sql.run(question, tables=tables) if tables else None

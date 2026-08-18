@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -43,7 +44,8 @@ from src.graph.scope import AuthContext
 from src.query.blocks import DEGRADED_WARNING, Block, Screen, blocks_for, seeds_from
 from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
-from src.query.resolver import Tier
+from src.query.resolver import UNGOVERNED_BLOCKED, BlockedQuery, Tier
+from src.query.sql_generation import relevant_tables
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,7 @@ class Lane(str, Enum):
     GRAPH = "graph"
     PASSAGES = "passages"
     CATALOG = "catalog"
+    SQL = "sql"
 
 
 #: How much of an answer a model wrote. Kept separate from `Lane` because provenance and
@@ -89,6 +92,15 @@ class Provenance(str, Enum):
     INFERRED = "inferred"
     """A model's reading. Carries a confidence and sits under the review gate."""
 
+    MODEL_WRITTEN = "model_written"
+    """A model wrote the query. Distinct from both of the above, because it fails differently.
+
+    `INFERRED` is a model reading a document, and it fails by misreading text a reader can go and
+    check. `MODEL_SELECTED` is a model choosing between definitions a human approved, so the
+    arithmetic is still someone's. This is a model choosing the arithmetic: the figure is exact
+    over whatever the query happened to ask, and the query is the thing to check. Nothing approved
+    it, so no part carrying this can be called governed."""
+
 
 #: What each provenance is called in `governance_label`, which a lawyer reads. The enum values are
 #: wire identifiers, and "model_selected" is not a phrase to put in front of a client.
@@ -97,6 +109,7 @@ _PROVENANCE_LABEL = {
     Provenance.MODEL_SELECTED: "deterministic SQL, metric chosen by similarity",
     Provenance.VERBATIM: "verbatim",
     Provenance.INFERRED: "inferred",
+    Provenance.MODEL_WRITTEN: "query written by AI, not from an approved metric",
 }
 
 
@@ -119,6 +132,14 @@ class Part:
     """Metric lane only: which metric, and whether the choice of it was deterministic. The same
     shape `Resolution.metric_selection` carries, from `metric_matcher.selection_of`."""
 
+    error: str | None = None
+    """Why this part has no content, when the reason is a refusal or a failure rather than absence.
+
+    The SQL lane needs it: the firewall validates tables, not columns, so a hallucinated column
+    reaches Athena and errors. Reported as `content=None` with an error rather than as an empty
+    list, because an empty list reads as "no data" -- the silent failure `scope.py` exists to
+    prevent -- and "the query was wrong" is a fact the reader can act on."""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "lane": self.lane.value,
@@ -130,6 +151,7 @@ class Part:
             "assertion_ids": self.assertion_ids,
             "confidence": self.confidence,
             "metric_selection": self.metric_selection,
+            "error": self.error,
         }
 
 
@@ -239,6 +261,7 @@ class Planner:
         catalog: Any | None = None,
         synthesiser: Any | None = None,
         router: Any | None = None,
+        sql_lane: Any | None = None,
     ) -> None:
         self._metrics = metric_matcher
         self._graph = graph_reader
@@ -248,6 +271,10 @@ class Planner:
         # Optional, and absent means what compose did before it existed: every permitted lane runs
         # and the trace cannot say why those lanes.
         self._router = router
+        # The `SqlLane` from `sql_generation`, which `Resolver` is also given. One module, so the
+        # two endpoints cannot disagree about whether a question got model-written SQL.
+        self._sql = sql_lane
+        self.blocked: list[BlockedQuery] = []
 
     def plan(
         self,
@@ -317,6 +344,29 @@ class Planner:
                 answer.lanes_run.append(Lane.CATALOG)
         else:
             answer.lanes_skipped[Lane.CATALOG.value] = _skipped(3, allowed, decision)
+
+        # The catalog lane finds the schema; this is what it is for. Gated on tier 3 like the other
+        # two, and additionally on the kill switch -- which refuses this lane alone. Refusing the
+        # whole tier would take passages and graph facts down with it, turning a switch that
+        # removes an ungoverned capability into one that removes governed answers.
+        if 3 not in runnable:
+            answer.lanes_skipped[Lane.SQL.value] = _skipped(3, allowed, decision)
+        elif settings.block_ungoverned_queries:
+            answer.lanes_skipped[Lane.SQL.value] = UNGOVERNED_BLOCKED
+            self.blocked.append(
+                BlockedQuery(
+                    tenant_id=ctx.tenant_id,
+                    user_id=ctx.user_id,
+                    question=question,
+                    reason=UNGOVERNED_BLOCKED,
+                    at=datetime.now(UTC).isoformat(),
+                )
+            )
+        else:
+            sql_part = self._sql_part(ctx, question)
+            if sql_part is not None:
+                answer.parts.append(sql_part)
+                answer.lanes_run.append(Lane.SQL)
 
         # Grounding. Deterministic, and it runs before synthesis so a model never sees
         # evidence the graph refused.
@@ -512,15 +562,15 @@ class Planner:
         if not tables:
             return None
 
-        terms = {t for t in question.lower().split() if len(t) > 3}
+        # The same selection the SQL lane makes, from the same function. A reader shown one list of
+        # schema while a query was written over another could not check the query against it.
         relevant = [
             {
                 "full_name": t.full_name,
                 "description": t.description,
                 "columns": [c.name for c in t.columns],
             }
-            for t in tables
-            if terms & {w for w in f"{t.full_name} {t.description}".lower().split() if len(w) > 3}
+            for t in relevant_tables(question, tables)
         ]
         if not relevant:
             return None
@@ -531,6 +581,35 @@ class Planner:
             # tier 2, so the reported tier was unbacked by any permission check.
             tier=Tier.HYBRID,
             content=relevant,
+        )
+
+    def _sql_part(self, ctx: AuthContext, question: str) -> Part | None:
+        """A query a model wrote over the catalogued schema, run if it cleared the firewall.
+
+        Never `DETERMINISTIC`, whatever came back. The figure may be an exact aggregate, but
+        nothing approved the arithmetic, so `MODEL_WRITTEN` is what makes `governance_label` stop
+        saying governed -- which is the point of the distinction.
+        """
+        if self._sql is None or self._catalog is None:
+            return None
+        try:
+            tables = self._catalog.tables(ctx.tenant_id)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("SQL lane unavailable, no catalog: %s", e)
+            return None
+        if not tables:
+            return None
+
+        result = self._sql.run(question, tables=tables)
+        if result is None:
+            return None
+        return Part(
+            lane=Lane.SQL,
+            provenance=Provenance.MODEL_WRITTEN,
+            tier=Tier.HYBRID,
+            content=result.rows,
+            sql=result.generated.sql,
+            error=result.error,
         )
 
     # ── Grounding ────────────────────────────────────────────────────────────
@@ -577,6 +656,8 @@ class Planner:
             else part.citations,
             assertion_ids=[a for a in part.assertion_ids if a in kept_ids],
             confidence=part.confidence,
+            metric_selection=part.metric_selection,
+            error=part.error,
         )
 
     # ── Synthesis ────────────────────────────────────────────────────────────

@@ -12,6 +12,14 @@ cannot see what a query touches we cannot claim it is safe. An *empty* allowlist
 denies everything rather than allowing everything, so a failed catalog load
 degrades to "no queries" instead of "all queries". `allow_all` is the only way to
 disable enforcement, and it has to be typed out.
+
+Two further rules, `require_aggregate` and `require_limit`, are off by default and on for
+model-written SQL. They exist because the table allowlist is not a sufficient control there:
+`SELECT * FROM matters` names a legitimate table, so the allowlist permits it, and Athena rows
+carry no assertion or matter id, so `blocks.py` cannot screen them row-wise either. An aggregate
+is the only shape that cannot hand back an individual walled matter's row. They are off for
+compiled metric SQL because that was approved by a human who could see what it exposed, and
+because a metric may legitimately return an unbounded list.
 """
 
 from __future__ import annotations
@@ -31,6 +39,49 @@ DIALECT = "trino"
 #: Statement types allowed at all. A read layer has no business emitting anything
 #: else, and an allowlisted table does not make DELETE acceptable.
 _READ_ONLY_STATEMENTS = (exp.Select, exp.Union, exp.Except, exp.Intersect)
+
+#: Rows a bounded statement may return when none was asked for. Large enough that an aggregate
+#: over a real firm's matters is not silently clipped, small enough to cap an Athena scan.
+DEFAULT_ROW_LIMIT = 1000
+
+
+def _aggregates(select: exp.Select) -> bool:
+    """Whether this SELECT reduces the rows it reads.
+
+    `parent_select` is the load-bearing part: without it a subquery's SUM would vouch for the
+    SELECT above it, and `SELECT name, (SELECT SUM(h) FROM te) FROM matters` still returns one
+    row per matter.
+    """
+    if select.args.get("group"):
+        return True
+    return any(agg.parent_select is select for agg in select.find_all(exp.AggFunc))
+
+
+def _row_wise_select(statement: exp.Expression, cte_names: set[str]) -> str:
+    """The first table read row-wise with nothing aggregating it, or "" when none is.
+
+    Checked per SELECT rather than on the statement, because the exposure is a SELECT that reads a
+    real table and neither reduces those rows itself nor sits under something that does. A derived
+    table is fine -- `SELECT COUNT(*) FROM (SELECT * FROM matters)` never emits the inner rows --
+    so an enclosing aggregate satisfies the rule for everything beneath it.
+    """
+    for select in statement.find_all(exp.Select):
+        sources = [
+            t
+            for t in select.find_all(exp.Table)
+            if t.parent_select is select
+            and not (not t.catalog and not t.db and t.name.lower() in cte_names)
+        ]
+        if not sources or _aggregates(select):
+            continue
+        enclosing = select.parent_select
+        while enclosing is not None:
+            if _aggregates(enclosing):
+                break
+            enclosing = enclosing.parent_select
+        else:
+            return sources[0].sql()
+    return ""
 
 
 @dataclass
@@ -58,6 +109,8 @@ class SQLFirewall:
         allowlist_provider: Callable[[], set[str]] | None = None,
         allow_all: bool = False,
         cache_ttl: float = 30.0,
+        require_aggregate: bool = False,
+        require_limit: bool = False,
     ) -> None:
         self._static = {t.lower() for t in (allowed_tables or set())}
         self._provider = allowlist_provider
@@ -65,6 +118,10 @@ class SQLFirewall:
         self._cache_ttl = cache_ttl
         self._cache: set[str] | None = None
         self._cache_ts = 0.0
+        # Both off by default, so the compiled-metric path is unchanged. `SqlGenerator`'s firewall
+        # turns them on: see the module docstring for why the allowlist alone is not enough there.
+        self.require_aggregate = require_aggregate
+        self.require_limit = require_limit
 
     @property
     def allowed_tables(self) -> set[str]:
@@ -138,7 +195,29 @@ class SQLFirewall:
                 reason=f"unauthorized tables: {', '.join(unique)}",
                 tables=sorted(set(seen)),
             )
-        return ValidationResult(allowed=True, tables=sorted(set(seen)))
+
+        tables = sorted(set(seen))
+        if self.require_aggregate and (row_wise := _row_wise_select(statement, cte_names)):
+            return ValidationResult(
+                allowed=False,
+                reason=(
+                    "only aggregate queries are permitted here: this one reads rows directly "
+                    f"from {row_wise}. An aggregate cannot hand back an individual matter's row, "
+                    "which is the only control available over warehouse rows -- they carry no "
+                    "matter id, so the ethical wall cannot screen them."
+                ),
+                tables=tables,
+            )
+        if self.require_limit and statement.args.get("limit") is None:
+            return ValidationResult(
+                allowed=False,
+                reason=(
+                    f"a LIMIT is required here; add LIMIT {DEFAULT_ROW_LIMIT} or fewer. Athena "
+                    "is billed by bytes scanned and an unbounded query has no cost ceiling."
+                ),
+                tables=tables,
+            )
+        return ValidationResult(allowed=True, tables=tables)
 
     @staticmethod
     def _is_allowed(qualified: str, allowed: set[str]) -> bool:

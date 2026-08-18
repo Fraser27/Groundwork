@@ -537,8 +537,26 @@ export interface QueryRows {
 export type QueryAnswer =
   | QueryRows
   | QueryHit[]
-  | { passages: QueryPassage[]; related: QueryHit[] }
+  | { passages: QueryPassage[]; related: QueryHit[]; generated?: GeneratedSQLResult }
   | null
+
+/**
+ * A query an AI wrote, from tier 3's SQL lane. Only present when one was written and run.
+ *
+ * `rows` and `error` are both optional and exactly one is set: the firewall validates tables, not
+ * columns, so a hallucinated column errors at Athena. Show the error beside the SQL — rendering it
+ * as no rows would read as "no data", which is the opposite of what happened.
+ */
+export interface GeneratedSQLResult {
+  sql: string
+  /** What the prompt was offered, which is also what the firewall allowed. Anything else was
+   *  unexecutable, not merely discouraged. */
+  tables_offered: string[]
+  rows?: QueryRows | null
+  error?: string | null
+  /** `blocked` when the firewall refused it, otherwise Athena's own code. */
+  error_code?: string | null
+}
 
 /**
  * Something the deterministic veto refused to let through, exactly as `Block.to_dict` sends it.
@@ -685,15 +703,23 @@ export interface QueryResult {
 // ── Composed answers ─────────────────────────────────────────────────────────
 
 /** Where one part of a composed answer came from. Mirrors src/query/planner.py :: Lane. */
-export type Lane = 'metric' | 'graph' | 'passages' | 'catalog'
+export type Lane = 'metric' | 'graph' | 'passages' | 'catalog' | 'sql'
 
 /** How much of a part a model wrote. Separate from the lane: retrieval can be fuzzy and the
  *  text it returned still exact. Mirrors planner.py :: Provenance.
  *
  *  `model_selected` is a compiled metric whose *definition* a model chose — no question word
  *  matched, so similarity picked between approved metrics. The figure is exact; which figure was
- *  computed is not reproducible, which is why it is neither 'deterministic' nor 'inferred'. */
-export type PartProvenance = 'deterministic' | 'model_selected' | 'verbatim' | 'inferred'
+ *  computed is not reproducible, which is why it is neither 'deterministic' nor 'inferred'.
+ *
+ *  `model_written` is a model choosing the arithmetic itself, not choosing between approved ones.
+ *  Nothing approved the query, so a part carrying it is never governed. */
+export type PartProvenance =
+  | 'deterministic'
+  | 'model_selected'
+  | 'verbatim'
+  | 'inferred'
+  | 'model_written'
 
 /** How tier 1 reached its metric. Mirrors metric_matcher.py :: selection_of. */
 export interface MetricSelection {
@@ -733,6 +759,14 @@ export interface AnswerPart {
   confidence?: number | null
   /** Metric lane only. */
   metric_selection?: MetricSelection | null
+  /**
+   * Why this part has no content, when the reason is a failure rather than absence.
+   *
+   * SQL lane mainly: the firewall validates tables, not columns, so a hallucinated column reaches
+   * Athena and errors. Render it — a part with an error and `content: null` is not an empty result,
+   * and showing it as one would read as "no data".
+   */
+  error?: string | null
 }
 
 export interface ComposedResult {

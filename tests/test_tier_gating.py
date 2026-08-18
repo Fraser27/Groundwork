@@ -38,8 +38,8 @@ def resolver() -> Resolver:
         metric_matcher=None,
         graph_reader=None,
         vector_search=None,
-        sql_generator=None,
-        firewall=None,
+        catalog=None,
+        sql_lane=None,
     )
 
 

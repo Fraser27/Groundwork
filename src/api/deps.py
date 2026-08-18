@@ -200,9 +200,33 @@ class Services:
             metric_matcher=matcher,
             graph_reader=self.graph_reader,
             vector_search=VectorSearch(self.embedder) if self.embedder else None,
-            sql_generator=None,
-            firewall=None,
+            catalog=self.catalog,
+            sql_lane=self.build_sql_lane(tenant_id) if tenant_id else None,
             router=self.build_tier_router(),
+        )
+
+    def build_sql_lane(self, tenant_id: str) -> Any | None:
+        """Model-written SQL over this tenant's catalogued schema, or None with no model.
+
+        Per tenant, because the firewall's allowlist is built per request from the tables the prompt
+        was offered -- see `sql_generation`. The same instance goes to `Resolver` and `Planner`, so
+        `/query` and `/query/compose` cannot disagree about whether a question got generated SQL.
+
+        `query_model` rather than `synthesis_model`: the two are separately settable precisely so a
+        firm can pay for a stronger model writing a query than writing a paragraph over it, and this
+        is the setting whose help text says so.
+        """
+        model_id = self.settings_for(tenant_id).query_model
+        if not model_id:
+            return None
+
+        from src.query.sql_generation import SqlGenerator, SqlLane
+
+        return SqlLane(
+            generator=SqlGenerator(model_id=model_id),
+            executor_factory=lambda offered: build_athena_executor(
+                self, tenant_id, allowed_tables=offered, generated=True
+            ),
         )
 
     def build_tier_router(self) -> Any | None:
@@ -287,7 +311,13 @@ def build_metric_matcher(services: Services, tenant_id: str) -> MetricMatcher | 
     )
 
 
-def build_athena_executor(services: Services, tenant_id: str) -> Any | None:
+def build_athena_executor(
+    services: Services,
+    tenant_id: str,
+    *,
+    allowed_tables: set[str] | None = None,
+    generated: bool = False,
+) -> Any | None:
     """What actually runs a compiled metric, or None when there is nowhere to run it.
 
     Nothing constructed one for the life of this project, so `MetricMatch.run` logged "no executor
@@ -297,8 +327,11 @@ def build_athena_executor(services: Services, tenant_id: str) -> Any | None:
     The firewall's allowlist is the tenant's own catalogued tables, so a compiled metric naming a
     table this tenant has not scanned is refused before it reaches Athena. That is defence in
     depth rather than the primary control -- a metric's SQL is compiled from a definition a human
-    approved, not written by a model -- but it is the same firewall that will check generated SQL,
-    and having it live on the deterministic path first is deliberate.
+    approved, not written by a model.
+
+    `generated=True` narrows it to the tables actually offered to the prompt and turns on the
+    aggregate and limit rules. Those are the difference between the two paths: an approved metric
+    was read by a human who could see what it exposed, and a generated query was not.
     """
     structured = getattr(services.config, "structured", None)
     bucket = getattr(structured, "athena_results_bucket", "")
@@ -308,11 +341,14 @@ def build_athena_executor(services: Services, tenant_id: str) -> Any | None:
     from src.executors.athena import AthenaConfig, AthenaExecutor
     from src.query.firewall import SQLFirewall
 
-    try:
-        allowed = {t.full_name for t in services.catalog.tables(tenant_id)}
-    except Exception as e:
-        logger.debug("no catalog for the firewall allowlist: %s", e)
-        allowed = set()
+    if allowed_tables is not None:
+        allowed = {t for t in allowed_tables if t}
+    else:
+        try:
+            allowed = {t.full_name for t in services.catalog.tables(tenant_id)}
+        except Exception as e:
+            logger.debug("no catalog for the firewall allowlist: %s", e)
+            allowed = set()
 
     return AthenaExecutor(
         AthenaConfig(
@@ -324,7 +360,11 @@ def build_athena_executor(services: Services, tenant_id: str) -> Any | None:
             # second knob to keep in step would only ever be wrong.
             region=getattr(services.config.graph, "region", "") or "",
         ),
-        SQLFirewall(allowed_tables=allowed),
+        SQLFirewall(
+            allowed_tables=allowed,
+            require_aggregate=generated,
+            require_limit=generated,
+        ),
     )
 
 
