@@ -232,6 +232,42 @@ class ReviewQueue:
     def _is_governing(self, predicate: str) -> bool:
         return self._governing is None or predicate in self._governing
 
+    def reviewers_version(
+        self,
+        ctx: AuthContext,
+        original: Assertion,
+        *,
+        subject_id: str,
+        predicate: str,
+        object_id: str,
+        allowed_predicates: frozenset[str] | None = None,
+    ) -> Assertion:
+        """The DECLARED assertion carrying what a person says instead.
+
+        Shared by `supersede` and by an entity merge, which needs exactly this object N times and
+        must not grow a second, drifting copy of what a reviewer's assertion looks like.
+
+        Keeps the original's `source_locator` deliberately: the reviewer is re-reading the same
+        span, and a correction with no citation would be an opinion.
+        """
+        return build_assertion(
+            tenant_id=original.tenant_id,
+            subject_id=subject_id,
+            predicate=predicate,
+            object_id=object_id,
+            # DECLARED, not EXTRACTED_MODEL: a person asserted this, and the class is the axis
+            # that keeps "a lawyer says so" distinguishable from "a model read it".
+            epistemic_class=EpistemicClass.DECLARED,
+            method=f"reviewer:{ctx.user_id}",
+            # A reviewer correcting a claim is as certain as this system gets about a document.
+            # Not 1.0: the underlying document could still be wrong.
+            confidence=REVIEWER_CONFIDENCE,
+            source_locator=original.source_locator,
+            matter_id=original.matter_id,
+            valid_from=original.valid_from,
+            allowed_predicates=allowed_predicates,
+        )
+
     def _canonical(self, entity_id: str) -> str:
         """A typed id in the form it will be stored in, or unchanged if nothing can say.
 
@@ -489,21 +525,12 @@ class ReviewQueue:
             )
 
         at = _now()
-        corrected = build_assertion(
-            tenant_id=original.tenant_id,
+        corrected = self.reviewers_version(
+            ctx,
+            original,
             subject_id=new_subject,
             predicate=new_predicate,
             object_id=new_object,
-            # DECLARED, not EXTRACTED_MODEL: a person asserted this, and the class is the axis
-            # that keeps "a lawyer says so" distinguishable from "a model read it".
-            epistemic_class=EpistemicClass.DECLARED,
-            method=f"reviewer:{ctx.user_id}",
-            # A reviewer correcting a claim is as certain as this system gets about a document.
-            # Not 1.0: the underlying document could still be wrong.
-            confidence=REVIEWER_CONFIDENCE,
-            source_locator=original.source_locator,
-            matter_id=original.matter_id,
-            valid_from=original.valid_from,
             allowed_predicates=allowed_predicates,
         )
 

@@ -570,6 +570,76 @@ async def correct(
     }
 
 
+class MergeRequest(BaseModel):
+    losing_id: str = Field(min_length=1)
+    winning_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
+    dry_run: bool = True
+    """Defaults to a preview. A merge withdraws conclusions, so the safe default is to *show* what
+    it would do; a caller has to ask for the write explicitly."""
+
+
+@router.post("/tenants/{tenant}/entities/merge")
+async def merge_entity(
+    services: ServicesDep,
+    principal: TenantDep,
+    body: Annotated[MergeRequest, Body()],
+) -> dict[str, Any]:
+    """Restate every claim about one entity id as a claim about another.
+
+    For when two spellings turn out to be one company. `dry_run` defaults to true because a merge
+    cascades: "this will also withdraw a conflict flag" is something a reviewer needs before
+    deciding rather than after.
+
+    Never automatic. `GET /entities/duplicates` finds candidates and a person decides, because the
+    same name-shape that catches a variant spelling also catches a genuine sibling company — and
+    merging those would turn an affiliate conflict into a false direct one.
+    """
+    require_reviewer(principal)
+    ctx, _ = principal
+
+    from src.documents.merge import MergeError, merge_entities, plan_merge
+
+    try:
+        if body.dry_run:
+            result = plan_merge(
+                services.review_queue,
+                ctx,
+                losing_id=body.losing_id,
+                winning_id=body.winning_id,
+            )
+        else:
+            result = merge_entities(
+                services.review_queue,
+                ctx,
+                losing_id=body.losing_id,
+                winning_id=body.winning_id,
+                reason=body.reason,
+                allowed_predicates=services.ontology.governing_predicates,
+                canonical_entity_id=services.ontology.canonical_entity_id,
+            )
+    except ScopeViolation as e:
+        raise scope_violation_to_http(e) from e
+    except MergeError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+
+    return {
+        "losing_id": result.losing_id,
+        "winning_id": result.winning_id,
+        "affected": list(result.affected),
+        "cascaded": list(result.cascaded),
+        "rewritten": list(result.rewritten),
+        "dry_run": result.dry_run,
+        "note": (
+            "Nothing was written; this is what a merge would do."
+            if result.dry_run
+            else "Each claim about the losing id was restated about the winning one. The "
+            "originals are closed rather than deleted, so an as-of read before now still "
+            "shows the graph as it was."
+        ),
+    }
+
+
 def _record_correction(
     services: Any, ctx: Any, original_id: str, corrected_id: str, reason: str
 ) -> None:
