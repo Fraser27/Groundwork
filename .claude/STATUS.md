@@ -27,7 +27,7 @@ Roughly 75% complete. What remains is the integration layer — see "Not done" b
 | `src/graph/scope.py` | 220 | Tenant/matter scoping, bitemporal `as_of` reads |
 | `src/graph/client.py` | 68 | Neo4j/Neptune driver; `read_scoped()` rejects unscoped reads |
 | `src/ontology/loader.py` | 166 | Domain packs, two-tier predicate gate |
-| `ontologies/legal.yaml` | — | 8 entities, 14 governing + 4 descriptive predicates, 2 rules |
+| `ontologies/legal.yaml` | — | 11 entities, 17 governing + 4 descriptive predicates, 3 rules |
 | `ontologies/healthcare.yaml` | — | Second pack, keeps domain-agnosticism honest |
 
 ### Structured pipeline (agent-built, Rosetta lineage)
