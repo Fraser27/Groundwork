@@ -370,7 +370,7 @@ class Planner:
 
         # Grounding. Deterministic, and it runs before synthesis so a model never sees
         # evidence the graph refused.
-        screen = self._blocks_for(ctx, seeds, settings)
+        screen = blocks_for(ctx, graph_reader=self._graph, seeds=seeds)
         answer.blocks = screen.blocks
         withheld = 0
         if screen:
@@ -613,16 +613,6 @@ class Planner:
         )
 
     # ── Grounding ────────────────────────────────────────────────────────────
-
-    def _blocks_for(
-        self, ctx: AuthContext, seeds: list[str], settings: GovernanceSettings
-    ) -> Screen:
-        return blocks_for(
-            ctx,
-            graph_reader=self._graph,
-            seeds=seeds,
-            min_confidence=settings.min_confidence_floor,
-        )
 
     def _without_blocked(self, part: Part, blocks: list[Block]) -> Part:
         """Drop blocked subjects from a part, keeping the part itself.

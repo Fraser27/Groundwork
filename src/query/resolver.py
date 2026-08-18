@@ -389,7 +389,6 @@ class Resolver:
             ctx,
             graph_reader=self._graph,
             seeds=seeds_from(_evidence(result.answer)),
-            min_confidence=settings.min_confidence_floor,
         )
         removed = _apply(result, screen) if screen else 0
         result.blocks = screen.blocks

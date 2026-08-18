@@ -113,11 +113,12 @@ class TestTheRealReaderCanRefuse:
         assert {row["rule"] for row in found} == {"conflict_check"}
 
     def test_every_field_blocks_for_reads_is_populated(self, ctx):
-        """`blocks_for` reads exactly these four. A missing `reason` renders as "blocked",
-        which is a refusal with no explanation -- worse than no block, because it looks like a
-        screen nobody can appeal."""
+        """`blocks_for` reads the first four. A missing `reason` renders as "blocked", which is
+        a refusal with no explanation -- worse than no block, because it looks like a screen
+        nobody can appeal. `confidence` rides along so a reviewer can see how firm the veto is;
+        nothing filters on it."""
         for row in _reader_with_conflict(ctx).blocking_facts(ctx, ["party:calder-plc"]):
-            assert set(row) == {"subject_id", "reason", "rule", "matter_id"}
+            assert set(row) == {"subject_id", "reason", "rule", "matter_id", "confidence"}
             assert row["subject_id"] and row["reason"] and row["rule"]
 
     def test_the_reason_names_the_other_end_by_its_real_id(self, ctx):
@@ -214,8 +215,51 @@ class TestThePackDecidesWhatBlocks:
             loader._parse(__import__("yaml").safe_load(pack.read_text()))
 
 
-class TestTheTrustPolicyIsNotBypassed:
-    """A veto must be a fact the caller could have been shown, on the same terms."""
+class TestAVetoIsNotWeighedAgainstAFloor:
+    """The one gate a block does *not* inherit from retrieval.
+
+    The trust floor decides what may inform an answer. A veto does not inform one -- it refuses
+    it -- and filtering refusals by confidence means the least certain conflict is the one
+    silently dropped. A check returning nothing because the veto fell under a floor is
+    indistinguishable from a clean check, which is the single failure a conflict check may not
+    have. It matters more now a conclusion decays per hop: a conflict reached four steps out is
+    exactly the one nobody finds by hand.
+    """
+
+    def _with_weak_conflict(self, ctx: AuthContext, confidence: float) -> GraphReader:
+        """A live conflict sitting below the 0.8 governance floor, as per-hop decay produces."""
+        reader = _reader_with_conflict(ctx)
+        for record in reader._queue.visible(ctx):
+            if record.assertion.predicate == "POTENTIAL_CONFLICT":
+                record.assertion.confidence = confidence
+        return reader
+
+    def test_a_conflict_below_the_floor_still_refuses(self, ctx):
+        """0.77 is what a 4-hop chain off a 0.95 premise decays to."""
+        reader = self._with_weak_conflict(ctx, 0.77)
+        found = reader.blocking_facts(ctx, ["party:calder-plc"])
+        assert "party:calder-plc" in {row["subject_id"] for row in found}
+
+    def test_the_weak_confidence_travels_so_a_reviewer_can_judge_it(self, ctx):
+        """Reported, not filtered on. How firm the veto is stays a reviewer's call."""
+        reader = self._with_weak_conflict(ctx, 0.77)
+        found = reader.blocking_facts(ctx, ["party:calder-plc"])
+        assert {row["confidence"] for row in found} == {0.77}
+
+    def test_a_very_weak_conflict_still_refuses(self, ctx):
+        """There is no floor at all, not merely a lower one."""
+        reader = self._with_weak_conflict(ctx, 0.05)
+        assert reader.blocking_facts(ctx, ["party:calder-plc"])
+
+    def test_the_floor_is_not_a_parameter_anyone_can_reinstate(self, ctx):
+        """A `min_confidence` argument would let one caller quietly restore the bug."""
+        import inspect
+
+        assert "min_confidence" not in inspect.signature(GraphReader.blocking_facts).parameters
+
+
+class TestTheRestOfTheTrustPolicyIsNotBypassed:
+    """Dropping the floor drops *only* the floor. Every other gate a veto inherits stays."""
 
     def test_a_pending_conflict_does_not_block(self, ctx):
         """`_readable` admits only signed-off facts. A veto on an unreviewed model guess would
@@ -240,13 +284,6 @@ class TestTheTrustPolicyIsNotBypassed:
         queue.stage(ctx, [pending], job_id="j1")
         reader = GraphReader(queue, ontology=onto)
         assert reader.blocking_facts(ctx, ["party:calder-plc"]) == []
-
-    def test_the_confidence_floor_applies(self, ctx):
-        """Same floor as retrieval, from `TrustFilter`. A floor above every conflict must
-        suppress the veto, or the two halves of the trust policy have drifted again."""
-        reader = _reader_with_conflict(ctx)
-        assert reader.blocking_facts(ctx, ["party:calder-plc"], min_confidence=0.8)
-        assert reader.blocking_facts(ctx, ["party:calder-plc"], min_confidence=1.01) == []
 
     def test_another_tenant_sees_nothing(self, ctx):
         """The veto reads the graph, so it is scoped like every other read."""

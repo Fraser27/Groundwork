@@ -155,7 +155,6 @@ def blocks_for(
     *,
     graph_reader: Any | None = None,
     seeds: list[str] | None = None,
-    min_confidence: float = 0.8,
 ) -> Screen:
     """The vetoes in force for this caller and these seeds.
 
@@ -168,6 +167,9 @@ def blocks_for(
     silently is how this half of the wall came to be missing for the life of the feature. So it
     fails open and *says so* on the `Screen`, and every caller turns that into a warning the
     reader sees rather than a debug line nobody reads.
+
+    Takes no confidence floor. The governance floor decides what may *inform* an answer; a veto
+    is not informing one. See `GraphReader.blocking_facts`.
     """
     blocks: list[Block] = []
     degraded = ""
@@ -185,7 +187,7 @@ def blocks_for(
 
     if graph_reader is not None and seeds:
         try:
-            found_rows = graph_reader.blocking_facts(ctx, seeds, min_confidence=min_confidence)
+            found_rows = graph_reader.blocking_facts(ctx, seeds)
         except BlockCheckUnavailable as e:
             degraded = str(e)
             logger.warning("rule blocks not evaluated: %s", e)

@@ -202,13 +202,7 @@ class GraphReader:
     def _is_governing(self, predicate: str) -> bool:
         return self._ontology is not None and self._ontology.is_governing(predicate)
 
-    def blocking_facts(
-        self,
-        ctx: AuthContext,
-        seeds: list[str],
-        *,
-        min_confidence: float = 0.8,
-    ) -> list[dict[str, Any]]:
+    def blocking_facts(self, ctx: AuthContext, seeds: list[str]) -> list[dict[str, Any]]:
         """Facts that FORBID an answer about these seeds, as opposed to `expand()`'s that inform one.
 
         Which predicates veto is the pack's call, not this module's: `blocks:` on a governing
@@ -224,6 +218,15 @@ class GraphReader:
         fact it drops is a fact the answer lacks; a veto it dropped would be an answer that looks
         cleared. Blocking predicates are rule conclusions over signed-off premises, so the set is
         small by construction.
+
+        **No confidence floor, and no parameter to set one.** Every other gate still applies —
+        tenant, matter wall, review state, `is_current` — but a block is not evidence to be
+        weighed against a threshold, it is a refusal. Filtering refusals by confidence means the
+        *least* certain conflict is the one silently ignored, and a check that returns nothing
+        because the veto fell 0.03 under a floor is indistinguishable from a clean check. It
+        matters more now that a conclusion decays per hop: a conflict found four steps out is
+        exactly the one nobody would spot by hand. The confidence still travels on the block, so
+        a reviewer sees how firm it is rather than having it decided for them.
         """
         if self._ontology is None:
             # Fails rather than returning no blocks. Without a pack the blocking vocabulary is
@@ -242,7 +245,7 @@ class GraphReader:
             return []
 
         out: dict[tuple[str, str, str], dict[str, Any]] = {}
-        for record in self._readable(ctx, min_confidence):
+        for record in self._readable(ctx, 0.0):
             a = record.assertion
             if a.predicate not in blocking:
                 continue
@@ -260,6 +263,9 @@ class GraphReader:
                     "reason": _block_reason(self._ontology, a.predicate, other),
                     "rule": a.rule_id or a.predicate,
                     "matter_id": a.matter_id,
+                    # Reported rather than filtered on. The refusal stands either way; how firm
+                    # it is is a reviewer's judgement, not this module's.
+                    "confidence": a.confidence,
                 }
 
         return [out[key] for key in sorted(out)]
