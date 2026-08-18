@@ -209,6 +209,57 @@ class TestClosedPredicateVocabulary:
         assert _base(predicate="CONCERNS_TOPIC", allowed_predicates=None)
 
 
+class TestEntityIdsMustBeInNormalForm:
+    """The same failure as the closed predicate vocabulary, one level down.
+
+    `Ontology.canonical_entity_id` fixes an id at the extraction boundary. This is the belt
+    behind it, in the shape of `assertion_queries._TYPE_SAFE`: it cannot normalise, because that
+    needs the pack's kinds and this module deliberately does not import the ontology, but
+    whitespace and a miscased prefix are syntactic and can be refused where nothing bypasses it.
+    """
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["party: Calder Shipping AG", "party:calder shipping", " party:acme", "party:acme "],
+    )
+    def test_whitespace_in_an_id_is_refused(self, bad):
+        with pytest.raises(AssertionError_, match="whitespace"):
+            _base(object_id=bad)
+
+    @pytest.mark.parametrize("bad", ["Party:calder", "PARTY:calder"])
+    def test_a_miscased_kind_prefix_is_refused(self, bad):
+        """`entity_kind_of` lowercases before checking the vocabulary, so this passes the kind
+        guard and then becomes a second node for one entity."""
+        with pytest.raises(AssertionError_, match="lowercase"):
+            _base(object_id=bad)
+
+    def test_the_subject_is_checked_too(self):
+        with pytest.raises(AssertionError_, match="subject_id"):
+            _base(subject_id="Party:Acme Corporation")
+
+    @pytest.mark.parametrize(
+        "good",
+        [
+            "matter:NTL-2026-0114",
+            "table:src-1:legal.matters",
+            "column:src-1:legal.matters.client_id",
+            "document:doc-d63a8228d513541553a76672",
+            "authority:410-us-113",
+            "party:müller-schiffahrt-gmbh",
+        ],
+    )
+    def test_an_external_id_is_not_refused(self, good):
+        """Uppercase, dots and a second colon are all meaningful after the prefix: these are
+        other systems' names. A guard that refused them would break the join back to Glue or to
+        case management, which is why this stops at the prefix."""
+        assert _base(object_id=good)
+
+    def test_an_unprefixed_id_is_not_refused(self):
+        """Requiring a prefix needs the vocabulary, which this module does not have. Callers
+        legitimately write `Party-Acme`, and refusing it here would be a guess about kinds."""
+        assert _base(object_id="Party-Acme")
+
+
 class TestIdentity:
     def test_same_fact_same_id(self):
         """Re-ingesting a document must be a no-op, not a duplicate."""

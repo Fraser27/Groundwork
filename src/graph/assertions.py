@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -108,6 +109,45 @@ ANSWERABLE_FLOOR = DEFAULT_MIN_CONFIDENCE
 #: rather than a list here: descriptive predicates are exactly the ones a pack declines to
 #: govern, which is the same distinction in the legal and healthcare packs both.
 DESCRIPTIVE_CONFIDENCE = ANSWERABLE_FLOOR
+
+
+#: A kind prefix, as it must appear in a stored entity id. Lowercase because `entity_kind_of`
+#: lowercases before comparing against the vocabulary, so `Party:acme` passes the kind guard and
+#: then MERGEs as a node distinct from `party:acme`.
+_ENTITY_KIND_PREFIX = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _reject_unnormalised(label: str, entity_id: str) -> None:
+    """Refuse an id that is not in normal form, on the two rules that need no vocabulary.
+
+    `Ontology.canonical_entity_id` is where an id gets *fixed*; this is the belt behind it, in
+    the shape of `assertion_queries._TYPE_SAFE` — "unreachable and unchecked must not become the
+    same thing". It cannot normalise, because that needs the pack's entity kinds and this module
+    deliberately does not import the ontology (which is why `allowed_predicates` is passed in).
+    But whitespace and a miscased prefix are purely syntactic, so they can be refused here, where
+    nothing can bypass it.
+
+    Deliberately narrow. It does **not** require a kind prefix at all, because that check needs
+    the vocabulary and callers legitimately write ids like `Matter-4471`. It does **not** touch
+    the part after the colon: `matter:NTL-2026-0114` is a case-management reference and
+    `table:src-1:legal.matters` a Glue name, so case, dots and further colons are all meaningful
+    there.
+    """
+    if not entity_id:
+        return
+    if entity_id != entity_id.strip() or any(c.isspace() for c in entity_id):
+        raise AssertionError_(
+            f"{label} {entity_id!r} contains whitespace; an id is a key, and "
+            "'party: Calder Shipping AG' would MERGE as a node distinct from "
+            "'party:calder-shipping-ag' while looking like the same company"
+        )
+    kind, sep, _ = entity_id.partition(":")
+    if sep and not _ENTITY_KIND_PREFIX.match(kind):
+        raise AssertionError_(
+            f"{label} {entity_id!r} has a kind prefix that is not lowercase; the kind guard "
+            "lowercases before checking the vocabulary, so this would pass it and then become a "
+            "second node for one entity"
+        )
 
 
 def answerable_confidence(confidence: float, *, governing: bool = True) -> float:
@@ -421,6 +461,10 @@ def build_assertion(
        caller — so no code path can opt itself out of review. `policy` may only ever
        send *more* to review; there is no setting that makes an unreviewed model claim
        live.
+    6. Entity ids carry no whitespace and no miscased kind prefix. Both would MERGE as a
+       second node for one entity, and a conflict check joining on the other one finds
+       nothing while reporting clean. `Ontology.canonical_entity_id` fixes an id; this
+       refuses one nothing fixed.
 
     Cascading retraction is the sixth invariant and lives in
     `src.documents.retract`, since it must walk the premise graph rather than
@@ -432,6 +476,8 @@ def build_assertion(
         raise AssertionError_("method is required, and must be versioned (e.g. regex:citation@v3)")
     if not 0.0 <= confidence <= 1.0:
         raise AssertionError_(f"confidence must be in [0,1], got {confidence}")
+    _reject_unnormalised("subject_id", subject_id)
+    _reject_unnormalised("object_id", object_id)
     if raw_confidence is not None and not 0.0 <= raw_confidence <= 1.0:
         raise AssertionError_(f"raw_confidence must be in [0,1], got {raw_confidence}")
 
