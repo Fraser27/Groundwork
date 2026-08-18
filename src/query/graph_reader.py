@@ -227,6 +227,12 @@ class GraphReader:
         matters more now that a conclusion decays per hop: a conflict found four steps out is
         exactly the one nobody would spot by hand. The confidence still travels on the block, so
         a reviewer sees how firm it is rather than having it decided for them.
+
+        **Ordered by reach, furthest first**, which is the opposite of ordering by confidence and
+        deliberately so. A conflict the firm found by combining five facts across three matters is
+        the one a partner would never have spotted unaided; a direct one they very likely already
+        know. Alphabetical order — what this returned before — put `matter:a-1` above a five-fact
+        finding about `party:zenith` for no reason a reader could defend.
         """
         if self._ontology is None:
             # Fails rather than returning no blocks. Without a pack the blocking vocabulary is
@@ -266,9 +272,22 @@ class GraphReader:
                     # Reported rather than filtered on. The refusal stands either way; how firm
                     # it is is a reviewer's judgement, not this module's.
                     "confidence": a.confidence,
+                    # How many signed-off facts had to be combined to see this at all. 0 for a
+                    # fact somebody stated outright. This is the honest measure of "would anyone
+                    # have found this unaided" -- and it is deliberately not confidence, which
+                    # moves the other way: reach makes a finding less certain and more valuable.
+                    "premise_count": len(a.premises),
                 }
 
-        return [out[key] for key in sorted(out)]
+        # Furthest reach first, then the firmer of two equals, then the id so a tie is broken the
+        # same way twice -- two runs of one conflict check listing refusals in a different order
+        # is indistinguishable from the graph having changed.
+        return [
+            out[key]
+            for key in sorted(
+                out, key=lambda k: (-out[k]["premise_count"], -out[k]["confidence"], k)
+            )
+        ]
 
     def _readable(self, ctx: AuthContext, min_confidence: float) -> list[Any]:
         """Current, in-scope, trusted-enough assertions.

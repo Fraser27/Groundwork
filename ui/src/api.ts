@@ -571,6 +571,9 @@ export interface QueryBlock {
   rule: string
   matter_id?: string | null
   contact?: string | null
+  /** Signed-off facts combined to reach this refusal. 0 for an ethical screen, which is an
+   *  instruction rather than a derivation. Higher means less likely anyone found it unaided. */
+  premise_count?: number
 }
 
 /** Which index a routing hit came from. `passages` is the document-chunk index. */

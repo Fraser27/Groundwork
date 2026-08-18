@@ -54,6 +54,14 @@ class Block:
     because the matching matter was invisible is the harm the wall exists to prevent. None for a
     rule block, which is not somebody's decision to explain."""
 
+    premise_count: int = 0
+    """How many signed-off facts had to be combined before this refusal was visible.
+
+    0 for an ethical screen, which is an instruction rather than a derivation. The point of
+    reporting it is that a conflict resting on five facts across three matters is one nobody would
+    have found by reading the file, while a direct one they probably already know — so this, not
+    confidence, is what decides which refusal a reader is shown first."""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "subject": self.subject,
@@ -61,6 +69,7 @@ class Block:
             "rule": self.rule,
             "matter_id": self.matter_id,
             "contact": self.contact,
+            "premise_count": self.premise_count,
         }
 
 
@@ -205,9 +214,18 @@ def blocks_for(
                         reason=str(found.get("reason") or found.get("predicate") or "blocked"),
                         rule=str(found.get("rule") or found.get("predicate") or ""),
                         matter_id=found.get("matter_id"),
+                        premise_count=int(found.get("premise_count") or 0),
                     )
                 )
 
+    # Furthest-reaching refusal first, across both sources. A stable sort, so screens keep their
+    # alphabetical order among themselves and rule blocks keep the reader's.
+    #
+    # This puts screens last, and that is the intent rather than a side effect: a screen is an
+    # instruction the reader has already been given about a matter they know exists, whereas a
+    # conflict derived from five facts across three matters is news. Listing the known thing above
+    # the discovered one buries the only part of this panel nobody could have worked out unaided.
+    blocks.sort(key=lambda b: -b.premise_count)
     return Screen(blocks=blocks, seeds=tuple(seeds or ()), degraded=degraded)
 
 

@@ -118,7 +118,14 @@ class TestTheRealReaderCanRefuse:
         nobody can appeal. `confidence` rides along so a reviewer can see how firm the veto is;
         nothing filters on it."""
         for row in _reader_with_conflict(ctx).blocking_facts(ctx, ["party:calder-plc"]):
-            assert set(row) == {"subject_id", "reason", "rule", "matter_id", "confidence"}
+            assert set(row) == {
+                "subject_id",
+                "reason",
+                "rule",
+                "matter_id",
+                "confidence",
+                "premise_count",
+            }
             assert row["subject_id"] and row["reason"] and row["rule"]
 
     def test_the_reason_names_the_other_end_by_its_real_id(self, ctx):
@@ -256,6 +263,95 @@ class TestAVetoIsNotWeighedAgainstAFloor:
         import inspect
 
         assert "min_confidence" not in inspect.signature(GraphReader.blocking_facts).parameters
+
+
+class TestTheFurthestReachingRefusalIsShownFirst:
+    """Which refusal a reader sees first, and why it is not the most confident one.
+
+    A direct conflict is one a partner has probably already spotted; one derived from several
+    facts across separate matters is not visible in any single document by construction. Ordering
+    these alphabetically -- what this did before -- buried the only finding nobody could have
+    reached unaided. Reach and confidence move in opposite directions here, since each hop decays
+    the conclusion, so ranking on confidence would put the obvious case on top.
+    """
+
+    def _reader_with_both(self, ctx: AuthContext) -> GraphReader:
+        """A direct conflict on one party and an affiliate-derived one on another.
+
+        Both are produced by the real `Reasoner`, so the premise counts are the ones production
+        would see rather than numbers chosen to make the sort look right.
+        """
+        onto = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=onto.governing_predicates
+        )
+        _live(
+            ctx,
+            queue,
+            [
+                # Direct: represented and opposed, same party. Two premises.
+                ("counsel:dalgleish-rowe", "REPRESENTS", "party:obvious-ltd", "M-1"),
+                ("matter:m-2", "ADVERSE_TO", "party:obvious-ltd", "M-2"),
+                # Indirect: reached only through the affiliation. Three premises.
+                ("counsel:dalgleish-rowe", "REPRESENTS", "party:northwind", "M-4"),
+                ("party:northwind", "AFFILIATE_OF", "party:calder-plc", "M-5"),
+                ("matter:m-6", "ADVERSE_TO", "party:calder-plc", "M-6"),
+            ],
+            "j1",
+        )
+        live = [r.assertion for r in queue.visible(ctx) if r.is_current]
+        inferences = [i.assertion for i in Reasoner(onto).run(ctx, live).inferences]
+        queue.stage(ctx, inferences, job_id="j2")
+        for a in inferences:
+            if a.review_state is ReviewState.PENDING:
+                queue.approve(ctx, a.assertion_id)
+        queue.promote(ctx, job_id="j2")
+        return GraphReader(queue, ontology=onto)
+
+    def test_the_indirect_conflict_outranks_the_direct_one(self, ctx):
+        reader = self._reader_with_both(ctx)
+        found = reader.blocking_facts(ctx, ["party:northwind", "party:obvious-ltd"])
+        counts = [row["premise_count"] for row in found]
+
+        assert counts == sorted(counts, reverse=True)
+        assert counts[0] > counts[-1], "the fixture must contain refusals of differing reach"
+
+    def test_the_premise_count_is_the_real_one(self, ctx):
+        """Three for the affiliate route, two for the direct one. Read off the assertion, so it
+        cannot drift from what the proof tree actually holds."""
+        reader = self._reader_with_both(ctx)
+        found = reader.blocking_facts(ctx, ["party:northwind", "party:obvious-ltd"])
+        by_subject = {row["subject_id"]: row["premise_count"] for row in found}
+
+        assert by_subject["party:northwind"] == 3
+        assert by_subject["party:obvious-ltd"] == 2
+
+    def test_a_screen_sorts_below_a_derived_conflict(self, ctx):
+        """A screen is an instruction about a matter the reader knows exists; a derived conflict
+        is news. Listing the known thing first buries the discovered one."""
+        screened = AuthContext(
+            user_id="alice@firm.com",
+            tenant_id=TENANT,
+            matter_denylist=frozenset({"M-9"}),
+            screen_reasons={"M-9": "acted for the opposing party"},
+        )
+        screen = blocks_for(
+            screened,
+            graph_reader=self._reader_with_both(screened),
+            seeds=["party:northwind"],
+        )
+        rules = [b.rule for b in screen.blocks]
+
+        assert "ethical_screen" in rules
+        assert rules.index("conflict_via_affiliate") < rules.index("ethical_screen")
+
+    def test_ordering_is_stable_across_runs(self, ctx):
+        """Two runs of one conflict check listing refusals differently is indistinguishable from
+        the graph having changed."""
+        seeds = ["party:northwind", "party:obvious-ltd"]
+        first = self._reader_with_both(ctx).blocking_facts(ctx, seeds)
+        second = self._reader_with_both(ctx).blocking_facts(ctx, seeds)
+        assert [r["subject_id"] for r in first] == [r["subject_id"] for r in second]
 
 
 class TestTheRestOfTheTrustPolicyIsNotBypassed:

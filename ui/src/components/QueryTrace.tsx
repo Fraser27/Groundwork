@@ -834,6 +834,13 @@ function GateStep({
           <p className="withheld-block-note">
             Named on purpose. An answer that looks complete because the inconvenient part was
             invisible is the failure a screen exists to prevent.
+            {blocks.some((b) => (b.premise_count ?? 0) > 2) && (
+              <>
+                {' '}
+                Most indirect first: a conflict the graph had to derive from several documents is
+                the one least likely to be already known.
+              </>
+            )}
           </p>
           <div className="withheld-list">
             {blocks.map((b, i) => (
@@ -841,6 +848,18 @@ function GateStep({
                 <div className="withheld-item-head">
                   <strong>{b.matter_id ?? entityLabel(b.subject)}</strong>
                   <code>{b.rule || 'blocked'}</code>
+                  {(b.premise_count ?? 0) > 2 && (
+                    <span
+                      className="tag tag-red"
+                      title={
+                        `Derived from ${b.premise_count} separate signed-off facts. A conflict ` +
+                        'this indirect is not visible in any one document, so it is unlikely ' +
+                        'anyone would have found it by reading the file.'
+                      }
+                    >
+                      indirect — {b.premise_count} facts
+                    </span>
+                  )}
                 </div>
                 <div className="withheld-field">
                   <span className="withheld-field-label">Reason recorded</span>

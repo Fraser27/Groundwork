@@ -659,6 +659,9 @@ class TestTheQueryEndpointSendsItsBlocks:
                 "rule": "ethical_screen",
                 "matter_id": SCREENED_MATTER,
                 "contact": SCREEN_CONTACT,
+                # A screen is an instruction, not a derivation, so nothing was combined to reach
+                # it. Which is also why it sorts below a conflict the graph had to work out.
+                "premise_count": 0,
             }
         ]
 
@@ -666,7 +669,14 @@ class TestTheQueryEndpointSendsItsBlocks:
         """`QueryBlock` in api.ts. A key the page reads and the API never sends is the recurring
         crash in this repo: tsc stays clean and the render throws."""
         r = _screened_client().post(f"/api/tenants/{TENANT}/query", json={"query": "antitrust"})
-        assert set(r.json()["blocks"][0]) == {"subject", "reason", "rule", "matter_id", "contact"}
+        assert set(r.json()["blocks"][0]) == {
+            "subject",
+            "reason",
+            "rule",
+            "matter_id",
+            "contact",
+            "premise_count",
+        }
 
     def test_the_response_carries_the_gate_counters(self):
         """`GateTrace` in api.ts was declared and never sent, so the trace told every reader "no
