@@ -471,22 +471,15 @@ async def run_reasoner(services: ServicesDep, principal: TenantDep) -> dict[str,
     require_admin(principal)
     ctx, _ = principal
 
-    from src.reasoning.engine import Reasoner
+    from src.reasoning.engine import infer_and_stage
 
-    live = [r.assertion for r in services.review_queue.live_assertions(ctx)]
-    report = Reasoner(services.ontology).run(ctx, live)
-
-    staged: list[str] = []
-    if report.inferences:
-        try:
-            staged = services.review_queue.stage(
-                ctx, [i.assertion for i in report.inferences], job_id="reasoner"
-            )
-        except ScopeViolation as e:
-            raise scope_violation_to_http(e) from e
+    try:
+        report = infer_and_stage(services.ontology, services.review_queue, ctx)
+    except ScopeViolation as e:
+        raise scope_violation_to_http(e) from e
 
     out = report.to_dict()
-    out["staged"] = len(staged)
+    out["staged"] = report.count
     out["note"] = (
         "Inferred facts are staged for review, not published. Each carries the facts it "
         "rests on, so a reviewer can follow it back to the documents underneath."

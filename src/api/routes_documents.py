@@ -318,6 +318,14 @@ def _run_pipeline(
 
     promoted = services.review_queue.promote(ctx, job_id=job_id)
 
+    # After promote, so the pass sees this document's auto-asserted facts as live premises.
+    #
+    # Ingest is the right trigger because a conflict is almost never visible in one document: it
+    # exists in the join between this filing and one already in the graph. Left to an explicit
+    # call, a derivable conflict simply never came into existence -- the ethical wall reported
+    # "nothing refused" honestly, because there was no conclusion in the graph to refuse on.
+    inferred = _infer(services, ctx)
+
     return {
         "page_count": parsed.page_count,
         "transcription": parsed.method,
@@ -335,12 +343,40 @@ def _run_pipeline(
         # only how many, which is what makes a document's facts findable from its job.
         "staged_assertion_ids": list(staged),
         "assertions_live": len(promoted),
+        "inferred": inferred,
         "pending_review": services.review_queue.pending_count(ctx),
         "note": (
             "Claims whose quote was found verbatim in the document went live "
             "immediately, a search confirmed the text is there. Anything the model "
             "interpreted is waiting in the review queue."
         ),
+    }
+
+
+def _infer(services: Services, ctx: AuthContext) -> dict[str, Any]:
+    """Draw what the pack's rules conclude now this document's facts are live.
+
+    Reports rather than raises. The document is ingested and searchable by this point, so a
+    reasoning failure costs conclusions and nothing else -- and losing the upload because a rule
+    misfired would be the worse trade. But it says so: "ran and found nothing" and "never ran" are
+    the pair this codebase keeps confusing, and only one of them is reassuring.
+    """
+    from src.reasoning.engine import infer_and_stage
+
+    try:
+        report = infer_and_stage(services.ontology, services.review_queue, ctx)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("inference after ingest failed for %s: %s", ctx.tenant_id, e)
+        return {"ran": False, "error": str(e), "staged": 0}
+    if report.count:
+        logger.info(
+            "inference after ingest staged %d conclusions for %s", report.count, ctx.tenant_id
+        )
+    return {
+        "ran": True,
+        "staged": report.count,
+        "rules_evaluated": report.rules_evaluated,
+        "rules_skipped": report.rules_skipped,
     }
 
 

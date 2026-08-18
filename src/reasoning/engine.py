@@ -381,3 +381,27 @@ class Reasoner:
             return None
 
         return Inference(assertion=assertion, rule_id=rule.rule_id, premise_ids=premise_ids)
+
+
+def infer_and_stage(
+    ontology: Any, review_queue: Any, ctx: AuthContext, *, job_id: str = "reasoner"
+) -> ReasonerReport:
+    """Run the pack's rules over a tenant's live facts and stage what they conclude.
+
+    One definition, called by the `/reason` endpoint and by the ingest pipeline. Two copies would
+    drift, and the drift would run in the dangerous direction: an endpoint that stages conclusions
+    and an ingest path that quietly does not, so whether a conflict exists would depend on how the
+    document happened to arrive.
+
+    **Staged, never written live.** An inference passes the same review gate as an extraction,
+    because a conflict flag nobody signed off is still one somebody would act on.
+
+    Premises are the *live* assertions rather than everything visible: a conclusion may only rest
+    on facts somebody stands behind. Idempotent, because `assertion_id` is content-addressed -- a
+    second pass over unchanged facts converges instead of duplicating.
+    """
+    live = [r.assertion for r in review_queue.live_assertions(ctx)]
+    report = Reasoner(ontology).run(ctx, live)
+    if report.inferences:
+        review_queue.stage(ctx, [i.assertion for i in report.inferences], job_id=job_id)
+    return report
