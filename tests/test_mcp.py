@@ -591,6 +591,14 @@ class TestGraphNeighbourhood:
         result = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1", "depth": 9})
         assert result.isError
 
+    def test_the_source_document_reaches_what_was_extracted_from_it(self):
+        """Third caller of `expand`, and it must agree with `/query` and `/query/compose`. An agent
+        handed a `document_id` from `get_provenance` gets the facts that document produced, not an
+        empty neighbourhood."""
+        _stage(TENANT_A, matter_id="M-1")
+        result = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:doc-1"})
+        assert [e["predicate"] for e in result.structuredContent["edges"]] == ["CONCERNS_TOPIC"]
+
     def test_below_floor_edges_are_excluded(self):
         """`graph_neighbourhood` is the defensible view; `search_assertions` is the raw one.
         A weak claim appearing here would blur that distinction."""

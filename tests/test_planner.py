@@ -50,14 +50,25 @@ class FakeMatcher:
 
 
 class FakeGraph:
-    def __init__(self, hits: list[dict] | None = None, blocking: list[dict] | None = None) -> None:
+    def __init__(
+        self,
+        hits: list[dict] | None = None,
+        blocking: list[dict] | None = None,
+        walked: list[dict] | None = None,
+    ) -> None:
         self.hits = hits or []
         self.blocking = blocking or []
+        self.walked = walked or []
         self.searched = False
+        self.expanded_from: list[str] | None = None
 
     def search(self, ctx: AuthContext, question: str, **kw: Any) -> list[dict]:
         self.searched = True
         return self.hits
+
+    def expand(self, ctx: AuthContext, seeds: list[str], **kw: Any) -> list[dict]:
+        self.expanded_from = seeds
+        return self.walked
 
     def blocking_facts(self, ctx: AuthContext, seeds: list[str], **kw: Any) -> list[dict]:
         return self.blocking
@@ -148,6 +159,105 @@ class TestFanOut:
         answer = planner.plan(ctx, "q", GovernanceSettings())
         assert answer.parts == []
         assert any("Nothing matched" in w for w in answer.warnings)
+
+
+class TestComposeWalksOutFromThePassagesToo:
+    """`/query` and `/query/compose` must agree about what a question found.
+
+    Compose ran the graph lane as a term search alone, so a fact reachable only from its source
+    document reached `/query` via `Resolver._try_hybrid` and never reached compose -- the same
+    question, two answers, depending on which endpoint you asked. That is a bug class this repo
+    has hit repeatedly, and compose is the view whose whole purpose is showing what was found.
+    """
+
+    def test_the_graph_lane_walks_out_from_the_retrieved_passages(self, ctx):
+        graph = FakeGraph(walked=[{"assertion_id": "walked-1", "hops": 1}])
+        answer = Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(ctx, "who represents halveston", GovernanceSettings(), allow_synthesis=False)
+
+        facts = next(p for p in answer.parts if p.lane == Lane.GRAPH).content
+        assert [f["assertion_id"] for f in facts] == ["walked-1"]
+
+    def test_it_seeds_the_walk_the_way_the_resolver_does(self, ctx):
+        """Both id forms. Seeding only the bare id matched nothing on the first frontier, which is
+        how tier 3 came to return zero related facts silently."""
+        graph = FakeGraph()
+        Planner(
+            graph_reader=graph,
+            vector_search=FakeVectors([{"document_id": "doc-1", "matter_id": "M-1"}]),
+        ).plan(ctx, "q", GovernanceSettings(), allow_synthesis=False)
+
+        assert set(graph.expanded_from or []) == {"doc-1", "document:doc-1", "M-1", "matter:M-1"}
+
+    def test_a_walked_fact_is_not_reported_twice(self, ctx):
+        """The term search and the walk can both find one fact, and a reader counting facts would
+        be told the graph holds two."""
+        graph = FakeGraph(
+            hits=[{"assertion_id": "a1"}],
+            walked=[{"assertion_id": "a1"}, {"assertion_id": "a2"}],
+        )
+        answer = Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(ctx, "q", GovernanceSettings(), allow_synthesis=False)
+
+        facts = next(p for p in answer.parts if p.lane == Lane.GRAPH).content
+        assert [f["assertion_id"] for f in facts] == ["a1", "a2"]
+
+    def test_walked_facts_alone_are_enough_for_a_graph_part(self, ctx):
+        """The production case: the question named no entity the term search could match, and every
+        fact worth having was reachable only from the document."""
+        graph = FakeGraph(hits=[], walked=[{"assertion_id": "walked-1"}])
+        answer = Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(ctx, "q", GovernanceSettings(), allow_synthesis=False)
+
+        assert Lane.GRAPH in answer.lanes_run
+
+    def test_a_walked_fact_is_screened_like_any_other(self, ctx):
+        """A block applies to the evidence, not to how it was retrieved."""
+        screened = AuthContext(
+            tenant_id=TENANT, user_id="alice", matter_denylist=frozenset({"M-9"})
+        )
+        graph = FakeGraph(walked=[{"assertion_id": "a1", "matter_id": "M-9"}])
+        answer = Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(screened, "q", GovernanceSettings(), allow_synthesis=False)
+
+        facts = next((p.content for p in answer.parts if p.lane == Lane.GRAPH), [])
+        assert facts == []
+
+    def test_the_graph_lane_still_runs_when_no_passage_was_retrieved(self, ctx):
+        answer = Planner(graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}])).plan(
+            ctx, "q", GovernanceSettings(), allow_synthesis=False
+        )
+        assert [p.lane for p in answer.parts] == [Lane.GRAPH]
+
+    def test_a_reader_that_cannot_expand_still_contributes_its_term_matches(self, ctx):
+        """A partial answer beats no answer, and the graph lane predates `expand`."""
+
+        class SearchOnly:
+            def search(self, ctx: AuthContext, question: str, **kw: Any) -> list[dict]:
+                return [{"assertion_id": "a1"}]
+
+        answer = Planner(
+            graph_reader=SearchOnly(), vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(ctx, "q", GovernanceSettings(), allow_synthesis=False)
+
+        assert {p.lane for p in answer.parts} == {Lane.GRAPH, Lane.PASSAGES}
+
+    def test_a_capped_passage_lane_costs_the_walk_not_the_question(self, ctx):
+        """Tier 3 forbidden means no retrieval, so there are no passages to walk from -- and the
+        walk must not be the thing that reaches OpenSearch behind the cap."""
+        vectors = FakeVectors([{"document_id": "doc-1"}])
+        graph = FakeGraph(hits=[{"assertion_id": "a1"}], walked=[{"assertion_id": "walked-1"}])
+        answer = Planner(graph_reader=graph, vector_search=vectors).plan(
+            ctx, "q", GovernanceSettings(allowed_tiers=frozenset({2})), allow_synthesis=False
+        )
+
+        assert vectors.searched is False
+        assert graph.expanded_from is None
+        assert [p.lane for p in answer.parts] == [Lane.GRAPH]
 
 
 class TestTierGating:

@@ -22,7 +22,7 @@ from src.graph.scope import AuthContext
 from src.metrics.loader import load_metrics
 from src.metrics.models import StaticCatalog
 from src.ontology.loader import load_ontology
-from src.query.graph_reader import GraphReader, terms_of
+from src.query.graph_reader import GraphReader, passage_seeds, terms_of
 from src.query.metric_matcher import MetricMatcher
 from src.query.resolver import QueryBlocked, Resolver, Tier
 
@@ -312,6 +312,220 @@ class TestExpandRanksBeforeTruncating:
         first = reader.expand(ctx, ["document:d1"], depth=2, limit=7)
         second = reader.expand(ctx, ["document:d1"], depth=2, limit=7)
         assert [e["assertion_id"] for e in first] == [e["assertion_id"] for e in second]
+
+
+#: The production shape that exposed the severed spine. `doc-d63a8228d513541553` carries only
+#: `MENTIONS` edges -- descriptive, so capped at the trust floor exactly -- while the facts anyone
+#: would ask for name it in `source_locator` and nowhere else. Raising the floor to 0.85 dropped
+#: the only bridge, and tier 3 answered with no graph facts at all.
+DOC = "doc-d63a8228d513541553"
+
+
+def _severed_spine_reader(ctx: AuthContext) -> GraphReader:
+    ontology = load_ontology("legal")
+    queue = ReviewQueue(
+        InMemoryAssertionStore(), governing_predicates=ontology.governing_predicates
+    )
+    source = SourceLocator(
+        document_id=DOC, filename="halveston.pdf", page=4, quote="Sian Aldridge, for the Claimant"
+    )
+    presence = [
+        build_assertion(
+            tenant_id=TENANT,
+            subject_id=f"document:{DOC}",
+            predicate="MENTIONS",
+            object_id=object_id,
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:opus-5",
+            confidence=0.95,
+            source_locator=source,
+            matter_id="hal-2025-0092",
+        )
+        for object_id in ("party:halveston-chartering-limited", "counsel:sian-aldridge")
+    ]
+    # Neither endpoint is the document. This is what a model extractor really writes, and the
+    # reason a document seed could not reach it.
+    governing = [
+        build_assertion(
+            tenant_id=TENANT,
+            subject_id=subject_id,
+            predicate=predicate,
+            object_id=object_id,
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:opus-5",
+            confidence=confidence,
+            source_locator=source,
+            matter_id="hal-2025-0092",
+        )
+        for subject_id, predicate, object_id, confidence in (
+            ("matter:hal-2025-0092", "RELATES_TO_MATTER", "party:halveston-chartering", 0.79),
+            ("counsel:sian-aldridge", "REPRESENTS", "party:halveston-chartering-limited", 0.75),
+            ("authority:the-marisol", "OVERRULES", "authority:the-aquitaine", 0.79),
+        )
+    ]
+    queue.stage(ctx, presence + governing, job_id="j1")
+    for a in presence + governing:
+        queue.approve(ctx, a.assertion_id)
+    queue.promote(ctx, job_id="j1")
+    return GraphReader(queue, ontology=ontology)
+
+
+class TestASourceDocumentIsATraversalRoute:
+    """The graph's spine is matter -> document -> fact, and it was severed.
+
+    A model-extracted fact has the document as *neither* endpoint, so `expand()`'s
+    endpoint-only frontier test reached one only through an incidental `MENTIONS`. Descriptive
+    predicates sit exactly on the trust floor by design -- that is what stops a presence claim
+    outranking an `ADVERSE_TO` -- so a user raising the floor to 0.85 got an answer with no graph
+    facts at all. Measured: 9 edges at 0.80, 0 edges at 0.85, while `REPRESENTS` sat at 0.95.
+    """
+
+    @pytest.fixture
+    def reader(self, ctx) -> GraphReader:
+        return _severed_spine_reader(ctx)
+
+    def test_governing_facts_survive_a_raised_floor(self, reader, ctx):
+        """The concrete regression. At 0.85 the `MENTIONS` bridge is gone, so this passes only if
+        the source document is itself a route."""
+        edges = reader.expand(ctx, [f"document:{DOC}"], depth=1, min_confidence=0.85)
+
+        assert {e["predicate"] for e in edges} == {"RELATES_TO_MATTER", "REPRESENTS", "OVERRULES"}
+
+    def test_a_fact_naming_neither_endpoint_is_still_reached(self, reader, ctx):
+        edges = reader.expand(ctx, [f"document:{DOC}"], depth=1, min_confidence=0.85)
+        walked = {(e["subject_id"], e["predicate"], e["object_id"]) for e in edges}
+
+        assert ("authority:the-marisol", "OVERRULES", "authority:the-aquitaine") in walked
+
+    def test_the_bare_document_id_is_a_route_too(self, reader, ctx):
+        """`source_locator.document_id` is the bare `doc-...` while the node is `document:doc-...`.
+        Matching one form only is how this broke the first time."""
+        bare = reader.expand(ctx, [DOC], depth=1, min_confidence=0.85)
+        prefixed = reader.expand(ctx, [f"document:{DOC}"], depth=1, min_confidence=0.85)
+
+        assert {e["predicate"] for e in bare} == {"RELATES_TO_MATTER", "REPRESENTS", "OVERRULES"}
+        assert [e["assertion_id"] for e in bare] == [e["assertion_id"] for e in prefixed]
+
+    def test_a_fact_from_the_seeded_document_is_one_hop(self, reader, ctx):
+        """`hops` is the quoting-versus-inferring distinction the audit trace rests on. A fact the
+        document states is 1, not 2 -- it was not reached by a step through an entity."""
+        edges = reader.expand(ctx, [f"document:{DOC}"], depth=2, min_confidence=0.85)
+
+        assert edges and all(e["hops"] == 1 for e in edges)
+
+    def test_the_source_document_is_not_a_node_the_walk_leaves_from(self, reader, ctx):
+        """A way *in* to a fact, not a hub. `the-marisol` overrules `the-aquitaine` and nothing
+        else, so a deeper walk must still find only that -- pushing the document onto the next
+        frontier would make every fact sharing a 300-page bundle two hops from every other, which
+        is the unbounded walk the depth cap exists to prevent."""
+        edges = reader.expand(ctx, ["authority:the-marisol"], depth=3, min_confidence=0.85)
+
+        assert {e["predicate"] for e in edges} == {"OVERRULES"}
+
+    def test_a_document_route_does_not_bypass_the_review_gate(self, ctx):
+        """`_readable` is the only trust gate, and the route must not become a second door past
+        it: an unapproved fact naming the document in `source_locator` must stay out."""
+        ontology = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=ontology.governing_predicates
+        )
+        pending = build_assertion(
+            tenant_id=TENANT,
+            subject_id="counsel:sian-aldridge",
+            predicate="REPRESENTS",
+            object_id="party:halveston-chartering-limited",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:opus-5",
+            confidence=0.95,
+            source_locator=SourceLocator(
+                document_id=DOC, filename="halveston.pdf", page=4, quote="for the Claimant"
+            ),
+        )
+        queue.stage(ctx, [pending], job_id="j1")
+        queue.promote(ctx, job_id="j1")
+
+        assert GraphReader(queue, ontology=ontology).expand(ctx, [f"document:{DOC}"]) == []
+
+    def test_the_floor_still_excludes_what_it_should(self, reader, ctx):
+        """The route must not have loosened the confidence gate."""
+        assert reader.expand(ctx, [f"document:{DOC}"], min_confidence=0.99) == []
+
+
+class TestPassageSeedsStayDeterministic:
+    """Seeds are ids the passage already carries. No model may run between retrieval and
+    traversal, or which facts an answer consulted stops being reproducible for one question."""
+
+    @pytest.fixture
+    def reader(self, ctx) -> GraphReader:
+        return _severed_spine_reader(ctx)
+
+    def test_both_id_forms_are_seeded(self):
+        seeds = passage_seeds([{"document_id": "doc-1", "matter_id": "M-1"}])
+        assert set(seeds) == {"doc-1", "document:doc-1", "M-1", "matter:M-1"}
+
+    def test_a_matter_seeds_the_walk_when_the_document_finds_nothing(self, reader, ctx):
+        """The robustness half: a passage names its matter, and the graph holds that node."""
+        seeds = passage_seeds([{"document_id": "doc-absent", "matter_id": "hal-2025-0092"}])
+        edges = reader.expand(ctx, seeds, depth=1, min_confidence=0.85)
+
+        assert {e["predicate"] for e in edges} == {"RELATES_TO_MATTER"}
+
+    def test_passage_text_is_never_mined_for_entities(self):
+        """A party named only in the prose is not a seed. Deriving one would need a model, and a
+        model between retrieval and traversal is what the determinism rule forbids."""
+        assert passage_seeds([{"text": "Sian Aldridge acts for Halveston Chartering"}]) == []
+
+    def test_the_same_passages_seed_the_same_walk_twice(self, reader, ctx):
+        passages = [{"document_id": DOC, "matter_id": "hal-2025-0092"}]
+        first = reader.expand(ctx, passage_seeds(passages), min_confidence=0.85)
+        second = reader.expand(ctx, passage_seeds(passages), min_confidence=0.85)
+
+        assert [e["assertion_id"] for e in first] == [e["assertion_id"] for e in second]
+
+
+class TestBothEndpointsFindTheSameFacts:
+    """`/query` and `/query/compose` reading one graph must not disagree about what is in it."""
+
+    @pytest.fixture
+    def reader(self, ctx) -> GraphReader:
+        return _severed_spine_reader(ctx)
+
+    @staticmethod
+    def _vectors():
+        class Vectors:
+            def search(self, ctx, question, *, top_k=10):
+                return [{"document_id": DOC, "page": 4, "text": "for the Claimant"}]
+
+        return Vectors()
+
+    def test_the_hybrid_tier_returns_the_governing_facts_at_a_raised_floor(self, reader, ctx):
+        settings = GovernanceSettings(min_confidence_floor=0.85)
+        resolver = Resolver(graph_reader=reader, vector_search=self._vectors())
+
+        res = resolver.resolve(ctx, "who acts for halveston", settings, tier_override=Tier.HYBRID)
+
+        assert {e["predicate"] for e in res.answer["related"]} == {
+            "RELATES_TO_MATTER",
+            "REPRESENTS",
+            "OVERRULES",
+        }
+
+    def test_compose_finds_what_the_resolver_finds(self, reader, ctx):
+        from src.query.planner import Lane, Planner
+
+        settings = GovernanceSettings(min_confidence_floor=0.85)
+        question = "who acts for halveston"
+        res = Resolver(graph_reader=reader, vector_search=self._vectors()).resolve(
+            ctx, question, settings, tier_override=Tier.HYBRID
+        )
+        composed = Planner(graph_reader=reader, vector_search=self._vectors()).plan(
+            ctx, question, settings, allow_synthesis=False
+        )
+
+        facts = next(p.content for p in composed.parts if p.lane == Lane.GRAPH)
+        assert {f["assertion_id"] for f in facts} == {
+            e["assertion_id"] for e in res.answer["related"]
+        }
 
 
 class TestTierOrdering:

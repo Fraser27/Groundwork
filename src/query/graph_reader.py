@@ -37,6 +37,38 @@ _NOISE = frozenset(
 
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'&.-]*")
 
+#: Passage fields that name a graph node, and the prefix that node id carries.
+#:
+#: Ids the passage already holds, never a name read out of its text. Nothing may run a model
+#: between retrieval and traversal or the set of facts an answer consulted stops being
+#: reproducible for the same question. `matter_id` is safe as a join key for the reason
+#: `blocks.SEED_KEYS` gives: it is on every chunk and every assertion, so a mis-join cannot
+#: happen -- unlike matching a party by name.
+_PASSAGE_SEED_FIELDS = (("document_id", "document"), ("matter_id", "matter"))
+
+
+def passage_seeds(passages: Any) -> list[str]:
+    """Graph nodes the retrieved passages name, in both id forms.
+
+    Both forms because a passage carries a bare id (`doc-...`, `M-1`) while the node is
+    `document:doc-...` per `DocumentMeta.entity_id`. Seeding only the bare id matched nothing on
+    the first frontier and every hybrid answer came back with no related facts -- a silent empty
+    rather than an error, which is why it survived. A seed no assertion carries costs one set
+    lookup; being wrong the other way costs the graph half of the answer.
+    """
+    if not isinstance(passages, list):
+        return []
+    seeds: list[str] = []
+    for passage in passages:
+        if not isinstance(passage, dict):
+            continue
+        for key, prefix in _PASSAGE_SEED_FIELDS:
+            value = passage.get(key)
+            if isinstance(value, str) and value:
+                seeds.append(value)
+                seeds.append(f"{prefix}:{value}")
+    return seeds
+
 
 def terms_of(question: str) -> list[str]:
     """Content words, lowercased, order preserved."""
@@ -55,6 +87,27 @@ def _entity_label(entity_id: str) -> str:
     """
     _, _, rest = entity_id.partition(":")
     return (rest or entity_id).replace("-", " ").replace("_", " ").lower()
+
+
+def _routes(assertion: Any) -> frozenset[str]:
+    """Frontier ids that reach this assertion: its two endpoints, and its source document.
+
+    The source document is a route because the graph's spine is matter -> document -> fact and a
+    model-extracted fact has the document as *neither* endpoint. Without it a document seed
+    reached such a fact only through an incidental `MENTIONS` -- which sits exactly on the trust
+    floor by design, so raising the floor severed the graph and tier 3 answered with no facts at
+    all. Both id forms, because the node is `document:<id>` (`DocumentMeta.entity_id`) while
+    `source_locator` holds the bare `doc-...`.
+
+    No approval check here on purpose. `_readable` already admits only signed-off, in-scope,
+    trusted-enough records, and a second copy of that policy is how the trust conditions came to
+    disagree once already.
+    """
+    routes = {assertion.subject_id, assertion.object_id}
+    document_id = getattr(assertion.source_locator, "document_id", None)
+    if document_id:
+        routes |= {document_id, f"document:{document_id}"}
+    return frozenset(routes)
 
 
 @dataclass
@@ -189,6 +242,11 @@ class GraphReader:
         verified relationships around them. Breadth-first and depth-capped, because
         an unbounded walk on a well-connected graph returns the whole tenant.
 
+        A fact is reachable from its endpoints *and* from the document it was extracted from --
+        see `_routes`. That is the spine the design intends, matter -> document -> fact, and it
+        was missing: the only bridge from a document to a model-extracted fact was an incidental
+        `MENTIONS`, so `REPRESENTS` at 0.95 was unreachable while a 0.80 presence claim was not.
+
         Ranked before truncating, which it previously was not: the walk cut off mid-hop at
         `limit`, so which facts survived came down to the store's insertion order. With the
         catalog's DECLARED edges sitting at 1.00 the cap filled with `HAS_COLUMN` schema noise
@@ -210,8 +268,12 @@ class GraphReader:
             next_frontier: set[str] = set()
             for record in records:
                 a = record.assertion
-                if a.subject_id not in frontier and a.object_id not in frontier:
+                if not _routes(a) & frontier:
                     continue
+                # Endpoints only. The source document is a way *in* to a fact, not a node the walk
+                # then leaves from: pushing it on would make every fact sharing a document one hop
+                # from every other, which on a 300-page bundle is the unbounded walk the depth cap
+                # exists to prevent.
                 next_frontier.update({a.subject_id, a.object_id})
                 # First seen wins. A later pass re-matches an edge whose endpoint is still in the
                 # frontier, and overwriting would relabel a direct edge as two hops out -- the

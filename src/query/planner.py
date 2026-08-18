@@ -41,6 +41,7 @@ from typing import Any
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
 from src.query.blocks import Block, Screen, blocks_for, seeds_from
+from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 from src.query.resolver import Tier
 
@@ -262,10 +263,20 @@ class Planner:
         else:
             answer.lanes_skipped[Lane.METRIC.value] = _skipped(1, allowed, decision)
 
-        # No metric matched. Traverse for candidates, then retrieve against them.
+        # No metric matched. Retrieve first, so the graph lane can walk out from the passages the
+        # way `Resolver._try_hybrid` does -- compose used to run the term search alone, so the same
+        # question returned walked facts on `/query` and none here. The reported order is unchanged:
+        # a verified relationship is the stronger claim and a reader should meet it first.
+        passage_part = self._passage_part(ctx, question, settings) if 3 in runnable else None
+
         seeds: list[str] = []
         if 2 in runnable:
-            graph_part = self._graph_part(ctx, question, settings)
+            graph_part = self._graph_part(
+                ctx,
+                question,
+                settings,
+                passages=passage_part.content if passage_part is not None else None,
+            )
             if graph_part is not None:
                 answer.parts.append(graph_part)
                 answer.lanes_run.append(Lane.GRAPH)
@@ -274,7 +285,6 @@ class Planner:
             answer.lanes_skipped[Lane.GRAPH.value] = _skipped(2, allowed, decision)
 
         if 3 in runnable:
-            passage_part = self._passage_part(ctx, question, settings)
             if passage_part is not None:
                 answer.parts.append(passage_part)
                 answer.lanes_run.append(Lane.PASSAGES)
@@ -375,11 +385,17 @@ class Planner:
         )
 
     def _graph_part(
-        self, ctx: AuthContext, question: str, settings: GovernanceSettings
+        self,
+        ctx: AuthContext,
+        question: str,
+        settings: GovernanceSettings,
+        *,
+        passages: Any = None,
     ) -> Part | None:
         if self._graph is None:
             return None
         hits = self._graph.search(ctx, question, min_confidence=settings.min_confidence_floor)
+        hits = [*hits, *self._walked(ctx, passages, settings, already=hits)]
         if not hits:
             return None
         # A traversal returns whatever classes `edge_scope` admits, so the part is only
@@ -398,6 +414,36 @@ class Planner:
             assertion_ids=[h["assertion_id"] for h in hits if "assertion_id" in h],
             confidence=min(confidences) if confidences and model_written else None,
         )
+
+    def _walked(
+        self,
+        ctx: AuthContext,
+        passages: Any,
+        settings: GovernanceSettings,
+        *,
+        already: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Verified relationships around the retrieved passages, deduplicated against the search.
+
+        The same `expand()` call `Resolver._try_hybrid` makes, from the same seeds, because two
+        endpoints disagreeing about what a question found is a bug class this repo keeps hitting.
+
+        A reader with no `expand` contributes its term matches and nothing more. Checked rather
+        than caught, and a failure inside `expand` is deliberately not swallowed: quietly
+        returning fewer facts is the silent empty this whole path exists to stop being possible.
+        """
+        expand = getattr(self._graph, "expand", None)
+        seeds = passage_seeds(passages)
+        if expand is None or not seeds:
+            return []
+        edges = expand(
+            ctx,
+            seeds,
+            depth=settings.graph_expand_depth,
+            min_confidence=settings.min_confidence_floor,
+        )
+        seen = {h.get("assertion_id") for h in already}
+        return [e for e in edges if e.get("assertion_id") not in seen]
 
     def _passage_part(
         self, ctx: AuthContext, question: str, settings: GovernanceSettings

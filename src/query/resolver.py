@@ -34,6 +34,7 @@ from typing import Any
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
 from src.query.blocks import Block, Screen, blocks_for, seeds_from
+from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 
 logger = logging.getLogger(__name__)
@@ -444,14 +445,10 @@ class Resolver:
         passages = self._vectors.search(ctx, question, top_k=settings.vector_top_k)
         if not passages:
             return None
-        # Seeded with the graph's node id, not the bare document id. An assertion's subject is
-        # `document:<id>` (`DocumentMeta.entity_id`), so seeding the raw id matched nothing on the
-        # first frontier and every hybrid answer returned zero related facts -- a silent empty
-        # rather than an error, so tier 3 looked like it had simply found nothing to connect.
-        # Both forms are passed: a seed that no assertion carries costs one set lookup, and being
-        # wrong in the other direction costs the whole graph half of the answer.
-        seeds = [f"document:{p['document_id']}" for p in passages if p.get("document_id")]
-        seeds += [p["document_id"] for p in passages if p.get("document_id")]
+        # Ids the passages already carry, both bare and prefixed, and no model between retrieval
+        # and traversal -- see `passage_seeds`. Shared with `Planner._graph_part` so the two
+        # endpoints walk from the same frontier for the same question.
+        seeds = passage_seeds(passages)
         expanded = self._graph.expand(
             ctx,
             seeds,
