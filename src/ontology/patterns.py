@@ -17,6 +17,10 @@ with typed endpoints and nothing else: no optional matches, no negation, no prop
 no variable-length paths. Every one of those would be a feature request from a real firm and
 every one changes what a proof tree means, so they are refused now rather than half-supported.
 
+A conflict through a group company needs no new syntax, though — an intermediate *fact* is
+what was missing, not an intermediate hop. `AFFILIATE_OF` plus a three-premise rule reaches it
+with the grammar unchanged.
+
 Types on the endpoints are optional in `then` (already bound) and expected in `when`, where
 they document what the rule is about. They are not enforced against the entity list here:
 an extractor names entities `party:acme`, and inferring a *kind* from an id prefix would be a
@@ -100,6 +104,26 @@ class ParsedRule:
                 seen[var] = seen.get(var, 0) + 1
         return frozenset(v for v, n in seen.items() if n > 1)
 
+    @property
+    def disconnected_premises(self) -> tuple[int, ...]:
+        """Indices of premises with no chain of shared variables back to the first.
+
+        `join_variables` being non-empty is not the same test once there are three premises:
+        `(c,q) (q,m) (x,y)` shares `q` and so passes it, while `(x,y)` joins nothing and
+        cross-products against every match. Reachability is the property actually wanted.
+        """
+        reached = set(self.premises[0].variables)
+        remaining = list(enumerate(self.premises[1:], start=1))
+        grew = True
+        while grew:
+            grew = False
+            for item in list(remaining):
+                if self.premises[item[0]].variables & reached:
+                    reached |= self.premises[item[0]].variables
+                    remaining.remove(item)
+                    grew = True
+        return tuple(i for i, _ in remaining)
+
 
 def parse_rule(rule: object) -> ParsedRule:
     """Read a `RuleDef` into something evaluable, refusing anything unsound.
@@ -112,9 +136,11 @@ def parse_rule(rule: object) -> ParsedRule:
       one-premise rule is a rename rather than an inference. Refused until something needs it.
     - **An unbound conclusion variable.** `then` may only use variables the premises bound;
       otherwise there is nothing to attach the conclusion to.
-    - **No shared variable.** Premises that never join produce a cross product: every
+    - **A premise that does not join.** Premises that never join produce a cross product: every
       REPRESENTS paired with every ADVERSE_TO, flagging conflicts between unrelated parties.
-      This is the one that would be actively dangerous.
+      This is the one that would be actively dangerous. Every premise must reach the first
+      through shared variables, not merely share one with *some* other premise — at two
+      premises those coincide, at three they do not.
     """
     rule_id = getattr(rule, "id", "")
     premises = tuple(parse_edge(p) for p in getattr(rule, "when", ()) or ())
@@ -142,9 +168,11 @@ def parse_rule(rule: object) -> ParsedRule:
         min_premise_class=getattr(rule, "min_premise_class", "EXTRACTED_DET"),
         description=getattr(rule, "description", ""),
     )
-    if not parsed.join_variables:
+    stranded = parsed.disconnected_premises
+    if stranded:
         raise PatternError(
-            f"rule {rule_id!r} has no variable shared between premises, so it would match "
-            "every combination of unrelated facts"
+            f"rule {rule_id!r} has premises {[getattr(rule, 'when', ())[i] for i in stranded]} "
+            "sharing no variable with the rest, so they would match every combination of "
+            "unrelated facts"
         )
     return parsed

@@ -131,6 +131,71 @@ class TestTheConflictCheckFires:
         assert Reasoner(load_ontology("legal")).run(ctx, facts).count == 0
 
 
+def _affiliate_conflict_facts():
+    """The firm acts for Northwind, opposes Calder, and the two are in one corporate group.
+
+    No two of these three facts amount to anything. `conflict_check` finds nothing here because
+    the party it represents and the party it opposes are not the same node.
+    """
+    return [
+        fact("counsel:thorne-vaux", "REPRESENTS", "party:northwind", matter=MBC),
+        fact("party:northwind", "AFFILIATE_OF", "party:calder", matter=HAL),
+        fact("matter:" + NTL, "ADVERSE_TO", "party:calder", matter=NTL),
+    ]
+
+
+class TestAConflictThroughAnAffiliateIsFound:
+    """Where the conflicting parties are not adjacent. The affiliation is the fact in the
+    middle; without a predicate to record it these three documents stay unrelated."""
+
+    def test_the_conflict_is_found_through_the_group_company(self, ctx):
+        report = Reasoner(load_ontology("legal")).run(ctx, _affiliate_conflict_facts())
+
+        assert [i.rule_id for i in report.inferences] == ["conflict_via_affiliate"]
+        a = report.inferences[0].assertion
+        assert a.predicate == "POTENTIAL_CONFLICT"
+        assert a.subject_id == "matter:" + NTL
+        assert a.object_id == "party:northwind"
+
+    def test_it_rests_on_all_three_premises(self, ctx):
+        """A two-premise proof tree here would mean the affiliation was assumed rather than
+        recorded, and the conclusion would survive the affiliation being withdrawn."""
+        facts = _affiliate_conflict_facts()
+        report = Reasoner(load_ontology("legal")).run(ctx, facts)
+
+        assert set(report.inferences[0].assertion.premises) == {f.assertion_id for f in facts}
+
+    def test_no_conflict_when_the_affiliation_is_absent(self, ctx):
+        """Drop the middle fact and the parties are unrelated again. This is what makes the
+        affiliation load-bearing rather than decorative."""
+        facts = [f for f in _affiliate_conflict_facts() if f.predicate != "AFFILIATE_OF"]
+        assert Reasoner(load_ontology("legal")).run(ctx, facts).count == 0
+
+    def test_an_unreviewed_affiliation_does_not_produce_a_conflict(self, ctx):
+        """The middle fact is held to the same gate as the ends. A model's guess that two
+        companies are related must not be enough to flag a conflict on its own."""
+        facts = _affiliate_conflict_facts()
+        for f in facts:
+            if f.predicate == "AFFILIATE_OF":
+                f.review_state = ReviewState.PENDING
+        assert Reasoner(load_ontology("legal")).run(ctx, facts).count == 0
+
+    def test_the_same_shape_works_in_the_healthcare_pack(self, ctx):
+        """An allergy against one brand and a prescription for another, sharing an ingredient.
+        Same three-premise shape, same engine, no new Python — which is the claim."""
+        facts = [
+            fact("clinician:okafor", "PRESCRIBED", "medication:brand-a"),
+            fact("medication:brand-a", "SAME_INGREDIENT_AS", "medication:brand-b"),
+            fact("patient:h-mora", "ALLERGIC_TO", "medication:brand-b"),
+        ]
+        report = Reasoner(load_ontology("healthcare")).run(ctx, facts)
+
+        assert [i.rule_id for i in report.inferences] == ["contraindication_via_ingredient"]
+        a = report.inferences[0].assertion
+        assert (a.subject_id, a.predicate) == ("patient:h-mora", "CONTRAINDICATION_ALERT")
+        assert len(a.premises) == 3
+
+
 class TestTheStaleAuthorityCheckFires:
     def test_reliance_on_an_overruled_case_is_flagged(self, ctx):
         report = Reasoner(load_ontology("legal")).run(ctx, _stale_authority_facts())
@@ -313,17 +378,19 @@ class TestTheSameEngineRunsAnotherDomain:
 
 class TestReportsAreLegible:
     def test_the_report_says_what_it_did(self, ctx):
-        report = Reasoner(load_ontology("legal")).run(ctx, _conflict_facts())
+        legal = load_ontology("legal")
+        report = Reasoner(legal).run(ctx, _conflict_facts())
         out = report.to_dict()
         assert out["count"] == 1
-        assert out["rules_evaluated"] == 2
+        assert out["rules_evaluated"] == len(legal.rules)
         assert out["facts_considered"] == 2
         assert out["inferences"][0]["rule_id"] == "conflict_check"
 
     def test_no_facts_is_not_an_error(self, ctx):
-        report = Reasoner(load_ontology("legal")).run(ctx, [])
+        legal = load_ontology("legal")
+        report = Reasoner(legal).run(ctx, [])
         assert report.count == 0
-        assert report.rules_evaluated == 2
+        assert report.rules_evaluated == len(legal.rules)
 
 
 class TestPatternParsing:
@@ -370,8 +437,38 @@ class TestPatternParsing:
             then = "(a)-[:POTENTIAL_CONFLICT]->(b)"
             min_premise_class = "EXTRACTED_MODEL"
 
-        with pytest.raises(PatternError, match="no variable shared"):
+        with pytest.raises(PatternError, match="sharing no variable"):
             parse_rule(Unjoined())
+
+    def test_a_third_premise_that_joins_nothing_is_refused(self):
+        """The two-premise case above cannot distinguish "some variable is shared" from "every
+        premise is connected". At three premises it can, and the weaker test passed this: `q`
+        is shared, so `join_variables` is non-empty, while the third premise still
+        cross-products every ADVERSE_TO against every match."""
+
+        class Stranded:
+            id = "bad"
+            version = "v1"
+            description = ""
+            when = (
+                "(c:Counsel)-[:REPRESENTS]->(q:Party)",
+                "(q:Party)-[:PARTY_TO]->(m:Matter)",
+                "(x:Party)-[:ADVERSE_TO]->(y:Party)",
+            )
+            then = "(m)-[:POTENTIAL_CONFLICT]->(q)"
+            min_premise_class = "EXTRACTED_MODEL"
+
+        with pytest.raises(PatternError, match="sharing no variable"):
+            parse_rule(Stranded())
+
+    def test_a_premise_joining_only_through_a_middle_premise_is_kept(self):
+        """Connectivity is transitive, not adjacency to the first premise. `conflict_via_affiliate`
+        has this shape: ADVERSE_TO reaches REPRESENTS only through AFFILIATE_OF."""
+        parsed = parse_rule(
+            next(r for r in load_ontology("legal").rules if r.id == "conflict_via_affiliate")
+        )
+        assert parsed.disconnected_premises == ()
+        assert len(parsed.premises) == 3
 
     def test_a_conclusion_about_an_unbound_variable_is_refused(self):
         class Unbound:
@@ -523,7 +620,7 @@ class TestTheEndpoint:
         c, _ = client
         body = c.post(f"/api/tenants/{TENANT}/reason").json()
         assert body["count"] == 0
-        assert body["rules_evaluated"] == 2
+        assert body["rules_evaluated"] == len(load_ontology("legal").rules)
 
     def test_it_does_not_fire_on_unpromoted_facts(self, client, ctx):
         """Staged but never promoted is not a fact anyone stands behind."""

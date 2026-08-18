@@ -151,6 +151,12 @@ governing_predicates:
     domain: [Party]
     range: [Counsel]
     description: Retains this counsel.
+  - id: AFFILIATE_OF
+    label: affiliate of
+    domain: [Party]
+    range: [Party]
+    description: The two parties are part of one corporate group, or one holds a stake in the other.
+    help: The fact in the middle of a non-adjacent conflict. Without it, "the firm is attacking a company its own client part-owns" is two unrelated records and no rule can join them. Governing rather than descriptive because a conflict check reads it, and a synonym an extractor invented would make that check return nothing while looking clean.
   # ── Conclusions. Only a rule writes these; no extractor may propose one. ────
   #
   # Governing, not descriptive, by the same test as everything else here: would a wrong
@@ -209,6 +215,16 @@ rules:
       - "(c:Counsel)-[:REPRESENTS]->(p:Party)"
       - "(m:Matter)-[:ADVERSE_TO]->(p:Party)"
     then: "(m)-[:POTENTIAL_CONFLICT]->(p)"
+    min_premise_class: EXTRACTED_MODEL
+  - id: conflict_via_affiliate
+    version: v1
+    description: Flag a potential conflict where the firm opposes an affiliate of a party it represents.
+    help: The conflict nobody sees, because no single document contains it. The firm acts for Northwind and opposes Calder in an unrelated matter; a third document records that the two are in one group. Each fact is unremarkable alone.
+    when:
+      - "(c:Counsel)-[:REPRESENTS]->(q:Party)"
+      - "(q:Party)-[:AFFILIATE_OF]->(p:Party)"
+      - "(m:Matter)-[:ADVERSE_TO]->(p:Party)"
+    then: "(m)-[:POTENTIAL_CONFLICT]->(q)"
     min_premise_class: EXTRACTED_MODEL
   - id: authority_stale
     version: v1

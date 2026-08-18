@@ -90,6 +90,13 @@ governing_predicates:
     domain: [Document, Diagnosis, Procedure]
     range: [Encounter]
     description: Belongs to this episode of care.
+  - id: SAME_INGREDIENT_AS
+    label: same ingredient as
+    domain: [Medication]
+    range: [Medication]
+    description: The two medications share an active ingredient.
+    help: The analogue of AFFILIATE_OF in the legal pack — the fact in the middle. An allergy is recorded against one brand name and the prescription is written for another, so the direct check finds nothing while the patient is still at risk.
+    symmetric: true
   # Written only by a rule. The legal pack declares its conclusions the same way, which is
   # the point: the reasoner is generic, and each pack says what its rules may conclude.
   #
@@ -124,5 +131,15 @@ rules:
     when:
       - "(c:Clinician)-[:PRESCRIBED]->(m:Medication)"
       - "(p:Patient)-[:ALLERGIC_TO]->(m:Medication)"
+    then: "(p)-[:CONTRAINDICATION_ALERT]->(m)"
+    min_premise_class: EXTRACTED_MODEL
+  - id: contraindication_via_ingredient
+    version: v1
+    description: Flag a prescription sharing an active ingredient with a recorded allergy.
+    help: The same three-premise shape as the legal pack's conflict_via_affiliate, which is the point — the reasoner learned nothing about medicine.
+    when:
+      - "(c:Clinician)-[:PRESCRIBED]->(m:Medication)"
+      - "(m:Medication)-[:SAME_INGREDIENT_AS]->(a:Medication)"
+      - "(p:Patient)-[:ALLERGIC_TO]->(a:Medication)"
     then: "(p)-[:CONTRAINDICATION_ALERT]->(m)"
     min_premise_class: EXTRACTED_MODEL
