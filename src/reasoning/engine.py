@@ -37,8 +37,9 @@ is definitionally cross-matter and why a tenant gets one graph rather than one p
 Evaluation is a hash join in Python over live assertions, not Cypher. Deliberate, for now: a
 rule is a join over a tenant's *approved* facts, that set is already in memory on the read
 path, and expressing the same thing as generated Cypher would put query construction outside
-`src/graph/` where the working agreement forbids it. It is O(n) per rule per pass and will
-need revisiting when a tenant's live graph outgrows a process; the interface here does not
+`src/graph/` where the working agreement forbids it. Facts are indexed by predicate once per
+pass, so a rule sees only the facts it could match rather than all of them; it will still need
+revisiting when a tenant's live graph outgrows a process, and the interface here does not
 change when it does.
 """
 
@@ -194,6 +195,11 @@ class Reasoner:
             facts_considered=len(facts),
         )
         known = self.ontology.governing_predicates | self.ontology.descriptive_predicates
+        # Built once per pass rather than rescanned per premise. `accepts` is deliberately not
+        # applied here: the floor is per rule, so folding it in would need one index per floor.
+        by_predicate: dict[str, list[Assertion]] = {}
+        for fact in facts:
+            by_predicate.setdefault(fact.predicate, []).append(fact)
 
         for rule in self._rules:
             if rule.conclusion.predicate not in known:
@@ -204,7 +210,7 @@ class Reasoner:
                     f"{rule.conclusion.predicate} is not in the {self.ontology.domain} vocabulary"
                 )
                 continue
-            for inference in self._fire(ctx, rule, facts, known):
+            for inference in self._fire(ctx, rule, by_predicate, known):
                 report.inferences.append(inference)
 
         if report.count:
@@ -220,7 +226,7 @@ class Reasoner:
         self,
         ctx: AuthContext,
         rule: ParsedRule,
-        facts: list[Assertion],
+        by_predicate: dict[str, list[Assertion]],
         known: frozenset[str],
     ) -> list[Inference]:
         """Join the premises and build one conclusion per distinct match.
@@ -231,8 +237,8 @@ class Reasoner:
         """
         eligible = [
             f
-            for f in facts
-            if f.predicate == rule.premises[0].predicate and accepts(f, rule.min_premise_class)
+            for f in by_predicate.get(rule.premises[0].predicate, ())
+            if accepts(f, rule.min_premise_class)
         ]
         # (bindings, premise assertions) pairs.
         partial: list[tuple[dict[str, str], list[Assertion]]] = []
@@ -245,8 +251,8 @@ class Reasoner:
         for pattern in rule.premises[1:]:
             candidates = [
                 f
-                for f in facts
-                if f.predicate == pattern.predicate and accepts(f, rule.min_premise_class)
+                for f in by_predicate.get(pattern.predicate, ())
+                if accepts(f, rule.min_premise_class)
             ]
             grown: list[tuple[dict[str, str], list[Assertion]]] = []
             for binding, used in partial:
