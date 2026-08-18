@@ -95,6 +95,102 @@ def _reader_with_conflict(ctx: AuthContext) -> GraphReader:
     return GraphReader(queue, ontology=onto)
 
 
+def _reader_with_pending_conflict(ctx: AuthContext) -> GraphReader:
+    """A conflict the reasoner derived and nobody has reviewed. Staged, never approved.
+
+    This is the state the deployed system was in: the facts supported a conflict, inference had
+    not run, and once it did the conclusion sat PENDING. The wall correctly refuses nothing on it,
+    which is exactly why the reader has to be told it is there.
+    """
+    onto = load_ontology("legal")
+    queue = ReviewQueue(InMemoryAssertionStore(), governing_predicates=onto.governing_predicates)
+    _live(
+        ctx,
+        queue,
+        [
+            ("counsel:dalgleish-rowe", "REPRESENTS", "party:calder-plc", "M-1"),
+            ("matter:m-2", "ADVERSE_TO", "party:calder-plc", "M-2"),
+        ],
+        "j1",
+    )
+    live = [r.assertion for r in queue.visible(ctx) if r.is_current]
+    inferences = [i.assertion for i in Reasoner(onto).run(ctx, live).inferences]
+    assert inferences, "the fixture proves nothing if the reasoner drew no conclusion"
+    queue.stage(ctx, inferences, job_id="j2")  # staged and left PENDING on purpose
+    return GraphReader(queue, ontology=onto)
+
+
+class TestAConflictAwaitingReviewIsNotSilent:
+    """An unreviewed conflict may not refuse anything, and may not be invisible either.
+
+    Both halves matter. Firing on it would let a model's proposal withhold evidence, which is what
+    `SIGNED_OFF` exists to prevent. But reporting "nothing refused" over a graph that holds a
+    conflict about this very party is a true sentence which reads as a false one — and a model
+    narrating the conflict in prose while the deterministic control said nothing is how this was
+    found in production.
+    """
+
+    def test_it_still_refuses_nothing(self, ctx):
+        reader = _reader_with_pending_conflict(ctx)
+        assert reader.blocking_facts(ctx, ["party:calder-plc"]) == []
+
+    def test_but_it_is_reported(self, ctx):
+        reader = _reader_with_pending_conflict(ctx)
+        rows = reader.unreviewed_blocks(ctx, ["party:calder-plc"])
+        assert [r["predicate"] for r in rows] == ["POTENTIAL_CONFLICT"]
+        assert rows[0]["rule"] == "conflict_check"
+
+    def test_the_screen_names_the_party(self, ctx):
+        screen = blocks_for(
+            ctx, graph_reader=_reader_with_pending_conflict(ctx), seeds=["party:calder-plc"]
+        )
+        assert "party:calder-plc" in screen.awaiting_review
+
+    def test_an_advisory_alone_does_not_make_the_screen_truthy(self, ctx):
+        """`bool(screen)` drives whether rows get withheld. An unreviewed conflict must not start
+        withholding evidence by the back door."""
+        screen = blocks_for(
+            ctx, graph_reader=_reader_with_pending_conflict(ctx), seeds=["party:calder-plc"]
+        )
+        assert not screen
+        assert screen.blocks == []
+
+    def test_it_reaches_the_trace(self, ctx):
+        screen = blocks_for(
+            ctx, graph_reader=_reader_with_pending_conflict(ctx), seeds=["party:calder-plc"]
+        )
+        # Both ends of the edge, because a conflict is about the matter as well as the party --
+        # the same reason `POTENTIAL_CONFLICT` declares `blocks: both`.
+        assert screen.trace(items_withheld=0)["awaiting_review"] == [
+            "matter:m-2",
+            "party:calder-plc",
+        ]
+
+    def test_an_approved_conflict_is_a_veto_not_an_advisory(self, ctx):
+        """Once signed off it is reported by `blocking_facts`. Naming it in both places would
+        double every refusal and make the advisory look like a second, weaker wall."""
+        reader = _reader_with_conflict(ctx)
+        assert reader.blocking_facts(ctx, ["party:calder-plc"])
+        assert reader.unreviewed_blocks(ctx, ["party:calder-plc"]) == []
+
+    def test_a_clean_graph_reports_nothing(self, ctx):
+        reader = _reader_with_pending_conflict(ctx)
+        assert reader.unreviewed_blocks(ctx, ["party:unrelated-gmbh"]) == []
+
+    def test_another_tenant_sees_nothing(self, ctx):
+        """Advisory or not, it is a graph read and scoped like every other one."""
+        reader = _reader_with_pending_conflict(ctx)
+        other = AuthContext(user_id="mallory@other.com", tenant_id="firm-beta")
+        assert reader.unreviewed_blocks(other, ["party:calder-plc"]) == []
+
+    def test_a_degraded_wall_reports_no_advisory(self, ctx):
+        """"A conflict is awaiting review" would read as confirmation the check ran, which is the
+        opposite of what `degraded` is saying."""
+        screen = blocks_for(ctx, graph_reader=_BrokenReader(), seeds=["party:calder-plc"])
+        assert screen.degraded
+        assert screen.awaiting_review == ()
+
+
 class TestTheRealReaderCanRefuse:
     """`GraphReader`, not a fake. These are the tests the fakes were standing in for."""
 
@@ -424,6 +520,9 @@ class TestFailsOpenButLoudly:
             "items_withheld": 0,
             "degraded": None,
             "blocks": [],
+            # Empty because the conflict in this fixture is signed off, so it is a veto rather
+            # than an advisory -- and it names a different party than the seed anyway.
+            "awaiting_review": [],
         }
 
     def test_screens_still_apply_when_the_graph_check_fails(self, ctx):
@@ -462,6 +561,7 @@ class TestTheApiReportsWhatTheWallDid:
             "items_withheld",
             "degraded",
             "blocks",
+            "awaiting_review",
         }
 
     def test_compose_sends_the_gate_counters(self, ctx):

@@ -1582,6 +1582,7 @@ code, pre { font-family: var(--mono); }
 .qtrace-facts dd.dim, .qtrace-facts dd .dim { font-weight: 400; font-size: 12px; }
 .qtrace-cleared { color: var(--green); }
 .qtrace-withheld { color: var(--red); }
+.qtrace-awaiting { border-left: 2px solid var(--orange); padding-left: 9px; }
 
 .qtrace-layers, .qtrace-lanes { display: flex; flex-direction: column; gap: 9px; }
 .qtrace-layer, .qtrace-lane {

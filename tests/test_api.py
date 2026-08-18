@@ -691,6 +691,7 @@ class TestTheQueryEndpointSendsItsBlocks:
             "items_withheld",
             "degraded",
             "blocks",
+            "awaiting_review",
         }
 
 

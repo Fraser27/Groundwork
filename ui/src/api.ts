@@ -677,6 +677,14 @@ export interface GateTrace {
    */
   degraded?: string | null
   blocks?: QueryBlock[]
+  /**
+   * Entities named by a blocking fact nobody has reviewed yet.
+   *
+   * Not refusals — an unreviewed derivation may not withhold evidence. But "nothing refused"
+   * over a graph holding a conflict about this party in the review queue is a true sentence that
+   * reads as a false one, so the reader is shown both.
+   */
+  awaiting_review?: string[]
 }
 
 export interface QueryResult {

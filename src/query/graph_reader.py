@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.documents.review import ReviewQueue
+from src.graph.assertions import SIGNED_OFF_STATES
 from src.graph.scope import AuthContext, TrustFilter
 from src.query.blocks import BlockCheckUnavailable
 
@@ -288,6 +289,56 @@ class GraphReader:
                 out, key=lambda k: (-out[k]["premise_count"], -out[k]["confidence"], k)
             )
         ]
+
+    def unreviewed_blocks(self, ctx: AuthContext, seeds: list[str]) -> list[dict[str, Any]]:
+        """Blocking facts about these seeds that nobody has reviewed yet.
+
+        Not vetoes, and deliberately a separate method so they cannot become vetoes by accident.
+        A PENDING conflict is a *proposal*: refusing on it would let an unreviewed derivation
+        withhold evidence, which is the thing `SIGNED_OFF` exists to prevent.
+
+        But "nothing refused" over a graph holding a conflict awaiting review is a true sentence
+        that reads as a false one. A reader is entitled to know both that the check came back
+        clean and that there is a conflict about this party in the queue — those are different
+        facts, and only the first is reassuring on its own.
+
+        Same tenant and matter walls as every other read; only the review-state gate differs.
+        """
+        if self._ontology is None:
+            raise BlockCheckUnavailable(
+                "no ontology pack is wired into the graph reader, so which predicates veto an "
+                "answer is unknown"
+            )
+        blocking = self._ontology.blocking_predicates
+        wanted = _seed_set(seeds)
+        if not blocking or not wanted:
+            return []
+
+        out: dict[tuple[str, str], dict[str, Any]] = {}
+        for record in self._queue.visible(ctx):
+            a = record.assertion
+            if not record.is_current or a.predicate not in blocking:
+                continue
+            if a.review_state in SIGNED_OFF_STATES:
+                # Already a veto, reported by `blocking_facts`. Naming it here as well would
+                # double every refusal and make this advisory look like a second, weaker wall.
+                continue
+            if not (
+                _touches(a.subject_id, wanted)
+                or _touches(a.object_id, wanted)
+                or (a.matter_id is not None and a.matter_id in wanted)
+            ):
+                continue
+            out[(a.subject_id, a.object_id)] = {
+                "subject_id": a.subject_id,
+                "object_id": a.object_id,
+                "predicate": a.predicate,
+                "rule": a.rule_id or a.predicate,
+                "matter_id": a.matter_id,
+                "assertion_id": a.assertion_id,
+                "confidence": a.confidence,
+            }
+        return [out[key] for key in sorted(out)]
 
     def _readable(self, ctx: AuthContext, min_confidence: float) -> list[Any]:
         """Current, in-scope, trusted-enough assertions.

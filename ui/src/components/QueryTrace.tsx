@@ -812,6 +812,20 @@ function GateStep({
         </p>
       )}
 
+      {/* Before the "nothing was refused" note, because that note is exactly what this
+          qualifies. An unreviewed conflict cannot refuse anything — a model's proposal must not
+          withhold evidence — but a clean wall over a graph that holds one is a true sentence
+          reading as a false one. */}
+      {!!gate?.awaiting_review?.length && !degraded && (
+        <p className="qtrace-note qtrace-awaiting">
+          <span className="tag tag-orange">awaiting review</span> A conflict or other blocking fact
+          about {gate.awaiting_review.join(', ')} is in the review queue and has not been signed
+          off, so it refused nothing here. Nothing below is a clearance for{' '}
+          {gate.awaiting_review.length === 1 ? 'that subject' : 'those subjects'} until someone
+          reviews it.
+        </p>
+      )}
+
       {blocks.length === 0 ? (
         !degraded && (
           <p className="qtrace-note">

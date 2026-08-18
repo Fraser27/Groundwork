@@ -89,6 +89,15 @@ class Screen:
     A screened-only result and a fully evaluated one are the same object otherwise, so without
     this the caller cannot tell a clean wall from a wall that failed open."""
 
+    awaiting_review: tuple[str, ...] = ()
+    """Entities named by a blocking fact nobody has reviewed yet.
+
+    Not refusals, and they must never become refusals: firing on an unreviewed derivation would
+    let a model's proposal withhold evidence. But "nothing refused" over a graph that holds a
+    conflict in the review queue is a true sentence which reads as a false one, and a reader is
+    entitled to both facts. Deliberately outside `__bool__`, so an advisory alone never makes a
+    `Screen` truthy and starts withholding rows."""
+
     def __bool__(self) -> bool:
         return bool(self.blocks)
 
@@ -109,6 +118,7 @@ class Screen:
             "items_withheld": items_withheld,
             "degraded": self.degraded or None,
             "blocks": self.to_dict(),
+            "awaiting_review": list(self.awaiting_review),
         }
 
     @property
@@ -182,6 +192,7 @@ def blocks_for(
     """
     blocks: list[Block] = []
     degraded = ""
+    awaiting: tuple[str, ...] = ()
 
     for matter_id in sorted(ctx.matter_denylist):
         blocks.append(
@@ -218,6 +229,12 @@ def blocks_for(
                     )
                 )
 
+    if graph_reader is not None and seeds and not degraded:
+        # Advisory only, and separate from the veto path so it cannot refuse anything. Skipped
+        # when the wall is degraded: "a conflict is awaiting review" would read as reassurance
+        # that the check ran, which is exactly what `degraded` is saying it did not.
+        awaiting = _awaiting_review(graph_reader, ctx, seeds)
+
     # Furthest-reaching refusal first, across both sources. A stable sort, so screens keep their
     # alphabetical order among themselves and rule blocks keep the reader's.
     #
@@ -226,7 +243,35 @@ def blocks_for(
     # conflict derived from five facts across three matters is news. Listing the known thing above
     # the discovered one buries the only part of this panel nobody could have worked out unaided.
     blocks.sort(key=lambda b: -b.premise_count)
-    return Screen(blocks=blocks, seeds=tuple(seeds or ()), degraded=degraded)
+    return Screen(
+        blocks=blocks,
+        seeds=tuple(seeds or ()),
+        degraded=degraded,
+        awaiting_review=awaiting,
+    )
+
+
+def _awaiting_review(graph_reader: Any, ctx: AuthContext, seeds: list[str]) -> tuple[str, ...]:
+    """Entities a blocking fact names that nobody has signed off yet.
+
+    Best-effort and never fatal: this is an advisory beside a wall that already did its job, so a
+    failure here must not degrade the wall. A reader with no `unreviewed_blocks` simply gets none.
+    """
+    finder = getattr(graph_reader, "unreviewed_blocks", None)
+    if finder is None:
+        return ()
+    try:
+        rows = finder(ctx, seeds)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not check for unreviewed blocks: %s", e)
+        return ()
+    named: set[str] = set()
+    for row in rows:
+        for key in ("subject_id", "object_id"):
+            value = row.get(key)
+            if isinstance(value, str) and value:
+                named.add(value)
+    return tuple(sorted(named))
 
 
 #: Shown when the rule-block half failed. Names the half that still ran, because "the wall is
