@@ -109,6 +109,15 @@ export default function QueryBuilder() {
   }, [tenant])
 
   const floor = floorOverride ?? settings?.min_confidence ?? 0.8
+  /**
+   * The floor the server says it used, falling back to the requested one before an answer exists.
+   *
+   * Results are described with this and never with `floor`. A request may only *raise* the
+   * tenant's floor, so a slider set below it is ignored -- and the page used to report "nothing
+   * cleared the trust floor of 0.85" from its own state while the field was being dropped in
+   * transit, naming a number no read had ever applied.
+   */
+  const appliedFloor = result?.min_confidence ?? composed?.min_confidence ?? floor
 
   const ask = async (q: string) => {
     setRunning(true)
@@ -118,7 +127,13 @@ export default function QueryBuilder() {
     setOpenProvenance(null)
     try {
       if (everyLane) {
-        setComposed(await api.compose(tenant, { question: q, synthesise: summarise }))
+        setComposed(
+          await api.compose(tenant, {
+            question: q,
+            synthesise: summarise,
+            min_confidence: floor,
+          }),
+        )
       } else {
         setResult(
           await api.query(tenant, {
@@ -351,7 +366,7 @@ export default function QueryBuilder() {
                 gate={result.gate}
                 lanes={lanes}
                 blocks={blocks}
-                floor={floor}
+                floor={appliedFloor}
                 usedFactCount={usedIds.length}
                 onOpenPassage={(p) =>
                   setOpenDocument({
@@ -476,7 +491,7 @@ export default function QueryBuilder() {
                           {whyIncluded(h)}
                         </span>
                       </span>
-                      <ConfidenceBar value={h.confidence} floor={floor} width={54} />
+                      <ConfidenceBar value={h.confidence} floor={appliedFloor} width={54} />
                       <button
                         className="btn btn-ghost btn-sm"
                         style={{ marginLeft: 'auto' }}
@@ -497,7 +512,7 @@ export default function QueryBuilder() {
                 </div>
                 <div className="answer-block">
                   Nothing came back. The question reached {answerTier.label.toLowerCase()}, but no
-                  row, fact or passage cleared the trust floor of {floor.toFixed(2)}.
+                  row, fact or passage cleared the trust floor of {appliedFloor.toFixed(2)}.
                   {blocks.length > 0 && (
                     <>
                       {' '}
@@ -634,7 +649,7 @@ export default function QueryBuilder() {
               gate={composed.gate}
               lanes={composedLanes}
               blocks={composedBlocks}
-              floor={floor}
+              floor={appliedFloor}
               onOpenPassage={(p) =>
                 setOpenDocument({
                   documentId: p.document_id,
@@ -687,7 +702,7 @@ export default function QueryBuilder() {
             ) : provenance ? (
               <ProvenancePanel
                 provenance={provenance}
-                confidenceFloor={floor}
+                confidenceFloor={appliedFloor}
                 onClose={() => setOpenProvenance(null)}
               />
             ) : (

@@ -35,6 +35,16 @@ class QueryRequest(BaseModel):
 
     max_results: int | None = Field(default=None, ge=1, le=500)
 
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    """Raise the confidence floor for this question only.
+
+    The Ask page has sent this since the trust-floor control was built. Nothing declared it, and
+    Pydantic ignores unknown fields, so it was dropped in silence -- the page then reported "no
+    fact cleared the trust floor of 0.85" using its own local number, naming a floor that had
+    never been applied. Below the tenant's floor it is ignored rather than refused, because
+    `with_raised_floor` treats a request as able to narrow and never to widen.
+    """
+
     @field_validator("tiers")
     @classmethod
     def _valid_tiers(cls, v: list[int] | None) -> list[int] | None:
@@ -75,7 +85,7 @@ async def run_query(
     body: Annotated[QueryRequest, Body()],
 ) -> dict[str, Any]:
     ctx, _ = principal
-    settings = services.settings_for(ctx.tenant_id)
+    settings = services.settings_for(ctx.tenant_id).with_raised_floor(body.min_confidence)
 
     # Wired to whatever is actually available — a missing collaborator disables its
     # tier rather than erroring, so the answer degrades instead of failing.
@@ -107,6 +117,10 @@ async def run_query(
         event_for(ctx.tenant_id, ctx.user_id, body.query, resolution)
     )
     out = resolution.to_dict()
+    # The floor that was actually applied, so the page stops asserting its own. It rendered "no
+    # fact cleared the trust floor of 0.85" from a local variable while the request field was
+    # being dropped, which is the page claiming a control it never exercised.
+    out["min_confidence"] = settings.min_confidence_floor
     if not recorded:
         out["warnings"] = [
             *out["warnings"],
@@ -138,6 +152,10 @@ class ComposeRequest(BaseModel):
     """False returns the evidence without asking a model to write over it, which is the
     reviewable form: every part is there with its own provenance."""
 
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    """Raise the confidence floor for this question only. Same one-way clamp as `/query`: the two
+    endpoints must not disagree about how strict a question was."""
+
 
 @router.post("/tenants/{tenant}/query/compose")
 async def compose_query(
@@ -160,7 +178,7 @@ async def compose_query(
     survives.
     """
     ctx, _ = principal
-    settings = services.settings_for(ctx.tenant_id)
+    settings = services.settings_for(ctx.tenant_id).with_raised_floor(body.min_confidence)
 
     planner = Planner(
         metric_matcher=build_metric_matcher(services, ctx.tenant_id),
@@ -187,4 +205,6 @@ async def compose_query(
         allow_synthesis=body.synthesise,
     )
     _drain_blocked(services, ctx.tenant_id, planner.blocked)
-    return answer.to_dict()
+    out = answer.to_dict()
+    out["min_confidence"] = settings.min_confidence_floor
+    return out

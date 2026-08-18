@@ -838,3 +838,55 @@ class TestTheAuditPageAsksForEveryState:
             "Provenance.tsx omits review_state, so the server's PENDING default applies and the "
             "Facts tab shows nothing once facts have been reviewed"
         )
+
+
+class TestTheAppliedFloorReachesTheReader:
+    """The number the page prints has to be the number the read used.
+
+    `min_confidence` was sent by the Ask page and declared by neither request model, so Pydantic
+    dropped it and the resolver used the tenant floor -- while the page reported the slider's
+    value as though it had been applied. Returning the applied floor is what lets the UI stop
+    asserting its own state.
+    """
+
+    def test_query_reports_the_floor_it_used(self):
+        ctx = AuthContext(user_id="alice@firm.example", tenant_id=TENANT)
+        client = _client_as(ctx)
+        body = client.post(
+            f"/api/tenants/{TENANT}/query",
+            json={"query": "anything", "min_confidence": 0.9},
+        ).json()
+
+        assert body["min_confidence"] == 0.9
+
+    def test_compose_reports_the_floor_it_used(self):
+        ctx = AuthContext(user_id="alice@firm.example", tenant_id=TENANT)
+        client = _client_as(ctx)
+        body = client.post(
+            f"/api/tenants/{TENANT}/query/compose",
+            json={"query": "anything", "min_confidence": 0.9},
+        ).json()
+
+        assert body["min_confidence"] == 0.9
+
+    def test_a_floor_below_the_tenants_is_reported_as_the_tenants(self):
+        """Not as the one asked for. The request is ignored, and saying otherwise would be the
+        same lie in the other direction -- a reader told their loosened floor was honoured."""
+        ctx = AuthContext(user_id="alice@firm.example", tenant_id=TENANT)
+        client = _client_as(ctx)
+        body = client.post(
+            f"/api/tenants/{TENANT}/query",
+            json={"query": "anything", "min_confidence": 0.1},
+        ).json()
+
+        assert body["min_confidence"] == 0.8
+
+    def test_an_out_of_range_floor_is_refused_rather_than_clamped(self):
+        ctx = AuthContext(user_id="alice@firm.example", tenant_id=TENANT)
+        client = _client_as(ctx)
+        response = client.post(
+            f"/api/tenants/{TENANT}/query",
+            json={"query": "anything", "min_confidence": 1.5},
+        )
+
+        assert response.status_code == 422

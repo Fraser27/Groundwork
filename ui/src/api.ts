@@ -698,6 +698,15 @@ export interface QueryResult {
   /** Genuinely absent where the router is off or there is no vector store. Never asserted. */
   router?: RouterTrace | null
   gate?: GateTrace | null
+  /**
+   * The floor the server actually applied, which is not always the one asked for.
+   *
+   * A request may raise the tenant's floor and never lower it, so a slider set below it is
+   * ignored. Read this rather than the local value: the page used to report "nothing cleared the
+   * trust floor of 0.85" from its own state while the field was being dropped in transit, naming
+   * a number no read had ever used.
+   */
+  min_confidence?: number
 }
 
 // ── Composed answers ─────────────────────────────────────────────────────────
@@ -782,6 +791,8 @@ export interface ComposedResult {
   note?: string
   router?: RouterTrace | null
   gate?: GateTrace | null
+  /** The floor the server applied. See `QueryResult.min_confidence`; the same one-way clamp. */
+  min_confidence?: number
 }
 
 // ── Graph ────────────────────────────────────────────────────────────────────
@@ -1429,7 +1440,12 @@ export const api = {
    */
   compose: (
     tenant: string,
-    body: { question: string; execute?: boolean; synthesise?: boolean },
+    body: {
+      question: string
+      execute?: boolean
+      synthesise?: boolean
+      min_confidence?: number
+    },
   ) =>
     request<ComposedResult>(`/tenants/${tenant}/query/compose`, {
       method: 'POST',
@@ -1439,6 +1455,7 @@ export const api = {
         query: body.question,
         execute: body.execute ?? true,
         synthesise: body.synthesise ?? true,
+        min_confidence: body.min_confidence,
       }),
     }),
 

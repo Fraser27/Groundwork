@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any
 
 # Imported rather than redeclared. These previously existed in both modules with
@@ -290,6 +290,21 @@ class GovernanceSettings:
     def effective_model_confidence(self, raw: float) -> float:
         """Clamp a model extractor's self-reported confidence."""
         return min(raw, self.model_confidence_cap)
+
+    def with_raised_floor(self, requested: float | None) -> GovernanceSettings:
+        """These settings, with the confidence floor raised for one question.
+
+        **Raised only.** A request may be stricter than its tenant and never laxer: the floor is a
+        governance control, so a caller able to lower it could opt out of one from the Ask page.
+        The same rule the tier router follows -- a request narrows, never widens.
+
+        The clamp lives here rather than in a route handler so both endpoints inherit it. A floor
+        honoured by one handler and not the other is how `/query` and `/query/compose` come to
+        disagree about the same question, which has happened often enough here to design out.
+        """
+        if requested is None or requested <= self.min_confidence_floor:
+            return self
+        return replace(self, min_confidence_floor=min(requested, 1.0))
 
 
 #: Plain-language help for each control, surfaced as UI tooltips. Written for a
