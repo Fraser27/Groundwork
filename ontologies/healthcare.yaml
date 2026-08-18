@@ -11,6 +11,18 @@
 domain: healthcare
 version: 1
 
+# Dose forms rather than company suffixes, which is the point of declaring these per pack: a
+# legal list of `gmbh` and `plc` would mean nothing here. Same rule as the legal pack — used only
+# to ask a clinician whether two ids are one drug, never to rewrite a stored id.
+entity_suffixes:
+  - tablets
+  - capsules
+  - injection
+  - oral
+  - iv
+  - ltd
+  - inc
+
 entity_types:
   - id: Patient
     label: Patient

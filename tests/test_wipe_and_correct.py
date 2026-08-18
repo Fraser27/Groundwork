@@ -78,6 +78,110 @@ def fact(
     )
 
 
+class TestANearDuplicateIsReported:
+    """Blocking keys, not similarity, and reported rather than blocked.
+
+    Detection is where corporate suffixes are safe to strip: a key is never stored, drives no
+    query, and its only consequence is a question put to a reviewer. Stripping one in a *stored*
+    id would silently merge a parent with its subsidiary and leave no record it happened.
+    """
+
+    def _queue(self, onto):
+        return ReviewQueue(
+            canonical_entity_id=onto.canonical_entity_id,
+            entity_blocking_keys=onto.entity_blocking_keys,
+        )
+
+    def test_a_suffix_variant_names_the_existing_entity(self, ctx, onto):
+        queue = self._queue(onto)
+        queue.stage(ctx, [fact(obj="party:calder-shipping-ag")])
+
+        newcomer = fact(obj="party:calder-shipping", document_id="doc-2")
+        queue.stage(ctx, [newcomer])
+
+        record = queue.fetch(ctx, newcomer.assertion_id)
+        assert record.near_duplicates == ("party:calder-shipping-ag",)
+
+    def test_it_reaches_the_queue_item_a_reviewer_reads(self, ctx, onto):
+        queue = self._queue(onto)
+        queue.stage(ctx, [fact(obj="party:calder-shipping-ag")])
+        newcomer = fact(obj="party:calder-shipping", document_id="doc-2")
+        queue.stage(ctx, [newcomer])
+
+        item = next(i for i in queue.list_pending(ctx) if i.assertion_id == newcomer.assertion_id)
+        assert item.near_duplicates == ("party:calder-shipping-ag",)
+
+    def test_nothing_is_merged_or_rewritten(self, ctx, onto):
+        """Annotates only. A refused write loses the fact, and the same key that catches a variant
+        also catches a genuinely new sibling company -- which `AFFILIATE_OF` needs to exist."""
+        queue = self._queue(onto)
+        first = fact(obj="party:calder-shipping-ag")
+        queue.stage(ctx, [first])
+        second = fact(obj="party:calder-shipping", document_id="doc-2")
+        queue.stage(ctx, [second])
+
+        assert queue.fetch(ctx, first.assertion_id).assertion.object_id == (
+            "party:calder-shipping-ag"
+        )
+        assert queue.fetch(ctx, second.assertion_id).assertion.object_id == "party:calder-shipping"
+        assert first.assertion_id != second.assertion_id
+
+    def test_acme_corp_and_acme_holdings_are_not_near_duplicates(self, ctx, onto):
+        """The test that goes red the day someone adds a threshold, or declares `holdings` a
+        suffix. These are two companies, and a reviewer told otherwise may merge them -- losing a
+        real distinction with no record that anything was collapsed."""
+        queue = self._queue(onto)
+        queue.stage(ctx, [fact(obj="party:acme-corp")])
+        newcomer = fact(obj="party:acme-holdings", document_id="doc-2")
+        queue.stage(ctx, [newcomer])
+
+        assert queue.fetch(ctx, newcomer.assertion_id).near_duplicates == ()
+
+    def test_an_unrelated_party_is_not_reported(self, ctx, onto):
+        queue = self._queue(onto)
+        queue.stage(ctx, [fact(obj="party:calder-shipping-ag")])
+        newcomer = fact(obj="party:halveston-chartering-limited", document_id="doc-2")
+        queue.stage(ctx, [newcomer])
+
+        assert queue.fetch(ctx, newcomer.assertion_id).near_duplicates == ()
+
+    def test_a_different_kind_is_not_a_duplicate(self, ctx, onto):
+        """`party:acme` and `court:acme` are unrelated. The kind is part of the key."""
+        queue = self._queue(onto)
+        queue.stage(ctx, [fact(obj="party:acme")])
+        newcomer = fact(predicate="FILED_IN", subject="document:doc-2", obj="court:acme")
+        queue.stage(ctx, [newcomer])
+
+        assert queue.fetch(ctx, newcomer.assertion_id).near_duplicates == ()
+
+    def test_an_external_id_is_never_reported(self, ctx, onto):
+        """Two matter references issued by case management are two matters, however alike they
+        look -- the issuing system already guarantees uniqueness."""
+        queue = self._queue(onto)
+        queue.stage(ctx, [fact(predicate="RELATES_TO_MATTER", subject="document:doc-1",
+                               obj="matter:" + NTL)])
+        newcomer = fact(
+            predicate="RELATES_TO_MATTER", subject="document:doc-2", obj="matter:" + MBC
+        )
+        queue.stage(ctx, [newcomer])
+
+        assert queue.fetch(ctx, newcomer.assertion_id).near_duplicates == ()
+
+    def test_a_queue_with_no_key_function_reports_nothing(self, ctx, onto):
+        """Empty is not "checked and clean" when nothing was wired to check."""
+        queue = ReviewQueue()
+        queue.stage(ctx, [fact(obj="party:calder-shipping-ag")])
+        newcomer = fact(obj="party:calder-shipping", document_id="doc-2")
+        queue.stage(ctx, [newcomer])
+
+        assert queue.fetch(ctx, newcomer.assertion_id).near_duplicates == ()
+
+    def test_the_wired_queue_carries_the_key_function(self):
+        from src.api.deps import build_services
+
+        assert build_services().review_queue._entity_blocking_keys is not None
+
+
 class TestATypedIdIsCanonicalised:
     """The hole the extractor did not have.
 
@@ -727,6 +831,28 @@ class TestOverHttp:
         assert body["corrected"]["predicate"] == "ADVERSE_TO"
         assert body["corrected"]["epistemic_class"] == "DECLARED"
         assert body["superseded"]["assertion_id"] == a.assertion_id
+
+    def test_a_near_duplicate_reaches_the_reviewer_over_http(self, client, ctx):
+        """The wiring, end to end. A signal computed at stage time and never sent is the class of
+        bug that left `blocking_facts` defined and called by nothing."""
+        c, services = client
+        self._staged(services, ctx, obj="party:calder-shipping-ag")
+        newcomer = self._staged(services, ctx, obj="party:calder-shipping", document_id="doc-2")
+
+        body = c.get(f"/api/tenants/{TENANT}/assertions?review_state=PENDING").json()
+        row = next(a for a in body["assertions"] if a["assertion_id"] == newcomer.assertion_id)
+        assert row["near_duplicates"] == ["party:calder-shipping-ag"]
+
+    def test_a_typed_id_is_canonicalised_over_http(self, client, ctx):
+        c, services = client
+        a = self._staged(services, ctx)
+
+        r = c.post(
+            f"/api/tenants/{TENANT}/assertions/{a.assertion_id}/correct",
+            json={"object_id": "Party: Calder Shipping AG", "reason": "full company name"},
+        )
+        assert r.status_code == 200
+        assert r.json()["corrected"]["object_id"] == "party:calder-shipping-ag"
 
     def test_a_correction_is_audited(self, client, ctx):
         c, services = client

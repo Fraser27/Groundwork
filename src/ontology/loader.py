@@ -131,6 +131,14 @@ class Ontology:
     predicates: dict[str, PredicateDef]
     rules: tuple[RuleDef, ...]
 
+    entity_suffixes: frozenset[str] = frozenset()
+    """Trailing words that are legal-form noise rather than part of a name, for *detection only*.
+
+    Declared per pack because which words those are is domain knowledge: `gmbh` means nothing in
+    the healthcare pack, and hardcoding a legal list in Python would make the second pack a lie.
+    Used by `entity_blocking_keys` to ask a human whether two ids are one company, and never by
+    `canonical_entity_id` — see that method for why dropping a word must not reach a stored id."""
+
     @functools.cached_property
     def governing_predicates(self) -> frozenset[str]:
         """The closed set. `build_assertion` rejects anything outside it."""
@@ -266,6 +274,47 @@ class Ontology:
             return None
         return f"{kind}:{local}"
 
+    def entity_blocking_keys(self, entity_id: str) -> frozenset[str]:
+        """Keys two ids share when they may name one thing, for putting a question to a human.
+
+        Blocking keys, deliberately not similarity. No threshold, no edit distance, no fuzzy
+        matching, because no threshold is correct at any setting: 0.7 merges "Acme Corp" with
+        "Acme Holdings". Two ids collide here or they do not, which is reproducible forever and
+        explainable to a lawyer in one sentence.
+
+        Two keys per id. The first is the normalised local part with separators removed, so
+        `calder-shipping-ag` and `Calder Shipping AG` collide. The second additionally drops
+        trailing corporate-form words, so `calder-shipping` collides with `calder-shipping-ag`.
+
+        That second key is exactly what `canonical_entity_id` refuses to do, and the asymmetry is
+        the design: a *stored* id with its suffix dropped would silently merge a parent with its
+        subsidiary, which `AFFILIATE_OF` exists to distinguish. A *key* is never stored, drives no
+        query, and its only consequence is a reviewer being asked. Over-generating candidates
+        costs three seconds; under-generating costs a missed conflict.
+
+        Empty for an external id: the issuing system already guarantees uniqueness there, so two
+        Glue tables with similar names are not a duplicate anybody should resolve.
+        """
+        canonical = self.canonical_entity_id(entity_id)
+        if canonical is None:
+            return frozenset()
+        kind, _, local = canonical.partition(":")
+        definition = self._entity_def_for(kind)
+        if definition is not None and definition.external_id:
+            return frozenset()
+        squashed = local.replace("-", "")
+        if not squashed:
+            return frozenset()
+        keys = {f"{kind}:{squashed}"}
+        words = [w for w in local.split("-") if w]
+        # One suffix at a time, and never the last word standing: `party:ag` is not a company.
+        while len(words) > 1 and words[-1] in self.entity_suffixes:
+            words = words[:-1]
+        stripped = "".join(words)
+        if stripped:
+            keys.add(f"{kind}:{stripped}")
+        return frozenset(keys)
+
     def layer_of(self, entity_id: str) -> str:
         """`domain`, `catalog`, or `unknown` for an id outside the vocabulary.
 
@@ -390,6 +439,7 @@ def _parse(raw: dict[str, Any]) -> Ontology:
         entities=entities,
         predicates=predicates,
         rules=rules,
+        entity_suffixes=frozenset(str(s).lower() for s in raw.get("entity_suffixes", ())),
     )
     _validate_blocks(predicates, ontology.domain)
     _validate_transitive(predicates, ontology.domain)

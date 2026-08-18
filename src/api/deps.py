@@ -552,6 +552,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
         store,
         governing_predicates=ontology.governing_predicates,
         canonical_entity_id=ontology.canonical_entity_id,
+        entity_blocking_keys=ontology.entity_blocking_keys,
     )
     access = AccessManager(_build_access_store(cfg))
     # One instance, shared: the authenticator reads bindings the admin API writes, so a

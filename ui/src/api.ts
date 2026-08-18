@@ -106,6 +106,14 @@ export interface Assertion {
   reviewed_at?: string | null
   /** Wider surrounding text, so a reviewer can judge the quote in context. */
   source_context?: string | null
+  /**
+   * Existing entity ids this claim's endpoints may be another spelling of.
+   *
+   * Advisory, computed when the claim was staged. Shown while it is still PENDING because that is
+   * the one moment fixing it is free: once a conclusion rests on the fact, changing the id means
+   * a cascade. Empty means either no collision or that nothing was wired to look.
+   */
+  near_duplicates?: string[]
 }
 
 /** One node of a proof tree: an assertion plus the assertions it rests on. */

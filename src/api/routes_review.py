@@ -79,6 +79,12 @@ class AssertionOut(BaseModel):
     """Whether this sits under the retrieval trust floor. Shown so a reviewer knows
     the claim is not currently shaping any answer."""
 
+    near_duplicates: list[str] = Field(default_factory=list)
+    """Existing entity ids this claim's endpoints may be another spelling of.
+
+    Advisory. Surfaced while the claim is still PENDING because that is the one moment fixing it
+    costs nothing -- once a conclusion rests on it, correcting the id means a cascade."""
+
 
 def _settle_document(services: Any, ctx: AuthContext, record: Any) -> None:
     """Move a document off PENDING_REVIEW once nothing of its own is still pending.
@@ -151,6 +157,7 @@ def _to_out(record: Any, floor: float) -> AssertionOut:
         reviewed_by=a.reviewed_by,
         reviewed_at=a.reviewed_at,
         below_floor=a.confidence < floor,
+        near_duplicates=list(getattr(record, "near_duplicates", ()) or ()),
     )
 
 

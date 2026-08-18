@@ -81,6 +81,13 @@ class AssertionRecord:
     review_note: str | None = None
     retracted_reason: str | None = None
     retracted_by: str | None = None
+    near_duplicates: tuple[str, ...] = ()
+    """Existing entity ids this claim's endpoints may be another spelling of.
+
+    Advisory, and computed at stage time because that is the one moment fixing it is free: the
+    claim is still PENDING, so no conclusion rests on it yet. Empty is not "checked and clean"
+    when no blocking-key function was supplied -- see `ReviewQueue._near_duplicates`."""
+
     corrects: str | None = None
     """The assertion this one replaces, when a reviewer corrected it.
 
@@ -169,6 +176,7 @@ class QueueItem:
     matter_id: str | None
     recorded_at: str
     job_id: str | None
+    near_duplicates: tuple[str, ...] = ()
 
     @classmethod
     def of(cls, record: AssertionRecord) -> QueueItem:
@@ -189,6 +197,7 @@ class QueueItem:
             matter_id=a.matter_id,
             recorded_at=a.recorded_at,
             job_id=record.job_id,
+            near_duplicates=record.near_duplicates,
         )
 
 
@@ -199,6 +208,7 @@ class ReviewQueue:
         *,
         governing_predicates: frozenset[str] | None = None,
         canonical_entity_id: Callable[[str], str | None] | None = None,
+        entity_blocking_keys: Callable[[str], frozenset[str]] | None = None,
     ) -> None:
         self.store = store or InMemoryAssertionStore()
         self._governing = governing_predicates
@@ -213,6 +223,11 @@ class ReviewQueue:
         A callable rather than the pack, following `governing_predicates`: this module needs one
         answer from the ontology, not the ontology. None leaves an id as typed, which is the
         behaviour before this existed."""
+
+        self._entity_blocking_keys = entity_blocking_keys
+        """`Ontology.entity_blocking_keys`, for reporting that a staged id may name something
+        already in the graph. None disables the check, which then reports nothing rather than
+        guessing at what counts as similar."""
 
     def _is_governing(self, predicate: str) -> bool:
         return self._governing is None or predicate in self._governing
@@ -250,10 +265,59 @@ class ReviewQueue:
             if a.matter_id is not None:
                 ctx.assert_can_read_matter(a.matter_id)
 
+        near = self._near_duplicates(ctx, assertions)
         for a in assertions:
-            self.store.put(AssertionRecord(assertion=a, lifecycle=Lifecycle.STAGED, job_id=job_id))
+            self.store.put(
+                AssertionRecord(
+                    assertion=a,
+                    lifecycle=Lifecycle.STAGED,
+                    job_id=job_id,
+                    near_duplicates=near.get(a.assertion_id, ()),
+                )
+            )
         logger.info("staged %d assertions for job %s", len(assertions), job_id)
         return [a.assertion_id for a in assertions]
+
+    def _near_duplicates(
+        self, ctx: AuthContext, assertions: Sequence[Assertion]
+    ) -> dict[str, tuple[str, ...]]:
+        """Existing ids each staged assertion's endpoints may be another spelling of.
+
+        Reported on the record, never blocking the write. A refused write loses the fact, and the
+        same key that catches a variant spelling also catches a genuinely new sibling company --
+        so refusing would sometimes discard exactly the entity `AFFILIATE_OF` needs.
+
+        Here rather than in the extractor's `validate()` on purpose: `validate()` is a pure
+        function over one chunk, tested with no graph at all, and should stay so. `stage()` is
+        already the transaction boundary and already reads the tenant's records.
+
+        The index is built once per call, not per assertion.
+        """
+        if self._entity_blocking_keys is None:
+            return {}
+        staged_ids = {e for a in assertions for e in (a.subject_id, a.object_id) if e}
+
+        existing: dict[str, set[str]] = {}
+        for record in self.store.all_for_tenant(ctx.tenant_id):
+            for entity_id in (record.assertion.subject_id, record.assertion.object_id):
+                if not entity_id or entity_id in staged_ids:
+                    continue
+                for key in self._entity_blocking_keys(entity_id):
+                    existing.setdefault(key, set()).add(entity_id)
+
+        if not existing:
+            return {}
+        out: dict[str, tuple[str, ...]] = {}
+        for a in assertions:
+            hits: set[str] = set()
+            for entity_id in (a.subject_id, a.object_id):
+                if not entity_id:
+                    continue
+                for key in self._entity_blocking_keys(entity_id):
+                    hits |= existing.get(key, set())
+            if hits:
+                out[a.assertion_id] = tuple(sorted(hits))
+        return out
 
     # ── reading the queue ─────────────────────────────────────────────────────
 

@@ -347,6 +347,16 @@ export default function ReviewQueue() {
                           {a.subject_type} → {a.object_type}
                         </div>
                       )}
+                      {!!a.near_duplicates?.length && (
+                        <div className="review-nearby">
+                          <span className="tag tag-neutral">already in the graph</span>{' '}
+                          <span className="dim">
+                            {a.near_duplicates.join(', ')} — if that is the same company, correct
+                            this claim to use it. Two nodes for one company is what makes a later
+                            conflict check come back clean.
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="review-badges">

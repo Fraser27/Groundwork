@@ -17,6 +17,33 @@
 domain: legal
 version: 1
 
+# Trailing words that are legal-form noise rather than part of a company's name. Used ONLY to ask
+# a reviewer whether two ids are the same company — never to rewrite a stored id. `Calder Shipping
+# AG` and `Calder Shipping Ltd` are routinely a parent and its English subsidiary, which is exactly
+# what AFFILIATE_OF records, so collapsing them would turn an affiliate conflict into a false
+# direct one. Detect aggressively, merge only by human act.
+entity_suffixes:
+  - ag
+  - sa
+  - nv
+  - bv
+  - gmbh
+  - plc
+  - ltd
+  - limited
+  - llp
+  - llc
+  - inc
+  - corp
+  - corporation
+  - pty
+  - srl
+# Deliberately NOT here: `holdings`, `group`, `partners`, `trading`. Those are part of a name
+# rather than its legal form — `Acme Corp` and `Acme Holdings` are two companies, and treating
+# `holdings` as noise makes them collide. A key that over-generates asks a reviewer a stupid
+# question; this one would ask a *misleading* one, and a reviewer who merges on it loses a real
+# distinction with no record that anything was collapsed.
+
 # `external_id: true` marks a kind whose id after the colon belongs to another system, so it is
 # preserved byte-for-byte instead of being normalised. `matter:NTL-2026-0114` is a
 # case-management reference and `table:src-1:legal.matters` is a Glue name; lowercasing either
