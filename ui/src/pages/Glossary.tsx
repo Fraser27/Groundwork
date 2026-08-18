@@ -311,6 +311,14 @@ export default function Glossary() {
                         both ways
                       </span>
                     )}
+                    {p.transitive && (
+                      <span
+                        className="tag tag-neutral"
+                        title="A rule may follow a bounded chain of these, not just one edge"
+                      >
+                        chains
+                      </span>
+                    )}
                   </td>
                   <td className="text-dim">
                     {p.domain.join(', ') || '-'} → {p.range.join(', ') || '-'}

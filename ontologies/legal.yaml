@@ -157,6 +157,10 @@ governing_predicates:
     range: [Party]
     description: The two parties are part of one corporate group, or one holds a stake in the other.
     help: The fact in the middle of a non-adjacent conflict. Without it, "the firm is attacking a company its own client part-owns" is two unrelated records and no rule can join them. Governing rather than descriptive because a conflict check reads it, and a synonym an extractor invented would make that check return nothing while looking clean.
+    # Group membership carries through a chain of holding companies, and a structure deep enough
+    # to hide a conflict is often one built to. Bounded, so a rule follows an ownership ladder
+    # rather than assuming it reaches everywhere.
+    transitive: true
   # ── Conclusions. Only a rule writes these; no extractor may propose one. ────
   #
   # Governing, not descriptive, by the same test as everything else here: would a wrong

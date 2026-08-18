@@ -37,6 +37,67 @@ class TestPacksLoad:
         assert rule.method == f"rule:{rule.id}@{rule.version}"
 
 
+class TestTransitiveIsDeclaredNotAssumed:
+    """Which predicates a rule may walk as a chain is a claim about the world, so the pack
+    makes it and the engine does not guess."""
+
+    def test_affiliation_chains(self):
+        assert "AFFILIATE_OF" in load_ontology("legal").transitive_predicates
+
+    def test_adversity_does_not_chain(self):
+        """Opposing A, who opposes B, does not put the firm against B. Declaring this
+        transitive would manufacture conflicts out of unrelated litigation — and since
+        ADVERSE_TO is symmetric, a walk would also oscillate between two nodes."""
+        assert "ADVERSE_TO" not in load_ontology("legal").transitive_predicates
+
+    def test_representation_does_not_chain(self):
+        assert "REPRESENTS" not in load_ontology("legal").transitive_predicates
+
+    def test_nothing_is_transitive_by_default(self):
+        assert load_ontology("healthcare").transitive_predicates == frozenset()
+
+    def test_a_descriptive_predicate_may_not_chain(self, tmp_path):
+        """The descriptive half is open, so an extractor inventing a tag could mint the links
+        of the chain. A path has to run over the closed vocabulary."""
+        from src.ontology import loader
+
+        pack = tmp_path / "bad.yaml"
+        pack.write_text(
+            "domain: bad\nversion: 1\nentity_types: []\ngoverning_predicates: []\n"
+            "descriptive_predicates:\n  - id: TAG\n    transitive: true\nrules: []\n"
+        )
+        with pytest.raises(ValueError, match="descriptive"):
+            loader._parse(__import__("yaml").safe_load(pack.read_text()))
+
+    def test_a_chain_with_nothing_to_continue_into_is_refused(self, tmp_path):
+        """Counsel->Party stops after one hop. Declared transitive it would be a silent no-op
+        rather than an error, which is the failure mode this whole pack refuses."""
+        from src.ontology import loader
+
+        pack = tmp_path / "bad2.yaml"
+        pack.write_text(
+            "domain: bad\nversion: 1\nentity_types: []\n"
+            "governing_predicates:\n  - id: ACTS_FOR\n    domain: [Counsel]\n"
+            "    range: [Party]\n    transitive: true\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        with pytest.raises(ValueError, match="do not overlap"):
+            loader._parse(__import__("yaml").safe_load(pack.read_text()))
+
+    def test_an_overlapping_domain_and_range_is_accepted(self, tmp_path):
+        from src.ontology import loader
+
+        pack = tmp_path / "ok.yaml"
+        pack.write_text(
+            "domain: ok\nversion: 1\nentity_types: []\n"
+            "governing_predicates:\n  - id: OWNS\n    domain: [Party]\n"
+            "    range: [Party]\n    transitive: true\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        onto = loader._parse(__import__("yaml").safe_load(pack.read_text()))
+        assert onto.transitive_predicates == frozenset({"OWNS"})
+
+
 class TestTwoTierVocabulary:
     def test_governing_and_descriptive_are_disjoint(self):
         o = load_ontology("legal")

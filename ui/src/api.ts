@@ -851,6 +851,7 @@ export interface PredicateDef {
   range: string[]
   help?: string | null
   symmetric?: boolean
+  transitive?: boolean
 }
 
 export interface RuleDef {

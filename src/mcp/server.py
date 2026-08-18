@@ -223,6 +223,7 @@ async def describe_ontology(ctx: Context) -> dict[str, Any]:
             "domain": list(p.domain),
             "range": list(p.range),
             "symmetric": p.symmetric,
+            "transitive": p.transitive,
         }
 
     return {

@@ -52,6 +52,13 @@ class PredicateDef:
     both packs. The coincidence is not a guarantee: an enrichment rule concluding something benign
     would silently become a veto, and a veto nobody declared is as bad as a veto that never ran."""
 
+    transitive: bool = False
+    """Whether a rule may walk a chain of these edges as one premise.
+
+    Declared per predicate because transitivity is a claim about the world that only the pack
+    author can make: ownership carries through a chain of holding companies, and `ADVERSE_TO`
+    emphatically does not — opposing A, who opposes B, does not put you against B."""
+
 
 @dataclass(frozen=True)
 class EntityDef:
@@ -155,6 +162,15 @@ class Ontology:
         of refusing, and that reads exactly like a clean conflict check.
         """
         return frozenset(p.id for p in self.predicates.values() if p.blocks)
+
+    @functools.cached_property
+    def transitive_predicates(self) -> frozenset[str]:
+        """Predicates a rule may follow as a chain rather than a single edge.
+
+        Closed, like the blocks. A path premise over a predicate nobody declared transitive
+        would conclude something the pack never claimed followed from a chain.
+        """
+        return frozenset(p.id for p in self.predicates.values() if p.transitive)
 
     def blocked_endpoints(self, predicate: str) -> tuple[str, ...]:
         """Which ends of an edge with this predicate are tainted. Empty for a non-blocking one."""
@@ -288,6 +304,7 @@ def _parse(raw: dict[str, Any]) -> Ontology:
                 help=p.get("help"),
                 symmetric=bool(p.get("symmetric", False)),
                 blocks=str(p.get("blocks", "") or ""),
+                transitive=bool(p.get("transitive", False)),
             )
 
     rules = tuple(
@@ -311,6 +328,7 @@ def _parse(raw: dict[str, Any]) -> Ontology:
         rules=rules,
     )
     _validate_blocks(predicates, ontology.domain)
+    _validate_transitive(predicates, ontology.domain)
     _validate_rules(ontology)
     return ontology
 
@@ -335,6 +353,39 @@ def _validate_blocks(predicates: dict[str, PredicateDef], domain: str) -> None:
             raise ValueError(
                 f"predicate {pdef.id!r} in the {domain} pack declares blocks: {pdef.blocks!r} but "
                 "is descriptive; only a governing predicate may veto an answer"
+            )
+
+
+def _validate_transitive(predicates: dict[str, PredicateDef], domain: str) -> None:
+    """Refuse a `transitive:` declaration a chain could not soundly follow.
+
+    Both refusals are about a walk that would produce conclusions the pack never claimed:
+
+    - **Descriptive.** The descriptive half is open and unvalidated, so an extractor inventing a
+      tag could mint the links of the chain. A path has to run over the closed set.
+    - **Nothing to continue into.** A chain needs the object of one edge to be a legal subject of
+      the next, so `domain` and `range` must overlap. `REPRESENTS` is Counsel->Party and stops
+      after one hop; declaring it transitive would silently be a no-op rather than an error.
+
+    Symmetric is deliberately *not* refused here. It is a real hazard — a walk oscillates between
+    two nodes — but `_expand_path` breaks that with visited-node tracking, and a genuinely
+    symmetric transitive predicate (shares an ingredient with) is a coherent thing for a pack to
+    declare. Refusing it here would be refusing a sound pack on the strength of an engine detail.
+    """
+    for pdef in predicates.values():
+        if not pdef.transitive:
+            continue
+        if not pdef.governing:
+            raise ValueError(
+                f"predicate {pdef.id!r} in the {domain} pack declares transitive: true but is "
+                "descriptive; a chain a rule walks has to run over the closed vocabulary, or an "
+                "extractor could invent its links"
+            )
+        if not (set(pdef.domain) & set(pdef.range)):
+            raise ValueError(
+                f"predicate {pdef.id!r} in the {domain} pack declares transitive: true but its "
+                f"domain {list(pdef.domain)} and range {list(pdef.range)} do not overlap, so a "
+                "chain has nothing to continue into"
             )
 
 

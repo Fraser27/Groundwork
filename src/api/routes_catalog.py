@@ -177,6 +177,7 @@ async def get_ontology(domain: str) -> dict[str, Any]:
             "domain": list(p.domain),
             "range": list(p.range),
             "symmetric": p.symmetric,
+            "transitive": p.transitive,
         }
 
     # Split rather than flat, and named to match the UI's `Ontology` type. The split

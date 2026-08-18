@@ -903,6 +903,15 @@ export default function Admin() {
                         symmetric
                       </span>
                     )}
+                    {p.transitive && (
+                      <span
+                        className="tag tag-neutral"
+                        style={{ marginLeft: 6 }}
+                        title="A rule may follow a bounded chain of these edges as one premise, so a conflict reached through a group structure is still found. Every step stays in the proof tree."
+                      >
+                        transitive
+                      </span>
+                    )}
                   </td>
                   <td className="nowrap dim">
                     {p.domain.join(' | ')} → {p.range.join(' | ')}
