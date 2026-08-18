@@ -778,12 +778,10 @@ class TestPackValidationHappensAtLoad:
         load_ontology.cache_clear()
 
 
-class TestAPathRuleIsSkippedLoudly:
-    """Until the engine walks chains, a pack using one must be visibly non-firing.
-
-    Running it as single-hop would be the worst outcome available: the author wrote the rule to
-    follow a chain, the report would say it was evaluated, and a check that never did the thing
-    it was written for would return "nothing found".
+class TestARuleWalksAChain:
+    """A chain of unknown length, which is the only thing a path premise buys over a third
+    premise. An ownership ladder is the case: the pack author cannot know how many holding
+    companies sit between the firm's client and the company it is opposing.
     """
 
     def _pack(self, tmp_path, monkeypatch):
@@ -831,7 +829,9 @@ class TestAPathRuleIsSkippedLoudly:
         assert onto.transitive_predicates == frozenset({"OWNS"})
         load_ontology.cache_clear()
 
-    def test_the_report_names_the_rule_and_says_why(self, tmp_path, monkeypatch):
+    def test_a_one_hop_path_still_matches(self, tmp_path, monkeypatch):
+        """`*1..3` includes 1. A path premise that stopped finding direct edges would be a
+        regression dressed as a feature."""
         onto = self._pack(tmp_path, monkeypatch)
         ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
         facts = [
@@ -840,20 +840,139 @@ class TestAPathRuleIsSkippedLoudly:
         ]
         report = Reasoner(onto).run(ctx, facts)
 
-        assert report.count == 0
-        assert "chain" in report.rules_skipped
-        assert "OWNS" in report.rules_skipped["chain"]
+        assert report.rules_skipped == {}
+        assert [(i.assertion.subject_id, i.assertion.object_id) for i in report.inferences] == [
+            ("party:rival", "party:top")
+        ]
         load_ontology.cache_clear()
 
-    def test_it_does_not_quietly_fire_on_the_direct_edge(self, tmp_path, monkeypatch):
-        """The single-hop case is the one that would silently look like success."""
+    def test_it_reaches_the_far_end_of_a_ladder(self, tmp_path, monkeypatch):
+        """The conclusion nothing else finds: rival opposes low, top owns mid owns low, so the
+        firm is against a company two steps below its own client."""
         onto = self._pack(tmp_path, monkeypatch)
         ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
         facts = [
             fact("party:top", "OWNS", "party:mid"),
-            fact("party:rival", "ADVERSE_TO", "party:mid"),
+            fact("party:mid", "OWNS", "party:low"),
+            fact("party:rival", "ADVERSE_TO", "party:low"),
         ]
-        assert Reasoner(onto).run(ctx, facts).inferences == []
+        report = Reasoner(onto).run(ctx, facts)
+
+        reached = {i.assertion.object_id for i in report.inferences}
+        assert "party:top" in reached
+        load_ontology.cache_clear()
+
+    def test_every_step_of_the_chain_is_a_premise(self, tmp_path, monkeypatch):
+        """The whole reason a path is allowed where negation is not. Two hops means three
+        premises, so withdrawing any link withdraws the conclusion."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:top", "OWNS", "party:mid"),
+            fact("party:mid", "OWNS", "party:low"),
+            fact("party:rival", "ADVERSE_TO", "party:low"),
+        ]
+        report = Reasoner(onto).run(ctx, facts)
+
+        far = next(i for i in report.inferences if i.assertion.object_id == "party:top")
+        assert set(far.premise_ids) == {f.assertion_id for f in facts}
+        load_ontology.cache_clear()
+
+    def test_a_chain_longer_than_the_bound_is_not_followed(self, tmp_path, monkeypatch):
+        """Four links, a bound of three. The far end must stay out of reach rather than the
+        walk quietly running as far as the data goes."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:l1", "OWNS", "party:l2"),
+            fact("party:l2", "OWNS", "party:l3"),
+            fact("party:l3", "OWNS", "party:l4"),
+            fact("party:l4", "OWNS", "party:l5"),
+            fact("party:rival", "ADVERSE_TO", "party:l5"),
+        ]
+        reached = {i.assertion.object_id for i in Reasoner(onto).run(ctx, facts).inferences}
+        assert "party:l2" in reached
+        assert "party:l1" not in reached
+        load_ontology.cache_clear()
+
+    def test_a_cycle_terminates_and_concludes_nothing_about_itself(self, tmp_path, monkeypatch):
+        """A OWNS B OWNS A. Without per-path visited nodes the walk runs to the hop cap and
+        concludes something about A from A."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:a", "OWNS", "party:b"),
+            fact("party:b", "OWNS", "party:a"),
+            fact("party:r", "ADVERSE_TO", "party:b"),
+        ]
+        report = Reasoner(onto).run(ctx, facts)
+
+        assert [(i.assertion.subject_id, i.assertion.object_id) for i in report.inferences] == [
+            ("party:r", "party:a")
+        ]
+        load_ontology.cache_clear()
+
+    def test_the_shortest_proof_is_the_one_cited(self, tmp_path, monkeypatch):
+        """Two chains reach `top` from `low`: directly, and via `mid`. The conclusion is one
+        edge either way, so the premises cited must be the tighter pair -- deterministically,
+        or two runs of one conflict check disagree about why."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:top", "OWNS", "party:low"),
+            fact("party:top", "OWNS", "party:mid"),
+            fact("party:mid", "OWNS", "party:low"),
+            fact("party:rival", "ADVERSE_TO", "party:low"),
+        ]
+        report = Reasoner(onto).run(ctx, facts)
+
+        far = next(i for i in report.inferences if i.assertion.object_id == "party:top")
+        assert len(far.premise_ids) == 2
+        load_ontology.cache_clear()
+
+    def test_one_fact_cannot_be_two_premises_of_a_chain(self, tmp_path, monkeypatch):
+        """A single OWNS edge must not be walked twice to fake a two-hop ladder."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:x", "OWNS", "party:x"),
+            fact("party:rival", "ADVERSE_TO", "party:x"),
+        ]
+        for i in Reasoner(onto).run(ctx, facts).inferences:
+            assert len(set(i.premise_ids)) == len(i.premise_ids)
+        load_ontology.cache_clear()
+
+    def test_the_chain_is_cited_in_walk_order(self, tmp_path, monkeypatch):
+        """`premises` is a flat tuple, so a 2-hop path contributes three ids with no structure
+        saying which followed which. Order is preserved incidentally -- facts are appended as
+        they match -- and that is worth pinning: it is the only thing letting a reader
+        reconstruct `top -> mid -> low` from a proof tree that renders them as siblings.
+
+        If a `premise_paths` structure ever lands, this test is what it replaces."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        top = fact("party:top", "OWNS", "party:mid")
+        mid = fact("party:mid", "OWNS", "party:low")
+        adverse = fact("party:rival", "ADVERSE_TO", "party:low")
+        report = Reasoner(onto).run(ctx, [top, mid, adverse])
+
+        far = next(i for i in report.inferences if i.assertion.object_id == "party:top")
+        assert list(far.premise_ids) == [top.assertion_id, mid.assertion_id, adverse.assertion_id]
+        assert list(far.assertion.premises) == list(far.premise_ids)
+        load_ontology.cache_clear()
+
+    def test_an_unreviewed_link_breaks_the_chain(self, tmp_path, monkeypatch):
+        """Every step is held to the same gate as an ordinary premise. A model's guess in the
+        middle of a ladder must not carry a conclusion across it."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:top", "OWNS", "party:mid"),
+            fact("party:mid", "OWNS", "party:low", review_state=ReviewState.PENDING),
+            fact("party:rival", "ADVERSE_TO", "party:low"),
+        ]
+        reached = {i.assertion.object_id for i in Reasoner(onto).run(ctx, facts).inferences}
+        assert reached == set()
         load_ontology.cache_clear()
 
 

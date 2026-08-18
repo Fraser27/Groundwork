@@ -210,15 +210,6 @@ class Reasoner:
                     f"{rule.conclusion.predicate} is not in the {self.ontology.domain} vocabulary"
                 )
                 continue
-            paths = [p.predicate for p in rule.premises if p.is_path]
-            if paths:
-                # Parsed but not yet walked. Reported rather than run as single-hop: a rule the
-                # pack author wrote to follow a chain, silently finding only direct edges, would
-                # report "no conflicts" from a check that never did the thing it was written for.
-                report.rules_skipped[rule.rule_id] = (
-                    f"walks a chain of {', '.join(paths)}, which this engine does not expand yet"
-                )
-                continue
             for inference in self._fire(ctx, rule, by_predicate, known):
                 report.inferences.append(inference)
 
@@ -244,20 +235,11 @@ class Reasoner:
         to those agreeing with what is already bound, which is what makes the shared variable a
         join rather than a cross product.
         """
-        eligible = [
-            f
-            for f in by_predicate.get(rule.premises[0].predicate, ())
-            if accepts(f, rule.min_premise_class)
-        ]
-        # (bindings, premise assertions) pairs.
-        partial: list[tuple[dict[str, str], list[Assertion]]] = []
-        first = rule.premises[0]
-        for fact in eligible:
-            partial.append(
-                ({first.subject_var: fact.subject_id, first.object_var: fact.object_id}, [fact])
-            )
+        # (bindings, premise assertions) pairs. Starts with one empty binding so the first
+        # premise is grown by the same code as the rest -- a path premise may come first.
+        partial: list[tuple[dict[str, str], list[Assertion]]] = [({}, [])]
 
-        for pattern in rule.premises[1:]:
+        for pattern in rule.premises:
             candidates = [
                 f
                 for f in by_predicate.get(pattern.predicate, ())
@@ -265,23 +247,31 @@ class Reasoner:
             ]
             grown: list[tuple[dict[str, str], list[Assertion]]] = []
             for binding, used in partial:
-                for fact in candidates:
-                    if binding.get(pattern.subject_var, fact.subject_id) != fact.subject_id:
+                for start, end, chain in self._match(pattern, candidates):
+                    if binding.get(pattern.subject_var, start) != start:
                         continue
-                    if binding.get(pattern.object_var, fact.object_id) != fact.object_id:
+                    if binding.get(pattern.object_var, end) != end:
                         continue
-                    if any(u.assertion_id == fact.assertion_id for u in used):
+                    spent = {u.assertion_id for u in used}
+                    if any(f.assertion_id in spent for f in chain):
                         # A fact cannot be two different premises of one conclusion. Without
                         # this a symmetric predicate joins to itself and the rule "proves"
-                        # something from a single fact.
+                        # something from a single fact. Across the whole chain, not just its
+                        # first edge, or a path could re-use an edge another premise already
+                        # spent and the conclusion would rest on fewer facts than it cites.
                         continue
                     merged = dict(binding)
-                    merged[pattern.subject_var] = fact.subject_id
-                    merged[pattern.object_var] = fact.object_id
-                    grown.append((merged, [*used, fact]))
+                    merged[pattern.subject_var] = start
+                    merged[pattern.object_var] = end
+                    grown.append((merged, [*used, *chain]))
             partial = grown
             if not partial:
                 return []
+
+        # Shortest first, so where two chains reach one conclusion the cited proof is the
+        # tightest one. `premise_ids` breaks the tie, because two runs of one conflict check
+        # citing different premises is indistinguishable from the graph having changed.
+        partial.sort(key=lambda row: (len(row[1]), tuple(f.assertion_id for f in row[1])))
 
         out: list[Inference] = []
         seen: set[tuple[str, ...]] = set()
@@ -297,6 +287,40 @@ class Reasoner:
             inferred = self._build(ctx, rule, binding, used, known)
             if inferred is not None:
                 out.append(inferred)
+        return out
+
+    def _match(
+        self, pattern: Any, candidates: list[Assertion]
+    ) -> list[tuple[str, str, list[Assertion]]]:
+        """Every (start, end, facts) this premise matches: one edge, or a chain of them.
+
+        An ordinary premise is `max_hops == 1`, so it is literally the one-hop case of the walk
+        and needs no separate branch.
+        """
+        if not pattern.is_path:
+            return [(f.subject_id, f.object_id, [f]) for f in candidates]
+
+        # (start, current end, facts, nodes on this path). `visited` is per path rather than
+        # global, mirroring `expand()`: two paths may legitimately share a node, but one path
+        # revisiting a node is a cycle, and `A OVERRULES B OVERRULES A` would otherwise walk to
+        # the hop cap and conclude something about A from A.
+        walks: list[tuple[str, str, list[Assertion], set[str]]] = [
+            (f.subject_id, f.object_id, [f], {f.subject_id, f.object_id}) for f in candidates
+        ]
+        out: list[tuple[str, str, list[Assertion]]] = [(s, e, c) for s, e, c, _ in walks]
+
+        for _ in range(pattern.max_hops - 1):
+            extended: list[tuple[str, str, list[Assertion], set[str]]] = []
+            for start, end, chain, visited in walks:
+                spent = {f.assertion_id for f in chain}
+                for f in candidates:
+                    if f.subject_id != end or f.assertion_id in spent or f.object_id in visited:
+                        continue
+                    extended.append((start, f.object_id, [*chain, f], visited | {f.object_id}))
+            if not extended:
+                break
+            out.extend((s, e, c) for s, e, c, _ in extended)
+            walks = extended
         return out
 
     def _build(
