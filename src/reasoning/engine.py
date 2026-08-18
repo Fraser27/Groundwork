@@ -74,7 +74,8 @@ _STRENGTH: dict[EpistemicClass, int] = {
 
 #: A conclusion is only as good as its weakest premise, and it should not be presented as
 #: equal to it either: an inference adds a step, and a step can be wrong even when every
-#: premise is right. Applied on top of the ceiling `build_assertion` enforces.
+#: premise is right. Applied on top of the ceiling `build_assertion` enforces, and once per
+#: edge crossed — so a chain is less certain than a direct join, which is the honest ordering.
 INFERENCE_CONFIDENCE_FACTOR = 0.95
 
 
@@ -336,6 +337,14 @@ class Reasoner:
         confidences = tuple(p.confidence for p in premises)
         premise_ids = tuple(p.assertion_id for p in premises)
 
+        # One step of doubt per edge crossed, not per rule fired. A walked chain is more
+        # inferential than a direct join -- more places for a correct premise to lead to a wrong
+        # conclusion -- and applying the factor once meant a 3-hop conclusion was presented as
+        # firmly as a 1-hop one. `extra_hops` is 0 for every non-path rule, so their arithmetic
+        # is unchanged and `assertion_id` values already in the store still reconcile.
+        extra_hops = len(premises) - len(rule.premises)
+        confidence = min(confidences) * INFERENCE_CONFIDENCE_FACTOR ** (1 + extra_hops)
+
         # The matter is inherited only when every premise agrees. A conclusion drawn *across*
         # two matters belongs to neither: stamping it with one would hide it from the other,
         # and a cross-matter conflict hidden from one of its own matters is the failure the
@@ -351,7 +360,7 @@ class Reasoner:
                 object_id=obj,
                 epistemic_class=EpistemicClass.INFERRED,
                 method=rule.method,
-                confidence=min(confidences) * INFERENCE_CONFIDENCE_FACTOR,
+                confidence=confidence,
                 # A rule read no document, so there is no page to cite. The locator names the
                 # rule as the source and the premises carry the documents, which is what the
                 # proof tree unwinds into. Claiming a page here would be a fabricated citation.

@@ -122,6 +122,13 @@ class TestTheConflictCheckFires:
         report = Reasoner(load_ontology("legal")).run(ctx, _conflict_facts())
         assert report.inferences[0].assertion.review_state is ReviewState.PENDING
 
+    def test_a_direct_join_still_decays_exactly_once(self, ctx):
+        """Per-hop decay must leave every existing rule where it was. Two premises, one edge
+        each, so one factor -- and `assertion_id` is content-addressed over the confidence, so a
+        change here would fork the ids of conflicts already sitting in a review queue."""
+        report = Reasoner(load_ontology("legal")).run(ctx, _conflict_facts())
+        assert report.inferences[0].assertion.confidence == pytest.approx(0.9 * 0.95)
+
     def test_no_conflict_when_the_parties_differ(self, ctx):
         """The join is the rule. Acting for one company and against another is normal work."""
         facts = [
@@ -959,6 +966,51 @@ class TestARuleWalksAChain:
         far = next(i for i in report.inferences if i.assertion.object_id == "party:top")
         assert list(far.premise_ids) == [top.assertion_id, mid.assertion_id, adverse.assertion_id]
         assert list(far.assertion.premises) == list(far.premise_ids)
+        load_ontology.cache_clear()
+
+    def test_a_longer_chain_is_less_confident(self, tmp_path, monkeypatch):
+        """One step of doubt per edge crossed. Applied once per rule, a 3-hop conclusion was
+        presented as firmly as a direct join, which is not an honest ordering: a longer chain has
+        more places for a correct premise to lead to a wrong conclusion.
+
+        Deliberately *not* the other direction. A conflict reached further out may well be more
+        urgent, but urgency is not confidence, and `build_assertion` caps an inference at its
+        weakest premise precisely so inference cannot manufacture certainty. Hop count in the
+        proof tree is the honest record of how far this reached."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:l1", "OWNS", "party:l2", confidence=0.95),
+            fact("party:l2", "OWNS", "party:l3", confidence=0.95),
+            fact("party:l3", "OWNS", "party:l4", confidence=0.95),
+            fact("party:rival", "ADVERSE_TO", "party:l4", confidence=0.95),
+        ]
+        report = Reasoner(onto).run(ctx, facts)
+        by_target = {i.assertion.object_id: i.assertion.confidence for i in report.inferences}
+
+        assert by_target["party:l3"] == pytest.approx(0.95 * 0.95)
+        assert by_target["party:l2"] == pytest.approx(0.95 * 0.95**2)
+        assert by_target["party:l1"] == pytest.approx(0.95 * 0.95**3)
+        load_ontology.cache_clear()
+
+    def test_a_decayed_conflict_would_fall_under_the_governance_floor(
+        self, tmp_path, monkeypatch
+    ):
+        """Why vetoes had to stop being filtered by confidence first. A 3-hop conclusion off a
+        0.95 premise lands under 0.8, so had the trust floor still applied to blocks this
+        conclusion would be derived, approved, and then dropped by the veto path -- a conflict
+        check returning nothing for a reason nobody could see."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:l1", "OWNS", "party:l2", confidence=0.9),
+            fact("party:l2", "OWNS", "party:l3", confidence=0.9),
+            fact("party:l3", "OWNS", "party:l4", confidence=0.9),
+            fact("party:rival", "ADVERSE_TO", "party:l4", confidence=0.9),
+        ]
+        report = Reasoner(onto).run(ctx, facts)
+        far = next(i for i in report.inferences if i.assertion.object_id == "party:l1")
+        assert far.assertion.confidence < 0.8
         load_ontology.cache_clear()
 
     def test_an_unreviewed_link_breaks_the_chain(self, tmp_path, monkeypatch):
