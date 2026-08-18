@@ -668,6 +668,21 @@ class TestTheQueryEndpointSendsItsBlocks:
         r = _screened_client().post(f"/api/tenants/{TENANT}/query", json={"query": "antitrust"})
         assert set(r.json()["blocks"][0]) == {"subject", "reason", "rule", "matter_id", "contact"}
 
+    def test_the_response_carries_the_gate_counters(self):
+        """`GateTrace` in api.ts was declared and never sent, so the trace told every reader "no
+        count of what cleared was recorded" -- the same UI-type-without-an-API-field bug as above,
+        one layer up."""
+        r = _screened_client().post(f"/api/tenants/{TENANT}/query", json={"query": "antitrust"})
+        gate = r.json()["gate"]
+        assert gate is not None
+        assert set(gate) == {
+            "seeds_considered",
+            "subjects_cleared",
+            "items_withheld",
+            "degraded",
+            "blocks",
+        }
+
 
 class _EmptyRoutingIndex:
     """Reachable and empty, which is the degrading case: routing must not cost an answer."""

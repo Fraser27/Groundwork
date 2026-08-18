@@ -40,7 +40,7 @@ from typing import Any
 
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
-from src.query.blocks import Block, Screen, blocks_for, seeds_from
+from src.query.blocks import DEGRADED_WARNING, Block, Screen, blocks_for, seeds_from
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 from src.query.resolver import Tier
 
@@ -147,6 +147,13 @@ class ComposedAnswer:
     """Why these lanes and not others. None means no router was wired, which is a different
     statement from a router that ran and could not choose -- see `RouterDecision.degraded`."""
 
+    gate: dict[str, Any] | None = None
+    """What step 4 considered, cleared and withheld, and whether both its sources ran.
+
+    Reported even when nothing was refused. A wall visible only when it blocks cannot be
+    distinguished from one that never ran, which is exactly how the rule-block half stayed
+    missing."""
+
     @property
     def is_fully_deterministic(self) -> bool:
         """True only when no part and no synthesis involved a model.
@@ -178,6 +185,7 @@ class ComposedAnswer:
             "blocks": [b.to_dict() for b in self.blocks],
             "lanes_run": [lane.value for lane in self.lanes_run],
             "lanes_skipped": self.lanes_skipped,
+            "gate": self.gate,
             "router": self.router.to_dict() if self.router is not None else None,
             "synthesis": self.synthesis,
             "governance": self.governance_label,
@@ -191,6 +199,12 @@ class ComposedAnswer:
                 "dropped."
             ),
         }
+
+
+def _row_count(content: Any) -> int:
+    """Rows in a part, or 0 for a part that is not a list. A metric's content is a dict or None,
+    and counting it as one item would report a withheld row that never existed."""
+    return len(content) if isinstance(content, list) else 0
 
 
 def _skipped(tier: int, allowed: set[int], decision: Any | None) -> str:
@@ -296,9 +310,19 @@ class Planner:
 
         # Grounding. Deterministic, and it runs before synthesis so a model never sees
         # evidence the graph refused.
-        answer.blocks = self._blocks_for(ctx, seeds, settings)
-        if answer.blocks:
-            answer.parts = [self._without_blocked(p, answer.blocks) for p in answer.parts]
+        screen = self._blocks_for(ctx, seeds, settings)
+        answer.blocks = screen.blocks
+        withheld = 0
+        if screen:
+            kept_parts = [self._without_blocked(p, screen.blocks) for p in answer.parts]
+            withheld = sum(
+                _row_count(before.content) - _row_count(after.content)
+                for before, after in zip(answer.parts, kept_parts, strict=True)
+            )
+            answer.parts = kept_parts
+        answer.gate = screen.trace(items_withheld=withheld)
+        if screen.degraded:
+            answer.warnings.append(DEGRADED_WARNING)
 
         if allow_synthesis and answer.parts and self._synthesiser is not None:
             answer.synthesis = self._synthesise(question, answer)
@@ -467,13 +491,13 @@ class Planner:
 
     def _blocks_for(
         self, ctx: AuthContext, seeds: list[str], settings: GovernanceSettings
-    ) -> list[Block]:
+    ) -> Screen:
         return blocks_for(
             ctx,
             graph_reader=self._graph,
             seeds=seeds,
             min_confidence=settings.min_confidence_floor,
-        ).blocks
+        )
 
     def _without_blocked(self, part: Part, blocks: list[Block]) -> Part:
         """Drop blocked subjects from a part, keeping the part itself.

@@ -157,18 +157,30 @@ governing_predicates:
   # answer embarrass you or expose you? A missed conflict is the second. Declaring them
   # also means a rule whose `then` names an undeclared predicate fails at pack load, so a
   # typo in a rule cannot mint a predicate that nothing queries.
+  #
+  # `blocks:` marks the ones that FORBID an answer rather than informing one, and names which
+  # end of the edge is tainted. It is a separate axis from `governing`: every block is
+  # governing, but most governing predicates are ordinary facts. Without it the ethical wall
+  # had no rule-block source at all — it read `ctx.matter_denylist` and nothing else — so an
+  # inferred conflict sat in the graph and shaped no refusal.
   - id: POTENTIAL_CONFLICT
     label: potential conflict
     domain: [Matter]
     range: [Party]
     description: The firm may be acting both for and against this party.
     help: Inferred, never extracted. It carries the premises that produced it, so the answer to "why do you believe this" is the two documents it rests on. Always read as *potential* - the judgement about whether it is a real conflict is a lawyer's.
+    # Both ends. Evidence about the matter and evidence about the party are equally unsafe to
+    # hand over while the firm may be on both sides of it.
+    blocks: both
   - id: RELIES_ON_STALE_AUTHORITY
     label: relies on overruled authority
     domain: [Document]
     range: [Authority]
     description: This document rests on an authority that has since been overruled.
     help: Inferred from a citation plus an overruling recorded elsewhere. The advice was very likely correct when written, which is exactly why this is worth surfacing rather than treating as an error.
+    # The document only. The authority is still a real case and withholding it would suppress
+    # "Brown was overruled" — the single fact the reader most needs to be told.
+    blocks: subject
 
 # ── Open, with exact-name grounding. No LLM adjudication. ─────────────────────
 descriptive_predicates:
