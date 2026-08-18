@@ -548,7 +548,11 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
     # The pack decides which predicates approval lifts into the answerable band, so the queue
     # needs it. Without one every approval is treated as governing, and an approved MENTIONS
     # would outrank the ADVERSE_TO it exists to stop outranking.
-    queue = ReviewQueue(store, governing_predicates=ontology.governing_predicates)
+    queue = ReviewQueue(
+        store,
+        governing_predicates=ontology.governing_predicates,
+        canonical_entity_id=ontology.canonical_entity_id,
+    )
     access = AccessManager(_build_access_store(cfg))
     # One instance, shared: the authenticator reads bindings the admin API writes, so a
     # newly invited user can sign in without waiting for a cache in a second copy.

@@ -78,6 +78,109 @@ def fact(
     )
 
 
+class TestATypedIdIsCanonicalised:
+    """The hole the extractor did not have.
+
+    `validate()` at least reads a prompt asking for the id format. A correction arrives from a
+    free-text field and went straight into `build_assertion`, so a reviewer fixing one claim could
+    mint the second node that hides the next conflict -- while believing they had just tidied up.
+    """
+
+    def _queue(self, onto):
+        return ReviewQueue(canonical_entity_id=onto.canonical_entity_id)
+
+    def test_a_typed_variant_is_stored_canonically(self, ctx, onto):
+        queue = self._queue(onto)
+        a = fact()
+        queue.stage(ctx, [a])
+
+        corrected, _ = queue.supersede(
+            ctx,
+            a.assertion_id,
+            object_id="Party: Calder Shipping AG",
+            reason="the letter gives the full company name",
+            allowed_predicates=onto.allowed_for("REPRESENTS"),
+        )
+
+        assert corrected.assertion.object_id == "party:calder-shipping-ag"
+
+    def test_a_case_only_correction_changes_nothing_and_is_refused(self, ctx, onto):
+        """Normalised *before* the did-anything-change check, which is the ordering that matters.
+        After normalisation this correction is a no-op, so accepting it would close a correct
+        assertion and write a DECLARED duplicate in its place."""
+        queue = self._queue(onto)
+        a = fact(obj="party:calder-shipping-ag")
+        queue.stage(ctx, [a])
+
+        with pytest.raises(ReviewError, match="must change"):
+            queue.supersede(
+                ctx,
+                a.assertion_id,
+                object_id="Party:Calder-Shipping-AG",
+                reason="looked wrong",
+                allowed_predicates=onto.allowed_for("REPRESENTS"),
+            )
+
+    def test_the_original_is_left_intact_when_the_correction_is_refused(self, ctx, onto):
+        """The consequence of the above: a reviewer's cosmetic edit must not withdraw a fact."""
+        queue = self._queue(onto)
+        a = fact(obj="party:calder-shipping-ag")
+        queue.stage(ctx, [a])
+
+        with pytest.raises(ReviewError):
+            queue.supersede(
+                ctx,
+                a.assertion_id,
+                object_id="Party:Calder-Shipping-AG",
+                reason="looked wrong",
+                allowed_predicates=onto.allowed_for("REPRESENTS"),
+            )
+        assert queue.fetch(ctx, a.assertion_id).is_current
+
+    def test_a_matter_id_typed_by_a_reviewer_keeps_its_case(self, ctx, onto):
+        """Same restraint as the extractor path: this is a case-management reference."""
+        queue = self._queue(onto)
+        a = fact(predicate="RELATES_TO_MATTER", subject="document:doc-1", obj="matter:" + MBC)
+        queue.stage(ctx, [a])
+
+        corrected, _ = queue.supersede(
+            ctx,
+            a.assertion_id,
+            object_id="matter:" + NTL,
+            reason="filed under the wrong matter",
+            allowed_predicates=onto.allowed_for("RELATES_TO_MATTER"),
+        )
+
+        assert corrected.assertion.object_id == "matter:" + NTL
+
+    def test_a_queue_with_no_normaliser_leaves_the_id_alone(self, ctx, onto):
+        """None means no pack was supplied, and then the id is stored as typed -- the behaviour
+        before this existed. Same shape as `governing_predicates`."""
+        queue = ReviewQueue()
+        a = fact()
+        queue.stage(ctx, [a])
+
+        corrected, _ = queue.supersede(
+            ctx,
+            a.assertion_id,
+            object_id="party:calder-shipping-ag",
+            reason="full company name",
+            allowed_predicates=onto.allowed_for("REPRESENTS"),
+        )
+        assert corrected.assertion.object_id == "party:calder-shipping-ag"
+
+    def test_the_wired_queue_carries_the_normaliser(self):
+        """The wiring is the feature. A normaliser nothing passes in is dead code, and this is
+        exactly the class of bug that left `blocking_facts` defined and never called."""
+        from src.api.deps import build_services
+
+        services = build_services()
+        assert services.review_queue._canonical_entity_id is not None
+        assert services.review_queue._canonical("Party: Calder Shipping AG") == (
+            "party:calder-shipping-ag"
+        )
+
+
 class TestCorrectingAClaim:
     def test_the_reviewers_version_is_declared_not_extracted(self, ctx, onto):
         """The class is the axis. A lawyer saying so and a model reading it must not become the

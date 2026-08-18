@@ -19,7 +19,7 @@ least it is a line someone wrote deliberately.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -198,6 +198,7 @@ class ReviewQueue:
         store: AssertionStore | None = None,
         *,
         governing_predicates: frozenset[str] | None = None,
+        canonical_entity_id: Callable[[str], str | None] | None = None,
     ) -> None:
         self.store = store or InMemoryAssertionStore()
         self._governing = governing_predicates
@@ -206,8 +207,26 @@ class ReviewQueue:
         governing -- erring the other way would demote an `ADVERSE_TO` to the floor for want
         of a config value, which is the exact inversion this rescale exists to undo."""
 
+        self._canonical_entity_id = canonical_entity_id
+        """`Ontology.canonical_entity_id`, for the ids a reviewer types into a correction.
+
+        A callable rather than the pack, following `governing_predicates`: this module needs one
+        answer from the ontology, not the ontology. None leaves an id as typed, which is the
+        behaviour before this existed."""
+
     def _is_governing(self, predicate: str) -> bool:
         return self._governing is None or predicate in self._governing
+
+    def _canonical(self, entity_id: str) -> str:
+        """A typed id in the form it will be stored in, or unchanged if nothing can say.
+
+        Returns the input when there is no normaliser, and when the normaliser refuses -- an id
+        whose kind the pack does not declare is a claim `build_assertion` should reject on its own
+        terms, not something to silently rewrite here.
+        """
+        if self._canonical_entity_id is None or not entity_id:
+            return entity_id
+        return self._canonical_entity_id(entity_id) or entity_id
 
     # ── staging ───────────────────────────────────────────────────────────────
 
@@ -388,8 +407,13 @@ class ReviewQueue:
 
         original = record.assertion
         new_predicate = predicate or original.predicate
-        new_subject = subject_id or original.subject_id
-        new_object = object_id or original.object_id
+        # Normalised before the comparison below, not after. A reviewer typing `Party:Calder` for
+        # a claim already holding `party:calder` has changed nothing, and treating it as a change
+        # would close a correct assertion and write a DECLARED duplicate in its place. This is the
+        # hole the extractor did not have: `validate()` at least reads a prompt asking for the
+        # format, while this arrives from a free-text field.
+        new_subject = self._canonical(subject_id or original.subject_id)
+        new_object = self._canonical(object_id or original.object_id)
         if (new_predicate, new_subject, new_object) == (
             original.predicate,
             original.subject_id,

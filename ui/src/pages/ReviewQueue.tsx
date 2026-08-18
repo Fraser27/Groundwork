@@ -79,6 +79,17 @@ export default function ReviewQueue() {
     [pending],
   )
 
+  // Ids already in the graph, offered to the correction dialog. Picking an existing one is how a
+  // reviewer avoids minting a second node for a company that is already there — the fork that
+  // makes a later conflict check come back clean for the wrong reason.
+  const knownEntityIds = useMemo(
+    () =>
+      [...new Set(pending.flatMap((a) => [a.subject_id, a.object_id]))]
+        .filter(Boolean)
+        .sort(),
+    [pending],
+  )
+
   const visible = useMemo(() => {
     let out = pending
     if (matterFilter !== '__all__') out = out.filter((a) => a.matter_id === matterFilter)
@@ -545,6 +556,7 @@ export default function ReviewQueue() {
         <CorrectionDialog
           assertion={correcting}
           ontology={ontology}
+          knownEntityIds={knownEntityIds}
           busy={!!busy[correcting.assertion_id]}
           onCancel={() => setCorrecting(null)}
           onSubmit={(body) => correct(correcting, body)}
@@ -568,15 +580,27 @@ export default function ReviewQueue() {
  * hand-asserted conflict would carry no premises. The API refuses them anyway, but offering an
  * option that is always rejected is worse than not offering it.
  */
+function NewEntityHint() {
+  return (
+    <p className="hint">
+      Not an entity already in the graph — this will create a new one. If the company is already
+      here under another spelling, pick that instead: two nodes for one company is what makes a
+      later conflict check come back clean.
+    </p>
+  )
+}
+
 function CorrectionDialog({
   assertion,
   ontology,
+  knownEntityIds,
   busy,
   onCancel,
   onSubmit,
 }: {
   assertion: Assertion
   ontology: Ontology
+  knownEntityIds: string[]
   busy: boolean
   onCancel: () => void
   onSubmit: (body: {
@@ -604,6 +628,12 @@ function CorrectionDialog({
     predicate !== assertion.predicate ||
     subjectId !== assertion.subject_id ||
     objectId !== assertion.object_id
+
+  // Reported, never blocked: a genuinely new party is an ordinary thing to record. The point is
+  // that minting a node should be a visible act rather than a side effect of typing, because a
+  // second node for one company is what makes a later conflict check come back clean.
+  const known = useMemo(() => new Set(knownEntityIds), [knownEntityIds])
+  const isNewEntity = (id: string) => id.trim() !== '' && !known.has(id)
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
@@ -648,12 +678,29 @@ function CorrectionDialog({
         <div className="form-row">
           <div className="toolbar-field" style={{ flex: 1, minWidth: 200 }}>
             <label>From</label>
-            <input value={subjectId} onChange={(e) => setSubjectId(e.target.value)} />
+            <input
+              value={subjectId}
+              list="known-entity-ids"
+              onChange={(e) => setSubjectId(e.target.value)}
+            />
+            {isNewEntity(subjectId) && <NewEntityHint />}
           </div>
           <div className="toolbar-field" style={{ flex: 1, minWidth: 200 }}>
             <label>To</label>
-            <input value={objectId} onChange={(e) => setObjectId(e.target.value)} />
+            <input
+              value={objectId}
+              list="known-entity-ids"
+              onChange={(e) => setObjectId(e.target.value)}
+            />
+            {isNewEntity(objectId) && <NewEntityHint />}
           </div>
+          {/* Shared by both fields. Either end of an edge can name a company already in the
+              graph, and a reviewer who cannot see the existing spelling will invent a new one. */}
+          <datalist id="known-entity-ids">
+            {knownEntityIds.map((id) => (
+              <option key={id} value={id} />
+            ))}
+          </datalist>
         </div>
 
         <div className="form-group">
