@@ -17,11 +17,17 @@
 domain: legal
 version: 1
 
+# `external_id: true` marks a kind whose id after the colon belongs to another system, so it is
+# preserved byte-for-byte instead of being normalised. `matter:NTL-2026-0114` is a
+# case-management reference and `table:src-1:legal.matters` is a Glue name; lowercasing either
+# breaks the join back to the system that issued it. A Party's id is minted here from words on a
+# page, so it is ours to canonicalise — which is what stops one company becoming several nodes.
 entity_types:
   - id: Matter
     label: Matter
     description: An engagement — a case, transaction, or advisory instruction.
     help: The organising unit of legal work. Most other entities hang off a Matter.
+    external_id: true
   - id: Party
     label: Party
     description: A person or organisation with an interest in a matter.
@@ -34,6 +40,8 @@ entity_types:
     label: Document
     description: A filing, contract, opinion, or correspondence item.
     help: Documents are immutable in S3. What you see here is derived metadata plus extracted assertions.
+    # `document:doc-<hex>` — assigned at ingest and used as a join key into S3 and the vector index.
+    external_id: true
   - id: Authority
     label: Authority
     description: A cited case, statute, or regulation.
@@ -60,16 +68,19 @@ entity_types:
     description: A system of record that was catalogued, such as an AWS Glue database.
     help: Not a legal entity. It is here so a schema declaration has something to hang off, and so the graph can be read as facts or as schema rather than as one tangle.
     layer: catalog
+    external_id: true
   - id: Table
     label: Table
     description: A table in a catalogued source.
     help: Schema only. No rows enter the graph — they stay in the warehouse and are queried in place when a question needs them.
     layer: catalog
+    external_id: true
   - id: Column
     label: Column
     description: A column in a catalogued table.
     help: Its name, type and description are citable as facts declared by a system of record, which is what lets a governed metric compile against a real schema.
     layer: catalog
+    external_id: true
 
 # ── Closed vocabulary. Write-time validation. No LLM may invent these. ────────
 governing_predicates:

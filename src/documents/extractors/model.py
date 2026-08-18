@@ -395,7 +395,15 @@ class ModelExtractor:
                 continue
 
             subject = claim.subject_id or subject_default
-            if subject == claim.object_id:
+            # Before the self-edge test on purpose: `party:acme` and `Party:Acme` are one entity,
+            # so a claim relating them is a self-edge and the raw comparison would miss it. Also
+            # before `canonical_pair`, which sorts endpoints by their raw bytes -- so without this
+            # one symmetric fact spelled two ways produces two orderings and two content hashes.
+            subject_canonical = self.ontology.canonical_entity_id(subject)
+            object_canonical = self.ontology.canonical_entity_id(claim.object_id)
+            subject = subject_canonical if subject_canonical is not None else subject
+            object_id = object_canonical if object_canonical is not None else claim.object_id
+            if subject == object_id:
                 continue
 
             # Entity kinds are closed, exactly as governing predicates are. A model free to invent
@@ -403,7 +411,7 @@ class ModelExtractor:
             # two nodes and a traversal finds one of them. Refused here rather than only asked for
             # in the prompt, because a prompt is a request and this is the boundary.
             unknown = [
-                e for e in (subject, claim.object_id) if self.ontology.entity_kind_of(e) is None
+                e for e in (subject, object_id) if self.ontology.entity_kind_of(e) is None
             ]
             if unknown:
                 logger.info(
@@ -419,7 +427,7 @@ class ModelExtractor:
             verified = predicate in PRESENCE_PREDICATES
             # Collapse a symmetric predicate's endpoints, so "A adverse to B" and
             # "B adverse to A" are one fact rather than two competing edges.
-            subject, object_id = self.ontology.canonical_pair(predicate, subject, claim.object_id)
+            subject, object_id = self.ontology.canonical_pair(predicate, subject, object_id)
 
             try:
                 assertion = build_assertion(

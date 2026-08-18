@@ -12,6 +12,7 @@ allowed?* Governing predicates are closed and validated; descriptive ones are op
 from __future__ import annotations
 
 import functools
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,12 @@ BLOCK_ENDPOINTS: dict[str, tuple[str, ...]] = {
     "object": ("object",),
     "both": ("subject", "object"),
 }
+
+#: Runs of anything that is not a letter or digit, in the part of an entity id after the colon.
+#: Collapsed to one hyphen, so `Calder Shipping AG`, `calder_shipping_ag` and `calder--shipping`
+#: are one id. Unicode-aware (`\w` minus `_`) rather than ASCII-only: a German or French party
+#: name is an ordinary thing in this domain, and transliterating it would be a guess.
+_ENTITY_LOCAL_NOISE = re.compile(r"[\W_]+", re.UNICODE)
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,18 @@ class EntityDef:
     rather than inferred from an id prefix, so a domain pack can add an entity kind without a UI
     change.
     """
+
+    external_id: bool = False
+    """Whether the part after the colon is an identifier some other system owns.
+
+    `matter:NTL-2026-0114` is a case-management id and `table:src-1:legal.matters` is a Glue
+    name; normalising either breaks the join back to the system that issued it. A party's id, by
+    contrast, is minted here from words on a page, so it is ours to canonicalise.
+
+    Declared per pack because only the author knows which of their kinds are foreign keys.
+    Defaults to False -- normalise -- deliberately: forgetting to mark a kind external mangles an
+    id and breaks matter-scoped reads loudly, while forgetting the other way leaves the silent
+    conflict miss this whole mechanism exists to prevent."""
 
     @property
     def slug(self) -> str:
@@ -203,6 +222,50 @@ class Ontology:
         kind = kind.lower()
         return kind if kind in self.entity_kinds else None
 
+    def _entity_def_for(self, kind: str) -> EntityDef | None:
+        for e in self.entities.values():
+            if e.slug == kind:
+                return e
+        return None
+
+    def canonical_entity_id(self, entity_id: str) -> str | None:
+        """One spelling of an entity, so two documents naming it land on one node.
+
+        The gap this closes: `MERGE (s:Entity {tenant_id, entity_id})` makes any variation a new
+        node, and `entity_kind_of` lowercases the prefix before checking it, so `Party:Calder`,
+        `party:calder` and `party: Calder ` all pass the closed-kind guard and fork. A conflict
+        check joins on the shared node, so the fork returns nothing and reads as clean -- the
+        failure the closed *predicate* vocabulary exists to prevent, unguarded for entity names.
+
+        Deliberately conservative, in the shape of `ground()`: exact rules, no LLM, and None
+        rather than a guess. Only presentation is normalised -- case, whitespace, punctuation
+        runs. Nothing is *dropped*, so no information is lost: this runs before `_compute_id`, so
+        a wrong collapse would leave no record anywhere that two names were merged. Stripping a
+        corporate suffix would be such a collapse (`Calder Shipping AG` and `Calder Shipping Ltd`
+        are commonly a parent and its subsidiary, which is what `AFFILIATE_OF` records), so it
+        belongs in duplicate *detection*, where a human adjudicates, and never here.
+
+        Not `_slugify` from `discovery.enrichment`, which is right for a term node and wrong
+        here: it strips everything outside `[a-z0-9]`, turning `table:src-1:legal.matters` into
+        one flat run. These two look like duplication and are not.
+        """
+        kind = self.entity_kind_of(entity_id)
+        if kind is None:
+            # The kind guard stays the thing that rejects. Normalising an id whose kind this pack
+            # does not declare would launder an invented kind into a well-formed-looking id.
+            return None
+        _, _, local = entity_id.partition(":")
+        definition = self._entity_def_for(kind)
+        if definition is not None and definition.external_id:
+            # Another system's identifier. Case and punctuation carry meaning there, and
+            # `GraphExplorer` rebuilds `matter:${matter_id}` from the uncased property.
+            return f"{kind}:{local}"
+        local = _ENTITY_LOCAL_NOISE.sub("-", local.strip().lower()).strip("-")
+        if not local:
+            # Punctuation only. `kind:` alone is not an entity, and `entity_kind_of` rejects it.
+            return None
+        return f"{kind}:{local}"
+
     def layer_of(self, entity_id: str) -> str:
         """`domain`, `catalog`, or `unknown` for an id outside the vocabulary.
 
@@ -287,6 +350,7 @@ def _parse(raw: dict[str, Any]) -> Ontology:
             description=e.get("description", ""),
             help=e.get("help"),
             layer=e.get("layer", "domain"),
+            external_id=bool(e.get("external_id", False)),
         )
         for e in raw.get("entity_types", [])
     }
@@ -329,8 +393,28 @@ def _parse(raw: dict[str, Any]) -> Ontology:
     )
     _validate_blocks(predicates, ontology.domain)
     _validate_transitive(predicates, ontology.domain)
+    _validate_entity_ids(entities, ontology.domain)
     _validate_rules(ontology)
     return ontology
+
+
+def _validate_entity_ids(entities: dict[str, EntityDef], domain: str) -> None:
+    """Refuse a pack that would let a catalogued id be rewritten.
+
+    A `catalog` entity's id is always some other system's name -- a Glue database, table or
+    column -- so normalising it breaks the join back to that system. `layer: catalog` and
+    `external_id: true` therefore have to agree, and the pack is the only place that can say so.
+
+    Only this direction is checked. A *domain* kind may legitimately be either: `Party` is minted
+    from words on a page, while `Matter` carries a case-management reference.
+    """
+    for e in entities.values():
+        if e.layer == "catalog" and not e.external_id:
+            raise ValueError(
+                f"entity {e.id!r} in the {domain} pack is layer: catalog but not "
+                "external_id: true; a catalogued id belongs to the system that issued it and "
+                "normalising it would break the join back to that system"
+            )
 
 
 def _validate_blocks(predicates: dict[str, PredicateDef], domain: str) -> None:

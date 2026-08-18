@@ -547,6 +547,147 @@ class TestEntityKindsAreClosed:
         assert {"table", "column", "source"} <= ONTOLOGY.entity_kinds
 
 
+class TestEntityIdsAreCanonicalised:
+    """One company, one node -- the other half of the failure the closed kind vocabulary covers.
+
+    The kind was closed and the *name* was not, so `party:calder-shipping-ag`,
+    `Party:calder-shipping-ag` and `party: Calder Shipping AG` all cleared the kind guard (which
+    lowercases the prefix before comparing) and MERGEd as three nodes. A conflict check joins on
+    the shared node, so the fork returns nothing and reads exactly like a clean check.
+    """
+
+    @pytest.mark.parametrize(
+        "written",
+        [
+            "Party:calder-shipping-ag",
+            "party: Calder Shipping AG",
+            "party:calder_shipping_ag",
+            "PARTY:CALDER-SHIPPING-AG",
+            "party:calder--shipping--ag",
+        ],
+    )
+    def test_every_spelling_lands_on_one_node(self, written):
+        """And on one *assertion id*: `subject_id` is in the content hash, so a variant spelling
+        forks the provenance record as well as the node."""
+        [canonical] = extractor().validate([entity(object_id="party:calder-shipping-ag")], chunk=chunk())
+        [variant] = extractor().validate([entity(object_id=written)], chunk=chunk())
+
+        assert variant.object_id == "party:calder-shipping-ag"
+        assert variant.assertion_id == canonical.assertion_id
+
+    def test_a_matter_id_keeps_its_case(self):
+        """`matter:NTL-2026-0114` is a case-management reference, and `GraphExplorer` rebuilds it
+        from the uncased property. This is the test that stops the normaliser later being
+        "simplified" into a blanket lowercase or into `discovery.enrichment._slugify`."""
+        claim = interpretation(
+            subject_id="document:doc-1",
+            predicate="RELATES_TO_MATTER",
+            object_id="matter:NTL-2026-0114",
+        )
+        [out] = extractor().validate([claim], chunk=chunk())
+        assert out.object_id == "matter:NTL-2026-0114"
+
+    @pytest.mark.parametrize(
+        "external",
+        [
+            "matter:NTL-2026-0114",
+            "table:src-1:legal.matters",
+            "column:src-1:legal.matters.client_id",
+            "document:doc-d63a8228d513541553a76672",
+        ],
+    )
+    def test_an_external_id_is_preserved_byte_for_byte(self, external):
+        """Each of these is some other system's name. Normalising one breaks the join back to it,
+        and `table:src-1:legal.matters` would collapse to a single flat run."""
+        assert ONTOLOGY.canonical_entity_id(external) == external
+
+    def test_a_party_is_normalised_because_we_mint_it(self):
+        """The distinction that makes this kind-aware rather than blanket: a Party's id comes from
+        words on a page, so it is ours to canonicalise."""
+        assert ONTOLOGY.canonical_entity_id("party: Calder Shipping AG") == (
+            "party:calder-shipping-ag"
+        )
+
+    def test_a_suffix_is_never_stripped(self):
+        """The crux. `Calder Shipping AG` and `Calder Shipping Ltd` are routinely a parent and its
+        subsidiary -- which is what `AFFILIATE_OF` records and what `conflict_via_affiliate` needs
+        both nodes to fire on. Collapsing them would turn an affiliate conflict into a direct one:
+        a false positive on a live matter. Normalisation runs before `_compute_id`, so a wrong
+        merge leaves no record that two names were ever collapsed."""
+        assert ONTOLOGY.canonical_entity_id("party:calder-shipping-ag") != (
+            ONTOLOGY.canonical_entity_id("party:calder-shipping-ltd")
+        )
+
+    def test_an_undeclared_kind_is_still_refused(self):
+        """Normalisation must not launder an invented kind into a well-formed-looking id. The kind
+        guard stays the thing that rejects."""
+        assert ONTOLOGY.canonical_entity_id("vessel:mv-aurelia") is None
+        assert ONTOLOGY.canonical_entity_id("meridian-holdings") is None
+
+    def test_an_id_that_is_only_punctuation_is_refused(self):
+        assert ONTOLOGY.canonical_entity_id("party:---") is None
+
+    def test_a_non_ascii_name_survives(self):
+        """A German or French party is ordinary in this domain, so transliterating would be a
+        guess. Only case and punctuation are touched."""
+        assert ONTOLOGY.canonical_entity_id("party:Müller Schiffahrt GmbH") == (
+            "party:müller-schiffahrt-gmbh"
+        )
+
+    def test_a_variant_spelling_is_a_self_edge(self):
+        """Normalisation runs before the self-edge check on purpose: relating `party:acme` to
+        `Party:Acme` is one node related to itself, which the raw comparison would miss."""
+        claim = interpretation(
+            subject_id="party:acme-corporation",
+            predicate="ADVERSE_TO",
+            object_id="Party:Acme Corporation",
+        )
+        assert extractor().validate([claim], chunk=chunk()) == []
+
+    def test_a_symmetric_fact_hashes_the_same_either_way(self):
+        """`canonical_pair` sorts endpoints by their raw bytes, so before normalisation one
+        symmetric fact spelled two ways produced two orderings and two content hashes."""
+        lower = interpretation(
+            subject_id="party:zeta-holdings",
+            predicate="ADVERSE_TO",
+            object_id="party:acme-corporation",
+        )
+        mixed = interpretation(
+            subject_id="Party:Zeta Holdings",
+            predicate="ADVERSE_TO",
+            object_id="party:acme-corporation",
+        )
+        [a] = extractor().validate([lower], chunk=chunk())
+        [b] = extractor().validate([mixed], chunk=chunk())
+        assert a.assertion_id == b.assertion_id
+
+
+class TestACatalogKindMustBeExternal:
+    """A catalogued id is always the issuing system's name, so the two flags have to agree."""
+
+    def test_the_shipped_packs_agree(self):
+        for domain in ("legal", "healthcare"):
+            onto = load_ontology(domain)
+            for e in onto.entities.values():
+                if e.layer == "catalog":
+                    assert e.external_id, f"{domain}: {e.id} is catalog but not external_id"
+
+    def test_a_catalog_kind_that_would_be_rewritten_fails_the_pack(self, tmp_path):
+        """Loud at load. A Glue table id quietly lowercased would break the join to Glue, and
+        nothing downstream could tell that from a table nobody scanned."""
+        from src.ontology import loader
+
+        pack = tmp_path / "bad.yaml"
+        pack.write_text(
+            "domain: bad\nversion: 1\n"
+            "entity_types:\n"
+            "  - id: Table\n    label: Table\n    description: t\n    layer: catalog\n"
+            "governing_predicates: []\ndescriptive_predicates: []\nrules: []\n"
+        )
+        with pytest.raises(ValueError, match="external_id"):
+            loader._parse(__import__("yaml").safe_load(pack.read_text()))
+
+
 class TestEntityLayers:
     """Which half of the graph a node belongs to, so it can be read one half at a time."""
 

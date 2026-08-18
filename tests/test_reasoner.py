@@ -203,6 +203,77 @@ class TestAConflictThroughAnAffiliateIsFound:
         assert len(a.premises) == 3
 
 
+class TestASpellingVariantNoLongerHidesAConflict:
+    """The failure `CLAUDE.md` rule 5 describes, reproduced for entity names rather than
+    predicates: two documents naming one company differently used to produce two nodes, and the
+    conflict check joined on neither while reporting success.
+
+    Goes through the real `ModelExtractor.validate` rather than hand-built ids, because the whole
+    point is that normalisation happens at the extraction boundary. Asserting canonical ids
+    directly would test nothing about the path a document actually takes.
+    """
+
+    def _extracted(self, claims):
+        from src.documents.extractors.model import ModelExtractor, ProposedClaim
+        from src.documents.models import Chunk
+
+        text = (
+            "Sian Aldridge acts for Halveston Chartering Limited. "
+            "Calder Shipping AG appeared as a counterparty in two unrelated fixtures."
+        )
+        chunk = Chunk(
+            document_id="doc-1",
+            tenant_id=TENANT,
+            filename="advice.pdf",
+            ordinal=0,
+            page=1,
+            char_start=0,
+            char_end=len(text),
+            text=text,
+        )
+        extractor = ModelExtractor(load_ontology("legal"), bedrock=None)
+        out = []
+        for subject, predicate, obj in claims:
+            proposed = ProposedClaim(
+                subject_id=subject,
+                predicate=predicate,
+                object_id=obj,
+                quote="Calder Shipping AG appeared as a counterparty",
+                confidence=0.9,
+            )
+            out.extend(extractor.validate([proposed], chunk=chunk))
+        for a in out:
+            a.review_state = ReviewState.APPROVED
+        return out
+
+    def test_one_company_spelled_two_ways_still_produces_the_conflict(self, ctx):
+        """`REPRESENTS` names the party in slug form and `ADVERSE_TO` names it as it appears in
+        prose. Revert the normalisation and this returns zero conflicts while the reasoner reports
+        that every rule ran -- which is the shape of the bug, not an error anyone would see."""
+        facts = self._extracted(
+            [
+                ("counsel:sian-aldridge", "REPRESENTS", "party:calder-shipping-ag"),
+                ("matter:" + NTL, "ADVERSE_TO", "Party:Calder Shipping AG"),
+            ]
+        )
+        assert len({f.object_id for f in facts}) == 1, "the two spellings did not converge"
+
+        report = Reasoner(load_ontology("legal")).run(ctx, facts)
+        assert [i.rule_id for i in report.inferences] == ["conflict_check"]
+        assert report.inferences[0].assertion.object_id == "party:calder-shipping-ag"
+
+    def test_two_genuinely_different_companies_still_do_not_conflict(self, ctx):
+        """The guard on the guard. If normalisation over-collapsed, this would produce a false
+        conflict -- which is worse than the miss it replaced, because someone acts on it."""
+        facts = self._extracted(
+            [
+                ("counsel:sian-aldridge", "REPRESENTS", "party:calder-shipping-ag"),
+                ("matter:" + NTL, "ADVERSE_TO", "party:halveston-chartering-limited"),
+            ]
+        )
+        assert Reasoner(load_ontology("legal")).run(ctx, facts).count == 0
+
+
 class TestTheStaleAuthorityCheckFires:
     def test_reliance_on_an_overruled_case_is_flagged(self, ctx):
         report = Reasoner(load_ontology("legal")).run(ctx, _stale_authority_facts())

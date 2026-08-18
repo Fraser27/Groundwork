@@ -20,6 +20,8 @@ entity_types:
     label: Encounter
     description: An episode of care.
     help: "Plays the role Matter does in the legal pack: the organising unit."
+    # An EHR-issued visit number, like Matter in the legal pack. Not ours to rewrite.
+    external_id: true
   - id: Clinician
     label: Clinician
     description: A treating professional.
@@ -35,6 +37,7 @@ entity_types:
   - id: Document
     label: Document
     description: A clinical note, report, or discharge summary.
+    external_id: true
 
   # The same three structural types as the legal pack. Not shared from a base file: a pack is meant
   # to be readable on its own, and a domain that catalogues nothing should be able to omit them.
@@ -42,14 +45,17 @@ entity_types:
     label: Source
     description: A system of record that was catalogued.
     layer: catalog
+    external_id: true
   - id: Table
     label: Table
     description: A table in a catalogued source.
     layer: catalog
+    external_id: true
   - id: Column
     label: Column
     description: A column in a catalogued table.
     layer: catalog
+    external_id: true
 
 governing_predicates:
   - id: HAS_DIAGNOSIS
