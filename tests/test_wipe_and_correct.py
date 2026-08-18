@@ -854,6 +854,34 @@ class TestOverHttp:
         assert r.status_code == 200
         assert r.json()["corrected"]["object_id"] == "party:calder-shipping-ag"
 
+    def test_the_duplicates_report_groups_a_fork(self, client, ctx):
+        """The standing check, for after an import rather than at stage time."""
+        c, services = client
+        self._staged(services, ctx, obj="party:calder-shipping-ag")
+        self._staged(services, ctx, obj="party:calder-shipping", document_id="doc-2")
+
+        body = c.get(f"/api/tenants/{TENANT}/entities/duplicates").json()
+        assert body["count"] == 1
+        assert body["groups"][0]["entity_ids"] == [
+            "party:calder-shipping",
+            "party:calder-shipping-ag",
+        ]
+
+    def test_the_duplicates_report_is_empty_on_a_clean_graph(self, client, ctx):
+        c, services = client
+        self._staged(services, ctx, obj="party:calder-shipping-ag")
+        self._staged(services, ctx, obj="party:halveston-chartering-limited", document_id="doc-2")
+
+        body = c.get(f"/api/tenants/{TENANT}/entities/duplicates").json()
+        assert body == {"groups": [], "count": 0}
+
+    def test_a_single_entity_is_not_a_group(self, client, ctx):
+        """One id colliding with itself on two keys is not a duplicate."""
+        c, services = client
+        self._staged(services, ctx, obj="party:calder-shipping-ag")
+
+        assert c.get(f"/api/tenants/{TENANT}/entities/duplicates").json()["count"] == 0
+
     def test_a_correction_is_audited(self, client, ctx):
         c, services = client
         a = self._staged(services, ctx)

@@ -199,6 +199,52 @@ async def list_assertions(
     }
 
 
+@router.get("/tenants/{tenant}/entities/duplicates")
+async def entity_duplicates(services: ServicesDep, principal: TenantDep) -> dict[str, Any]:
+    """Groups of entity ids that may name one thing, for a standing check on drift.
+
+    Stage 4a catches a fork at the moment a claim is staged, which is when fixing it is free.
+    This answers the other question -- "is anything already forked?" -- which is what somebody
+    asks after an import, or during an audit.
+
+    Two caveats worth stating rather than discovering:
+
+    - It reads *assertions*, so it sees ids that only ever appeared in a claim nobody approved.
+      That is right for drift detection and wrong as a count of live entities.
+    - Grouping is by blocking key, so a group is a question, not a finding. `party:acme-ltd` and
+      `party:acme-limited` land together and may still be two companies.
+    """
+    ctx, _ = principal
+    keys_of = getattr(services.review_queue, "_entity_blocking_keys", None)
+    if keys_of is None:
+        # No pack wired, so what counts as similar is unknown. Reported rather than answered
+        # "nothing found", which would read as a clean bill of health.
+        raise HTTPException(
+            status_code=503,
+            detail="no ontology pack is wired, so which ids may name one thing is unknown",
+        )
+
+    try:
+        records = services.review_queue.visible(ctx)
+    except ScopeViolation as e:
+        raise scope_violation_to_http(e) from e
+
+    by_key: dict[str, set[str]] = {}
+    for record in records:
+        a = record.assertion
+        for entity_id in (a.subject_id, a.object_id):
+            if not entity_id:
+                continue
+            for key in keys_of(entity_id):
+                by_key.setdefault(key, set()).add(entity_id)
+
+    groups = sorted(
+        ({"key": key, "entity_ids": sorted(ids)} for key, ids in by_key.items() if len(ids) > 1),
+        key=lambda g: str(g["key"]),
+    )
+    return {"groups": groups, "count": len(groups)}
+
+
 @router.post("/tenants/{tenant}/assertions/{assertion_id}/approve")
 async def approve(
     services: ServicesDep,
