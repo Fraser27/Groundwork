@@ -12,14 +12,20 @@ Shared variables are the join. `p` appears in both premises, so the rule fires o
 facts. `then` reuses `m` and `p`, so the conclusion is bound to the entities that matched.
 
 This is deliberately a small subset of Cypher's syntax and not Cypher itself. A rule is
-declarative data in a YAML file that a non-programmer may edit, so the grammar is one edge
-with typed endpoints and nothing else: no optional matches, no negation, no property filters,
-no variable-length paths. Every one of those would be a feature request from a real firm and
-every one changes what a proof tree means, so they are refused now rather than half-supported.
+declarative data in a YAML file that a non-programmer may edit, so the grammar stays close to
+one edge with typed endpoints: no optional matches, no negation, no property filters. Each of
+those would be a feature request from a real firm, and each rests a conclusion on the *absence*
+of a fact — which has no assertion id, so a proof tree citing it would have a hole where its
+reason should be.
 
-A conflict through a group company needs no new syntax, though — an intermediate *fact* is
-what was missing, not an intermediate hop. `AFFILIATE_OF` plus a three-premise rule reaches it
-with the grammar unchanged.
+Variable-length paths were refused alongside them and are not any more, because they fail that
+test differently: every step of a path is an existing, signed-off assertion, so the proof tree
+stays whole. They are allowed narrowly — over a predicate the pack declares `transitive`,
+bounded by `MAX_PATH_HOPS`, and with a lower bound of exactly one hop.
+
+An intermediate *fact* was the bigger gap, and it needed no syntax at all: `AFFILIATE_OF` plus
+a three-premise rule already finds a conflict through a group company. Paths earn their keep
+only where the chain's length is unknown — an ownership ladder, a run of `OVERRULES`.
 
 Types on the endpoints are optional in `then` (already bound) and expected in `when`, where
 they document what the rule is about. They are not enforced against the entity list here:
@@ -33,12 +39,23 @@ import re
 from dataclasses import dataclass
 
 #: `(var:Type)-[:PREDICATE]->(var:Type)`, with types optional and whitespace tolerated.
-#: Anchored, so a pattern with anything trailing is rejected rather than partly read.
+#: `*1..N` after the predicate makes it a bounded path. Anchored, so a pattern with anything
+#: trailing is rejected rather than partly read.
 _EDGE = re.compile(
     r"^\s*\(\s*(?P<sv>[A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*(?P<st>[A-Za-z_][A-Za-z0-9_]*)\s*)?\)"
-    r"\s*-\s*\[\s*:\s*(?P<pred>[A-Za-z_][A-Za-z0-9_]*)\s*\]\s*->\s*"
+    r"\s*-\s*\[\s*:\s*(?P<pred>[A-Za-z_][A-Za-z0-9_]*)\s*"
+    r"(?:\*\s*(?P<min>\d+)\s*\.\.\s*(?P<max>\d+)\s*)?\]\s*->\s*"
     r"\(\s*(?P<ov>[A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*(?P<ot>[A-Za-z_][A-Za-z0-9_]*)\s*)?\)\s*$"
 )
+
+#: How far a path premise may walk. Three, because a proof tree has to be readable: `premises`
+#: is a flat tuple, so a reader sees N sibling assertions rather than a rendered chain, and past
+#: three that stops being something to defend in front of a regulator.
+#:
+#: Fixed here rather than configurable per tenant. A rule's shape is baked into `method`
+#: (`rule:x@v1`) which `_compute_id` hashes, so a per-tenant depth would let one tenant's `@v1`
+#: mean something different from another's with no version change to show for it.
+MAX_PATH_HOPS = 3
 
 
 class PatternError(ValueError):
@@ -60,9 +77,18 @@ class EdgePattern:
     subject_type: str | None = None
     object_type: str | None = None
 
+    min_hops: int = 1
+    max_hops: int = 1
+    """How many edges this premise spans. Both 1 for an ordinary edge, so the common case is
+    literally a path of length one and needs no separate code path."""
+
     @property
     def variables(self) -> frozenset[str]:
         return frozenset({self.subject_var, self.object_var})
+
+    @property
+    def is_path(self) -> bool:
+        return self.max_hops > 1
 
 
 def parse_edge(pattern: str) -> EdgePattern:
@@ -71,12 +97,30 @@ def parse_edge(pattern: str) -> EdgePattern:
         raise PatternError(
             f"cannot read rule pattern {pattern!r}; expected (var:Type)-[:PREDICATE]->(var:Type)"
         )
+    min_hops = int(match.group("min") or 1)
+    max_hops = int(match.group("max") or 1)
+    if min_hops != 1:
+        # `*2..3` asserts the absence of a direct edge, which is negation wearing a path's
+        # clothes: nothing in the graph witnesses "there is no one-hop link", so no assertion id
+        # can stand for it and the proof tree would have a hole where its reason should be.
+        raise PatternError(
+            f"path pattern {pattern!r} starts at {min_hops} hops; the lower bound must be 1, "
+            "because requiring a longer path is a claim that no shorter one exists and nothing "
+            "in the graph can evidence that"
+        )
+    if max_hops > MAX_PATH_HOPS:
+        raise PatternError(
+            f"path pattern {pattern!r} allows {max_hops} hops; at most {MAX_PATH_HOPS} is "
+            "readable in a proof tree, which is what a conclusion has to be defended from"
+        )
     return EdgePattern(
         subject_var=match.group("sv"),
         predicate=match.group("pred"),
         object_var=match.group("ov"),
         subject_type=match.group("st"),
         object_type=match.group("ot"),
+        min_hops=min_hops,
+        max_hops=max_hops,
     )
 
 
@@ -153,6 +197,13 @@ def parse_rule(rule: object) -> ParsedRule:
         )
 
     conclusion = parse_edge(getattr(rule, "then", ""))
+    if conclusion.is_path:
+        # A conclusion is one edge the rule writes. `*1..3` there would ask for an unspecified
+        # number of edges between two bound endpoints, which names no particular fact.
+        raise PatternError(
+            f"rule {rule_id!r} concludes a path; `then` writes exactly one edge, so a hop range "
+            "there does not name a fact to write"
+        )
     bound = frozenset().union(*(p.variables for p in premises))
     unbound = conclusion.variables - bound
     if unbound:

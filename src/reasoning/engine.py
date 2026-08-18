@@ -210,6 +210,15 @@ class Reasoner:
                     f"{rule.conclusion.predicate} is not in the {self.ontology.domain} vocabulary"
                 )
                 continue
+            paths = [p.predicate for p in rule.premises if p.is_path]
+            if paths:
+                # Parsed but not yet walked. Reported rather than run as single-hop: a rule the
+                # pack author wrote to follow a chain, silently finding only direct edges, would
+                # report "no conflicts" from a check that never did the thing it was written for.
+                report.rules_skipped[rule.rule_id] = (
+                    f"walks a chain of {', '.join(paths)}, which this engine does not expand yet"
+                )
+                continue
             for inference in self._fire(ctx, rule, by_predicate, known):
                 report.inferences.append(inference)
 

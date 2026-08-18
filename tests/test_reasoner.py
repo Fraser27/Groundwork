@@ -28,7 +28,7 @@ from src.graph.assertions import (
 )
 from src.graph.scope import AuthContext
 from src.ontology.loader import load_ontology
-from src.ontology.patterns import PatternError, parse_edge, parse_rule
+from src.ontology.patterns import MAX_PATH_HOPS, PatternError, parse_edge, parse_rule
 from src.reasoning.engine import Reasoner, accepts
 
 TENANT = "demo-firm"
@@ -470,6 +470,42 @@ class TestPatternParsing:
         assert parsed.disconnected_premises == ()
         assert len(parsed.premises) == 3
 
+    def test_a_bounded_path_reads(self):
+        edge = parse_edge("(a:Party)-[:AFFILIATE_OF*1..3]->(b:Party)")
+        assert (edge.predicate, edge.min_hops, edge.max_hops) == ("AFFILIATE_OF", 1, 3)
+        assert edge.is_path
+
+    def test_an_ordinary_edge_is_a_path_of_one(self):
+        """Both bounds default to 1, so the common case needs no separate code path."""
+        edge = parse_edge("(c:Counsel)-[:REPRESENTS]->(p:Party)")
+        assert (edge.min_hops, edge.max_hops) == (1, 1)
+        assert not edge.is_path
+
+    def test_a_path_longer_than_the_bound_is_refused(self):
+        """A proof tree past three siblings stops being defensible in front of a regulator."""
+        with pytest.raises(PatternError, match=f"at most {MAX_PATH_HOPS}"):
+            parse_edge("(a:Party)-[:AFFILIATE_OF*1..4]->(b:Party)")
+
+    @pytest.mark.parametrize("lower", [0, 2])
+    def test_a_lower_bound_other_than_one_is_refused(self, lower):
+        """`*2..3` requires a longer path, which asserts that no shorter one exists. That is
+        negation in disguise: no assertion witnesses an absence, so the proof tree would have a
+        hole where its reason belongs."""
+        with pytest.raises(PatternError, match="lower bound must be 1"):
+            parse_edge(f"(a:Party)-[:AFFILIATE_OF*{lower}..3]->(b:Party)")
+
+    def test_a_conclusion_may_not_be_a_path(self):
+        class PathConclusion:
+            id = "bad"
+            version = "v1"
+            description = ""
+            when = ("(a:Counsel)-[:REPRESENTS]->(b:Party)", "(c:Matter)-[:ADVERSE_TO]->(b:Party)")
+            then = "(c)-[:POTENTIAL_CONFLICT*1..3]->(b)"
+            min_premise_class = "EXTRACTED_MODEL"
+
+        with pytest.raises(PatternError, match="concludes a path"):
+            parse_rule(PathConclusion())
+
     def test_a_conclusion_about_an_unbound_variable_is_refused(self):
         class Unbound:
             id = "bad"
@@ -701,6 +737,124 @@ class TestPackValidationHappensAtLoad:
     def test_the_shipped_packs_still_load(self):
         for domain in ("legal", "healthcare"):
             assert load_ontology(domain).rules
+
+    def test_walking_a_predicate_the_pack_never_declared_transitive_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """The pack decides what a chain carries. Walking a predicate it never declared
+        transitive would conclude something it never said follows from a chain."""
+        pack = tmp_path / "broken3.yaml"
+        pack.write_text(
+            "domain: broken3\n"
+            "version: 1\n"
+            "entity_types:\n"
+            "  - id: Thing\n"
+            "    label: Thing\n"
+            "    description: t\n"
+            "governing_predicates:\n"
+            "  - id: KNOWS\n"
+            "    label: knows\n"
+            "    domain: [Thing]\n"
+            "    range: [Thing]\n"
+            "    description: d\n"
+            "  - id: RESULT\n"
+            "    label: result\n"
+            "    description: d\n"
+            "rules:\n"
+            "  - id: bad\n"
+            "    version: v1\n"
+            "    description: walks a chain the pack did not license\n"
+            "    when:\n"
+            '      - "(a:Thing)-[:KNOWS*1..3]->(b:Thing)"\n'
+            '      - "(c:Thing)-[:KNOWS]->(b:Thing)"\n'
+            '    then: "(a)-[:RESULT]->(b)"\n'
+            "    min_premise_class: EXTRACTED_MODEL\n"
+        )
+        monkeypatch.setattr("src.ontology.loader.ONTOLOGY_DIR", tmp_path)
+        load_ontology.cache_clear()
+
+        with pytest.raises(PatternError, match="does not declare transitive"):
+            load_ontology("broken3")
+        load_ontology.cache_clear()
+
+
+class TestAPathRuleIsSkippedLoudly:
+    """Until the engine walks chains, a pack using one must be visibly non-firing.
+
+    Running it as single-hop would be the worst outcome available: the author wrote the rule to
+    follow a chain, the report would say it was evaluated, and a check that never did the thing
+    it was written for would return "nothing found".
+    """
+
+    def _pack(self, tmp_path, monkeypatch):
+        pack = tmp_path / "paths.yaml"
+        pack.write_text(
+            "domain: paths\n"
+            "version: 1\n"
+            "entity_types:\n"
+            "  - id: Party\n"
+            "    label: Party\n"
+            "    description: p\n"
+            "governing_predicates:\n"
+            "  - id: OWNS\n"
+            "    label: owns\n"
+            "    domain: [Party]\n"
+            "    range: [Party]\n"
+            "    description: d\n"
+            "    transitive: true\n"
+            "  - id: ADVERSE_TO\n"
+            "    label: adverse to\n"
+            "    domain: [Party]\n"
+            "    range: [Party]\n"
+            "    description: d\n"
+            "  - id: RESULT\n"
+            "    label: result\n"
+            "    domain: [Party]\n"
+            "    range: [Party]\n"
+            "    description: d\n"
+            "rules:\n"
+            "  - id: chain\n"
+            "    version: v1\n"
+            "    description: walks an ownership ladder\n"
+            "    when:\n"
+            '      - "(a:Party)-[:OWNS*1..3]->(b:Party)"\n'
+            '      - "(c:Party)-[:ADVERSE_TO]->(b:Party)"\n'
+            '    then: "(c)-[:RESULT]->(a)"\n'
+            "    min_premise_class: EXTRACTED_MODEL\n"
+        )
+        monkeypatch.setattr("src.ontology.loader.ONTOLOGY_DIR", tmp_path)
+        load_ontology.cache_clear()
+        return load_ontology("paths")
+
+    def test_the_pack_loads_because_the_predicate_is_transitive(self, tmp_path, monkeypatch):
+        onto = self._pack(tmp_path, monkeypatch)
+        assert onto.transitive_predicates == frozenset({"OWNS"})
+        load_ontology.cache_clear()
+
+    def test_the_report_names_the_rule_and_says_why(self, tmp_path, monkeypatch):
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:top", "OWNS", "party:mid"),
+            fact("party:rival", "ADVERSE_TO", "party:mid"),
+        ]
+        report = Reasoner(onto).run(ctx, facts)
+
+        assert report.count == 0
+        assert "chain" in report.rules_skipped
+        assert "OWNS" in report.rules_skipped["chain"]
+        load_ontology.cache_clear()
+
+    def test_it_does_not_quietly_fire_on_the_direct_edge(self, tmp_path, monkeypatch):
+        """The single-hop case is the one that would silently look like success."""
+        onto = self._pack(tmp_path, monkeypatch)
+        ctx = AuthContext(user_id="a@b.example", tenant_id=TENANT)
+        facts = [
+            fact("party:top", "OWNS", "party:mid"),
+            fact("party:rival", "ADVERSE_TO", "party:mid"),
+        ]
+        assert Reasoner(onto).run(ctx, facts).inferences == []
+        load_ontology.cache_clear()
 
 
 class TestOnlyARuleMayConcludeAConclusion:

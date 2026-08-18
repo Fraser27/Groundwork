@@ -417,6 +417,12 @@ def _validate_rules(ontology: Ontology) -> None:
                     f"rule {rule.id!r} matches on {premise.predicate!r}, which the "
                     f"{ontology.domain} pack does not declare, so it can never match"
                 )
+            if premise.is_path and premise.predicate not in ontology.transitive_predicates:
+                raise PatternError(
+                    f"rule {rule.id!r} walks a chain of {premise.predicate!r}, which the "
+                    f"{ontology.domain} pack does not declare transitive; a conclusion drawn "
+                    "along that chain would claim something the pack never said follows from it"
+                )
 
 
 @functools.lru_cache(maxsize=8)
