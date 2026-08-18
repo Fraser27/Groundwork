@@ -18,6 +18,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react'
 import type {
   GateTrace,
   QueryBlock,
+  QueryHit,
   QueryPassage,
   RouterLayer,
   RouterTrace,
@@ -576,6 +577,56 @@ function LanesStep({
   )
 }
 
+/** The facts a lane returned, split by how each was reached.
+ *
+ * These arrive in one list because `Planner._graph_part` concatenates the term search with the
+ * walk out from retrieved passages, but they are not the same kind of claim: a term match is a
+ * fact the question named, while a walked edge is one the graph reached from a cited passage. The
+ * API has always distinguished them -- `expand()` sets `hops` for exactly this reason and
+ * `matched_on` stays empty on a walked edge -- and the panel used to discard it, so a reader could
+ * not tell a fact stated in the document from one two steps away.
+ */
+function FactList({ facts, floor }: { facts: QueryHit[]; floor: number }) {
+  const matched = facts.filter((h) => h.hops == null)
+  const walked = facts.filter((h) => h.hops != null)
+
+  const row = (h: QueryHit) => (
+    <div key={h.assertion_id} className="path-hop" style={epiStyle(h.epistemic_class)}>
+      <EpistemicBadge epistemicClass={h.epistemic_class} size="sm" showLabel={false} />
+      <span>
+        <strong>{entityLabel(h.subject_id)}</strong>{' '}
+        <span className="prov-pred">{h.predicate}</span>{' '}
+        <strong>{entityLabel(h.object_id)}</strong>
+        {h.hops != null && (
+          <span className="dim" style={{ marginLeft: 6, fontSize: 11 }}>
+            {h.hops} {h.hops === 1 ? 'hop' : 'hops'} from a cited passage
+          </span>
+        )}
+      </span>
+      <ConfidenceBar value={h.confidence} floor={floor} width={54} />
+    </div>
+  )
+
+  // One list when everything arrived the same way, which is the common case. Splitting then would
+  // add a heading that says nothing.
+  if (!walked.length || !matched.length) {
+    return <div className="path-chain">{facts.map(row)}</div>
+  }
+  return (
+    <>
+      <p className="qtrace-note dim">
+        Matched by name in the question — the graph was asked about these directly.
+      </p>
+      <div className="path-chain">{matched.map(row)}</div>
+      <p className="qtrace-note dim" style={{ marginTop: 10 }}>
+        Reached by walking out from a retrieved passage. Nothing in the question named these; the
+        hybrid tier found them next to a document it cited.
+      </p>
+      <div className="path-chain">{walked.map(row)}</div>
+    </>
+  )
+}
+
 function LaneCard({
   lane,
   floor,
@@ -653,21 +704,7 @@ function LaneCard({
             </div>
           )}
 
-          {lane.facts && lane.facts.length > 0 && (
-            <div className="path-chain">
-              {lane.facts.map((h) => (
-                <div key={h.assertion_id} className="path-hop" style={epiStyle(h.epistemic_class)}>
-                  <EpistemicBadge epistemicClass={h.epistemic_class} size="sm" showLabel={false} />
-                  <span>
-                    <strong>{entityLabel(h.subject_id)}</strong>{' '}
-                    <span className="prov-pred">{h.predicate}</span>{' '}
-                    <strong>{entityLabel(h.object_id)}</strong>
-                  </span>
-                  <ConfidenceBar value={h.confidence} floor={floor} width={54} />
-                </div>
-              ))}
-            </div>
-          )}
+          {lane.facts && lane.facts.length > 0 && <FactList facts={lane.facts} floor={floor} />}
 
           {lane.passages && lane.passages.length > 0 && (
             <>

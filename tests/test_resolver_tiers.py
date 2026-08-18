@@ -313,6 +313,28 @@ class TestExpandRanksBeforeTruncating:
         second = reader.expand(ctx, ["document:d1"], depth=2, limit=7)
         assert [e["assertion_id"] for e in first] == [e["assertion_id"] for e in second]
 
+    def test_a_walked_edge_is_distinguishable_from_a_term_match(self, reader, ctx):
+        """The trace panel splits these into two lists, so the difference has to be in the data.
+
+        `hops` is how: a walked edge carries a distance and no matched terms, because nothing in
+        the question named it. Collapse the two and a reader cannot tell a fact stated in a cited
+        document from one the graph reached two steps away -- which is the difference between
+        quoting and inferring.
+        """
+        walked = reader.expand(ctx, ["document:d1"], depth=2)
+        assert walked, "the fixture proves nothing if the walk found no edges"
+        for edge in walked:
+            assert edge["hops"] is not None
+            assert edge["matched_on"] == []
+
+    def test_a_term_match_carries_terms_and_no_distance(self, reader, ctx):
+        """The other half of the same contract. `search()` explains itself with `matched_on`."""
+        hits = reader.search(ctx, "beta holdings", min_confidence=0.0)
+        assert hits, "the fixture proves nothing if the search matched nothing"
+        for hit in hits:
+            assert hit["hops"] is None
+            assert hit["matched_on"]
+
 
 #: The production shape that exposed the severed spine. `doc-d63a8228d513541553` carries only
 #: `MENTIONS` edges -- descriptive, so capped at the trust floor exactly -- while the facts anyone
