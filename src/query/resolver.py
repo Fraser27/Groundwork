@@ -33,7 +33,7 @@ from typing import Any
 
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
-from src.query.blocks import Block, Screen, blocks_for, seeds_from
+from src.query.blocks import DEGRADED_WARNING, Block, Screen, blocks_for, seeds_from
 from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 
@@ -87,6 +87,13 @@ class Resolution:
     blocks: list[Block] = field(default_factory=list)
     """What was withheld, named. Reported rather than dropped: an answer that looks clean only
     because the inconvenient part was invisible is the failure `scope.py` exists to prevent."""
+
+    gate: dict[str, Any] | None = None
+    """What the wall considered, cleared and withheld, and whether it ran whole.
+
+    Counts and not only refusals: a step that is visible only when it blocks reads as an
+    exception rather than as a gate everything passed through. None for tier 1, which is exempt.
+    The UI has declared this type since before anything sent it."""
 
     router: Any | None = None
     """How the tiers were chosen, when a router chose them. None means they were tried in order."""
@@ -156,6 +163,7 @@ class Resolution:
             "tiers_attempted": [int(t) for t in self.tiers_attempted],
             "warnings": self.warnings,
             "blocks": [b.to_dict() for b in self.blocks],
+            "gate": self.gate,
             "router": self.router.to_dict() if self.router is not None else None,
         }
 
@@ -360,11 +368,13 @@ class Resolver:
             seeds=seeds_from(_evidence(result.answer)),
             min_confidence=settings.min_confidence_floor,
         )
-        if not screen:
-            return result
-
+        removed = _apply(result, screen) if screen else 0
         result.blocks = screen.blocks
-        removed = _apply(result, screen)
+        # Recorded even for a clean wall. "Nothing refused" over zero seeds and over forty are
+        # different facts, and the trace claimed no count of either was kept.
+        result.gate = screen.trace(items_withheld=removed)
+        if screen.degraded:
+            result.warnings = [*result.warnings, DEGRADED_WARNING]
         if removed:
             result.warnings = [
                 *result.warnings,

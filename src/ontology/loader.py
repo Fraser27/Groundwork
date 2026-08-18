@@ -20,6 +20,18 @@ import yaml
 
 ONTOLOGY_DIR = Path(__file__).resolve().parents[2] / "ontologies"
 
+#: What each `blocks:` value means, as the endpoints of the edge it taints.
+#:
+#: A predicate has to say which end, because the answer differs per predicate and only the pack
+#: author knows: a conflict taints both parties, stale authority taints the citing document but
+#: not the authority itself, and a contraindication taints the drug but not the patient. Guessing
+#: in Python would withhold "Brown was overruled" — the one fact a reader needs.
+BLOCK_ENDPOINTS: dict[str, tuple[str, ...]] = {
+    "subject": ("subject",),
+    "object": ("object",),
+    "both": ("subject", "object"),
+}
+
 
 @dataclass(frozen=True)
 class PredicateDef:
@@ -31,6 +43,14 @@ class PredicateDef:
     range: tuple[str, ...] = ()
     help: str | None = None
     symmetric: bool = False
+
+    blocks: str = ""
+    """Which endpoint a fact with this predicate forbids an answer about, or empty for one that
+    only informs. See `BLOCK_ENDPOINTS`.
+
+    Declared rather than derived from `rule_conclusions`, which it currently coincides with in
+    both packs. The coincidence is not a guarantee: an enrichment rule concluding something benign
+    would silently become a veto, and a veto nobody declared is as bad as a veto that never ran."""
 
 
 @dataclass(frozen=True)
@@ -125,6 +145,23 @@ class Ontology:
 
     def is_governing(self, predicate: str) -> bool:
         return predicate in self.governing_predicates
+
+    @functools.cached_property
+    def blocking_predicates(self) -> frozenset[str]:
+        """Predicates whose facts forbid an answer rather than informing one.
+
+        Closed, and closed for a stronger reason than the rest of the vocabulary: a veto nobody
+        can query is a governance control that reports "nothing refused" because it is incapable
+        of refusing, and that reads exactly like a clean conflict check.
+        """
+        return frozenset(p.id for p in self.predicates.values() if p.blocks)
+
+    def blocked_endpoints(self, predicate: str) -> tuple[str, ...]:
+        """Which ends of an edge with this predicate are tainted. Empty for a non-blocking one."""
+        pdef = self.predicates.get(predicate)
+        if pdef is None or not pdef.blocks:
+            return ()
+        return BLOCK_ENDPOINTS.get(pdef.blocks, ())
 
     @property
     def entity_kinds(self) -> frozenset[str]:
@@ -250,6 +287,7 @@ def _parse(raw: dict[str, Any]) -> Ontology:
                 range=tuple(p.get("range", ())),
                 help=p.get("help"),
                 symmetric=bool(p.get("symmetric", False)),
+                blocks=str(p.get("blocks", "") or ""),
             )
 
     rules = tuple(
@@ -272,8 +310,32 @@ def _parse(raw: dict[str, Any]) -> Ontology:
         predicates=predicates,
         rules=rules,
     )
+    _validate_blocks(predicates, ontology.domain)
     _validate_rules(ontology)
     return ontology
+
+
+def _validate_blocks(predicates: dict[str, PredicateDef], domain: str) -> None:
+    """Refuse a pack whose `blocks:` value is not one this code understands.
+
+    Skipping an unreadable value would leave a predicate the author wrote as a veto informing
+    answers instead of forbidding them, and nothing downstream can tell that apart from a
+    predicate nobody meant to block. Loud at load, not silent per query.
+    """
+    for pdef in predicates.values():
+        if pdef.blocks and pdef.blocks not in BLOCK_ENDPOINTS:
+            raise ValueError(
+                f"predicate {pdef.id!r} in the {domain} pack declares blocks: {pdef.blocks!r}, "
+                f"which is not one of {sorted(BLOCK_ENDPOINTS)}; a veto that cannot be read is "
+                "a veto that never fires"
+            )
+        if pdef.blocks and not pdef.governing:
+            # A descriptive predicate is open and unvalidated, so a veto resting on one could be
+            # minted by any extractor inventing a tag. Blocks have to come off the closed set.
+            raise ValueError(
+                f"predicate {pdef.id!r} in the {domain} pack declares blocks: {pdef.blocks!r} but "
+                "is descriptive; only a governing predicate may veto an answer"
+            )
 
 
 def _validate_rules(ontology: Ontology) -> None:

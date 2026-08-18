@@ -47,3 +47,6 @@ neo4j_data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent worktrees: transient checkouts, never part of the tree.
+.claude/worktrees/

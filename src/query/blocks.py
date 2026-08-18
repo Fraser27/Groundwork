@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 SEED_KEYS = ("document_id", "subject_id", "object_id", "matter_id")
 
 
+class BlockCheckUnavailable(RuntimeError):
+    """The rule-block half of the wall could not be evaluated.
+
+    Raised rather than returning no blocks, because those two are indistinguishable to a caller
+    and the wrong one of them is a governance control reporting "nothing refused" when it was
+    structurally incapable of refusing. Whoever catches this owes the caller a warning.
+    """
+
+
 @dataclass
 class Block:
     """Something the graph refuses to let through, and why.
@@ -61,8 +70,37 @@ class Screen:
 
     blocks: list[Block] = field(default_factory=list)
 
+    seeds: tuple[str, ...] = ()
+    """What the wall was asked about. Reported because "nothing refused" over zero seeds and over
+    forty are different facts, and only the second is reassuring."""
+
+    degraded: str = ""
+    """Why the rule-block half did not run, or empty when it did.
+
+    A screened-only result and a fully evaluated one are the same object otherwise, so without
+    this the caller cannot tell a clean wall from a wall that failed open."""
+
     def __bool__(self) -> bool:
         return bool(self.blocks)
+
+    @property
+    def cleared(self) -> int:
+        """Seeds no block named. Zero when degraded: nothing was cleared, it was skipped."""
+        if self.degraded:
+            return 0
+        subjects = self.subjects
+        return sum(1 for s in set(self.seeds) if s not in subjects)
+
+    def trace(self, *, items_withheld: int) -> dict[str, Any]:
+        """The counters the trace UI reads. `items_withheld` is the caller's, not ours: only the
+        caller knows how many rows it actually dropped."""
+        return {
+            "seeds_considered": len(set(self.seeds)),
+            "subjects_cleared": self.cleared,
+            "items_withheld": items_withheld,
+            "degraded": self.degraded or None,
+            "blocks": self.to_dict(),
+        }
 
     @property
     def subjects(self) -> set[str]:
@@ -79,6 +117,11 @@ class Screen:
         subjects, matters = self.subjects, self.matters
         return not (
             row.get("subject_id") in subjects
+            # `object_id` too. It is in `SEED_KEYS`, so a blocked entity reaching the wall as the
+            # object of an edge produced a block and then survived it: an assertion "d1 MENTIONS
+            # party:calder" was named a conflict and handed to the synthesiser anyway. The wall has
+            # to test the same ends it seeds from, or it labels rather than withholds.
+            or row.get("object_id") in subjects
             or row.get("document_id") in subjects
             or row.get("matter_id") in matters
         )
@@ -119,8 +162,15 @@ def blocks_for(
     Two sources, both deterministic. An ethical screen is a recorded decision on `AuthContext`
     and applies whether or not a graph reader is wired; a rule block needs the graph and the
     seeds a result touched.
+
+    Degrades loudly, and the choice is deliberate. Failing closed on a graph error would refuse
+    every answer for as long as the graph was unwell, which is its own outage; failing open
+    silently is how this half of the wall came to be missing for the life of the feature. So it
+    fails open and *says so* on the `Screen`, and every caller turns that into a warning the
+    reader sees rather than a debug line nobody reads.
     """
     blocks: list[Block] = []
+    degraded = ""
 
     for matter_id in sorted(ctx.matter_denylist):
         blocks.append(
@@ -135,7 +185,18 @@ def blocks_for(
 
     if graph_reader is not None and seeds:
         try:
-            for found in graph_reader.blocking_facts(ctx, seeds, min_confidence=min_confidence):
+            found_rows = graph_reader.blocking_facts(ctx, seeds, min_confidence=min_confidence)
+        except BlockCheckUnavailable as e:
+            degraded = str(e)
+            logger.warning("rule blocks not evaluated: %s", e)
+        except Exception as e:  # noqa: BLE001
+            # No `AttributeError` branch. A reader without `blocking_facts` is not a legacy
+            # deployment to tolerate -- it is the state this whole path was in, and swallowing it
+            # is what made a missing veto indistinguishable from a clean one.
+            degraded = f"the block check failed: {e}"
+            logger.warning("rule blocks not evaluated: %s", e)
+        else:
+            for found in found_rows:
                 blocks.append(
                     Block(
                         subject=str(found.get("subject_id", "")),
@@ -144,11 +205,14 @@ def blocks_for(
                         matter_id=found.get("matter_id"),
                     )
                 )
-        except AttributeError:
-            # An older reader has no `blocking_facts`. Screens still apply, so grounding
-            # degrades rather than disappearing, and the gap is visible in the response.
-            logger.debug("graph reader cannot report blocking facts")
-        except Exception as e:
-            logger.warning("could not read blocking facts: %s", e)
 
-    return Screen(blocks=blocks)
+    return Screen(blocks=blocks, seeds=tuple(seeds or ()), degraded=degraded)
+
+
+#: Shown when the rule-block half failed. Names the half that still ran, because "the wall is
+#: broken" and "one of the wall's two sources is broken" call for different reactions.
+DEGRADED_WARNING = (
+    "The ethical screens on your account were applied, but the graph could not be checked for "
+    "conflicts or other rule-based blocks, so this answer may include evidence that would "
+    "normally be withheld. Treat it as incomplete for conflict-checking purposes."
+)

@@ -344,15 +344,36 @@ class TestDeterministicBlocking:
         answer = Planner(graph_reader=graph).plan(ctx, "q", GovernanceSettings())
         assert answer.blocks[0].rule == "conflict_check"
 
-    def test_a_reader_without_blocking_facts_degrades(self, ctx):
-        """Screens still apply, so grounding weakens rather than disappearing."""
+    def test_a_reader_that_cannot_report_blocks_says_so_in_the_response(self, ctx):
+        """Screens still apply, so the answer survives -- but it must not read as a clean wall.
 
-        class OldReader:
+        This test used to assert only that a part came back, which is why a reader with no
+        `blocking_facts` at all looked like correct degradation for the life of the feature. The
+        real `GraphReader` had never had the method, so this was the production path.
+        """
+
+        class NoBlockCheck:
+            def search(self, ctx, question, **kw):
+                # `subject_id` matters: it is what `seeds_from` reads, and with no seed at all
+                # there is nothing to veto and so nothing degraded.
+                return [{"assertion_id": "a1", "subject_id": "party:acme"}]
+
+        answer = Planner(graph_reader=NoBlockCheck()).plan(ctx, "q", GovernanceSettings())
+        assert len(answer.parts) == 1
+        assert answer.gate["degraded"]
+        assert any("could not be checked for conflicts" in w for w in answer.warnings)
+
+    def test_an_answer_touching_no_ids_is_not_degraded(self, ctx):
+        """There is nothing for a veto to match on, so skipping the check is a complete
+        result rather than a failed one."""
+
+        class NoIds:
             def search(self, ctx, question, **kw):
                 return [{"assertion_id": "a1"}]
 
-        answer = Planner(graph_reader=OldReader()).plan(ctx, "q", GovernanceSettings())
-        assert len(answer.parts) == 1
+        answer = Planner(graph_reader=NoIds()).plan(ctx, "q", GovernanceSettings())
+        assert answer.gate["degraded"] is None
+        assert answer.gate["seeds_considered"] == 0
 
 
 class TestSynthesisNeverDecides:

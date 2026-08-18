@@ -1,0 +1,442 @@
+"""The rule-block half of the ethical wall, against the real `GraphReader`.
+
+Every test here builds `src.query.graph_reader.GraphReader` and, where a conflict is needed,
+derives it with the real `Reasoner` from the real pack. No fake reader appears in this file, and
+that is the point of the file existing.
+
+`blocking_facts` was called by `blocks_for` and defined only on the fakes in `test_planner.py`
+and `test_resolver_tiers.py`. So the call raised `AttributeError` on every request, a handler
+swallowed it at debug level, and step 4 of the trace reported "nothing refused" while being
+structurally incapable of refusing. A suite that proves the design instead of the system.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from src.documents.review import InMemoryAssertionStore, ReviewQueue
+from src.governance import GovernanceSettings
+from src.graph.assertions import (
+    EpistemicClass,
+    ReviewState,
+    SourceLocator,
+    build_assertion,
+)
+from src.graph.scope import AuthContext
+from src.ontology.loader import load_ontology
+from src.query.blocks import BlockCheckUnavailable, blocks_for
+from src.query.graph_reader import GraphReader
+from src.query.planner import Planner
+from src.query.resolver import Resolver, Tier
+from src.reasoning.engine import Reasoner
+
+TENANT = "firm-acme"
+
+
+@pytest.fixture
+def ctx() -> AuthContext:
+    return AuthContext(user_id="alice@firm.com", tenant_id=TENANT)
+
+
+def _live(ctx: AuthContext, queue: ReviewQueue, facts, job: str) -> None:
+    """Stage, approve what needs it, and promote. What a reviewer would do."""
+    onto = load_ontology("legal")
+    assertions = [
+        build_assertion(
+            tenant_id=TENANT,
+            subject_id=s,
+            predicate=p,
+            object_id=o,
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:opus-5",
+            confidence=0.9,
+            source_locator=SourceLocator(document_id="d1", filename="d1.pdf", page=1, quote="text"),
+            matter_id=m,
+            allowed_predicates=onto.extractable_predicates,
+        )
+        for s, p, o, m in facts
+    ]
+    queue.stage(ctx, assertions, job_id=job)
+    for a in assertions:
+        if a.review_state is ReviewState.PENDING:
+            queue.approve(ctx, a.assertion_id)
+    queue.promote(ctx, job_id=job)
+
+
+def _reader_with_conflict(ctx: AuthContext) -> GraphReader:
+    """A real reader over a real inferred POTENTIAL_CONFLICT.
+
+    The conflict is derived by the real `Reasoner` rather than hand-written, so this also holds
+    the join between what the reasoner concludes and what the wall reads. A veto on a predicate
+    no rule produces would pass a hand-written test and refuse nothing in production.
+    """
+    onto = load_ontology("legal")
+    queue = ReviewQueue(InMemoryAssertionStore(), governing_predicates=onto.governing_predicates)
+    _live(
+        ctx,
+        queue,
+        [
+            ("counsel:dalgleish-rowe", "REPRESENTS", "party:calder-plc", "M-1"),
+            ("matter:m-2", "ADVERSE_TO", "party:calder-plc", "M-2"),
+        ],
+        "j1",
+    )
+
+    live = [r.assertion for r in queue.visible(ctx) if r.is_current]
+    inferences = [i.assertion for i in Reasoner(onto).run(ctx, live).inferences]
+    assert any(a.predicate == "POTENTIAL_CONFLICT" for a in inferences), (
+        "the reasoner produced no conflict, so this fixture proves nothing about the wall"
+    )
+    queue.stage(ctx, inferences, job_id="j2")
+    for a in inferences:
+        if a.review_state is ReviewState.PENDING:
+            queue.approve(ctx, a.assertion_id)
+    queue.promote(ctx, job_id="j2")
+    return GraphReader(queue, ontology=onto)
+
+
+class TestTheRealReaderCanRefuse:
+    """`GraphReader`, not a fake. These are the tests the fakes were standing in for."""
+
+    def test_blocking_facts_exists_on_the_real_class(self):
+        """The whole bug in one line. `blocks_for` has called this since it was written."""
+        assert callable(getattr(GraphReader, "blocking_facts", None))
+
+    def test_an_inferred_conflict_blocks_the_party(self, ctx):
+        reader = _reader_with_conflict(ctx)
+        found = reader.blocking_facts(ctx, ["party:calder-plc"])
+        assert "party:calder-plc" in {row["subject_id"] for row in found}
+
+    def test_a_block_names_the_rule_that_produced_it(self, ctx):
+        """`rule` comes off the assertion, so a reader can find the proof tree."""
+        found = _reader_with_conflict(ctx).blocking_facts(ctx, ["party:calder-plc"])
+        assert {row["rule"] for row in found} == {"conflict_check"}
+
+    def test_every_field_blocks_for_reads_is_populated(self, ctx):
+        """`blocks_for` reads exactly these four. A missing `reason` renders as "blocked",
+        which is a refusal with no explanation -- worse than no block, because it looks like a
+        screen nobody can appeal."""
+        for row in _reader_with_conflict(ctx).blocking_facts(ctx, ["party:calder-plc"]):
+            assert set(row) == {"subject_id", "reason", "rule", "matter_id"}
+            assert row["subject_id"] and row["reason"] and row["rule"]
+
+    def test_the_reason_names_the_other_end_by_its_real_id(self, ctx):
+        """`matter:m-2`, not "m 2". A prettified id is not something anyone can look up."""
+        found = _reader_with_conflict(ctx).blocking_facts(ctx, ["party:calder-plc"])
+        reasons = " ".join(row["reason"] for row in found)
+        assert "matter:m-2" in reasons
+
+    def test_an_ordinary_governing_fact_does_not_block(self, ctx):
+        """REPRESENTS is governing and central to a conflict check, and blocks nothing on its
+        own. Blocking on it would withhold the firm's own client list."""
+        onto = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=onto.governing_predicates
+        )
+        _live(ctx, queue, [("counsel:dr", "REPRESENTS", "party:calder-plc", "M-1")], "j1")
+        assert GraphReader(queue, ontology=onto).blocking_facts(ctx, ["party:calder-plc"]) == []
+
+    def test_a_seed_the_conflict_does_not_touch_is_not_blocked(self, ctx):
+        reader = _reader_with_conflict(ctx)
+        assert reader.blocking_facts(ctx, ["party:unrelated-gmbh"]) == []
+
+    def test_no_seeds_means_no_blocks(self, ctx):
+        assert _reader_with_conflict(ctx).blocking_facts(ctx, []) == []
+
+    def test_repeated_reads_agree(self, ctx):
+        """Two runs of one question returning different vetoes is indistinguishable from the
+        graph having changed."""
+        reader = _reader_with_conflict(ctx)
+        first = reader.blocking_facts(ctx, ["party:calder-plc"])
+        assert first == reader.blocking_facts(ctx, ["party:calder-plc"])
+
+
+class TestThePackDecidesWhatBlocks:
+    """Rule 5: the vocabulary is closed, so a veto cannot be a list in Python."""
+
+    def test_both_packs_declare_a_block(self):
+        """A veto expressible in the legal pack and not the healthcare one would make this a
+        legal feature the generic code happens to run."""
+        assert load_ontology("legal").blocking_predicates
+        assert load_ontology("healthcare").blocking_predicates
+
+    def test_every_blocking_predicate_is_governing(self):
+        """A descriptive predicate is open, so a veto resting on one could be minted by any
+        extractor inventing a tag."""
+        for domain in ("legal", "healthcare"):
+            onto = load_ontology(domain)
+            assert onto.blocking_predicates <= onto.governing_predicates
+
+    def test_stale_authority_blocks_the_document_not_the_authority(self):
+        """The one place the endpoint choice is load-bearing. Blocking the authority would
+        suppress "Brown was overruled" -- the single fact the reader most needs."""
+        onto = load_ontology("legal")
+        assert onto.blocked_endpoints("RELIES_ON_STALE_AUTHORITY") == ("subject",)
+
+    def test_a_conflict_blocks_both_ends(self):
+        assert load_ontology("legal").blocked_endpoints("POTENTIAL_CONFLICT") == (
+            "subject",
+            "object",
+        )
+
+    def test_a_contraindication_blocks_the_drug_not_the_patient(self):
+        """Suppressing evidence about the patient would withhold the record in order to
+        protect the record."""
+        onto = load_ontology("healthcare")
+        assert onto.blocked_endpoints("CONTRAINDICATION_ALERT") == ("object",)
+
+    def test_a_non_blocking_predicate_taints_nothing(self):
+        assert load_ontology("legal").blocked_endpoints("REPRESENTS") == ()
+
+    def test_an_unreadable_blocks_value_fails_the_pack(self, tmp_path):
+        """Loud at load. Skipping it would leave a predicate the author wrote as a veto
+        informing answers instead of forbidding them, which nothing downstream can detect."""
+        from src.ontology import loader
+
+        pack = tmp_path / "bad.yaml"
+        pack.write_text(
+            "domain: bad\nversion: 1\nentity_types: []\n"
+            "governing_predicates:\n  - id: X\n    blocks: sideways\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        with pytest.raises(ValueError, match="blocks"):
+            loader._parse(__import__("yaml").safe_load(pack.read_text()))
+
+    def test_a_descriptive_predicate_may_not_veto(self, tmp_path):
+        from src.ontology import loader
+
+        pack = tmp_path / "bad2.yaml"
+        pack.write_text(
+            "domain: bad\nversion: 1\nentity_types: []\ngoverning_predicates: []\n"
+            "descriptive_predicates:\n  - id: TAG\n    blocks: subject\nrules: []\n"
+        )
+        with pytest.raises(ValueError, match="descriptive"):
+            loader._parse(__import__("yaml").safe_load(pack.read_text()))
+
+
+class TestTheTrustPolicyIsNotBypassed:
+    """A veto must be a fact the caller could have been shown, on the same terms."""
+
+    def test_a_pending_conflict_does_not_block(self, ctx):
+        """`_readable` admits only signed-off facts. A veto on an unreviewed model guess would
+        withhold evidence on the strength of something nobody stands behind."""
+        onto = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=onto.governing_predicates
+        )
+        pending = build_assertion(
+            tenant_id=TENANT,
+            subject_id="matter:m-2",
+            predicate="POTENTIAL_CONFLICT",
+            object_id="party:calder-plc",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:opus-5",
+            confidence=0.95,
+            source_locator=SourceLocator(document_id="d1", page=1, quote="t"),
+            matter_id="M-2",
+            allowed_predicates=onto.governing_predicates,
+        )
+        assert pending.review_state is ReviewState.PENDING
+        queue.stage(ctx, [pending], job_id="j1")
+        reader = GraphReader(queue, ontology=onto)
+        assert reader.blocking_facts(ctx, ["party:calder-plc"]) == []
+
+    def test_the_confidence_floor_applies(self, ctx):
+        """Same floor as retrieval, from `TrustFilter`. A floor above every conflict must
+        suppress the veto, or the two halves of the trust policy have drifted again."""
+        reader = _reader_with_conflict(ctx)
+        assert reader.blocking_facts(ctx, ["party:calder-plc"], min_confidence=0.8)
+        assert reader.blocking_facts(ctx, ["party:calder-plc"], min_confidence=1.01) == []
+
+    def test_another_tenant_sees_nothing(self, ctx):
+        """The veto reads the graph, so it is scoped like every other read."""
+        reader = _reader_with_conflict(ctx)
+        other = AuthContext(user_id="mallory@other.com", tenant_id="firm-beta")
+        assert reader.blocking_facts(other, ["party:calder-plc"]) == []
+
+
+class TestFailsOpenButLoudly:
+    """Refusing every answer on a graph error is its own outage. Failing open silently is how
+    this bug survived. So it fails open and says so."""
+
+    def test_a_reader_with_no_pack_refuses_to_claim_a_clean_wall(self, ctx):
+        """Without a pack the blocking vocabulary is unknowable, so "no vetoes" is a claim the
+        reader cannot make."""
+        onto = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=onto.governing_predicates
+        )
+        _live(ctx, queue, [("counsel:dr", "REPRESENTS", "party:calder-plc", "M-1")], "j1")
+        with pytest.raises(BlockCheckUnavailable):
+            GraphReader(queue).blocking_facts(ctx, ["party:calder-plc"])
+
+    def test_the_screen_records_why_it_could_not_check(self, ctx):
+        screen = blocks_for(ctx, graph_reader=_BrokenReader(), seeds=["party:calder-plc"])
+        assert screen.degraded
+
+    def test_a_degraded_screen_reports_nothing_cleared(self, ctx):
+        """Zero, not the seed count. Nothing was cleared; the check was skipped."""
+        screen = blocks_for(ctx, graph_reader=_BrokenReader(), seeds=["party:calder-plc"])
+        assert screen.cleared == 0
+        assert screen.trace(items_withheld=0)["degraded"]
+
+    def test_a_clean_wall_is_not_degraded_and_counts_what_cleared(self, ctx):
+        screen = blocks_for(
+            ctx, graph_reader=_reader_with_conflict(ctx), seeds=["party:unrelated-gmbh"]
+        )
+        assert screen.degraded == ""
+        assert screen.trace(items_withheld=0) == {
+            "seeds_considered": 1,
+            "subjects_cleared": 1,
+            "items_withheld": 0,
+            "degraded": None,
+            "blocks": [],
+        }
+
+    def test_screens_still_apply_when_the_graph_check_fails(self, ctx):
+        """The half that does not need the graph must survive the half that does."""
+        screened = AuthContext(
+            user_id="bob@firm.com",
+            tenant_id=TENANT,
+            matter_denylist=frozenset({"M-9"}),
+            screen_reasons={"M-9": "Acting for the counterparty."},
+        )
+        screen = blocks_for(screened, graph_reader=_BrokenReader(), seeds=["party:calder-plc"])
+        assert [b.rule for b in screen.blocks] == ["ethical_screen"]
+        assert screen.degraded
+
+
+class _BrokenReader:
+    """A reader whose block check fails. Stands in for a graph outage, not for a missing method."""
+
+    def blocking_facts(self, ctx, seeds, **kw):
+        raise BlockCheckUnavailable("the graph is unreachable")
+
+
+class TestTheApiReportsWhatTheWallDid:
+    """The UI has declared `GateTrace` since before anything populated it. `tsc` passed and the
+    page told a reader no count was recorded."""
+
+    def test_query_sends_the_gate_counters(self, ctx):
+        res = Resolver(graph_reader=_reader_with_conflict(ctx)).resolve(
+            ctx, "calder", GovernanceSettings()
+        )
+        gate = res.to_dict()["gate"]
+        assert gate is not None
+        assert set(gate) == {
+            "seeds_considered",
+            "subjects_cleared",
+            "items_withheld",
+            "degraded",
+            "blocks",
+        }
+
+    def test_compose_sends_the_gate_counters(self, ctx):
+        answer = Planner(graph_reader=_reader_with_conflict(ctx)).plan(
+            ctx, "calder", GovernanceSettings()
+        )
+        assert answer.to_dict()["gate"] is not None
+
+    def test_a_clean_wall_still_sends_a_gate(self, ctx):
+        """A step visible only when it blocks reads as an exception rather than as a gate
+        everything passed through."""
+        res = Resolver(graph_reader=_reader_with_conflict(ctx)).resolve(
+            ctx, "unrelated", GovernanceSettings()
+        )
+        assert res.to_dict()["gate"] is not None
+
+    def test_a_degraded_wall_warns_in_the_response_body(self, ctx):
+        """Not only in a log. The bug survived because the handler logged at debug."""
+        onto = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=onto.governing_predicates
+        )
+        _live(ctx, queue, [("counsel:dr", "REPRESENTS", "party:calder-plc", "M-1")], "j1")
+        # No ontology, so the real reader cannot say which predicates veto.
+        res = Resolver(graph_reader=GraphReader(queue)).resolve(ctx, "calder", GovernanceSettings())
+        assert res.to_dict()["gate"]["degraded"]
+        assert any("could not be checked for conflicts" in w for w in res.warnings)
+
+    def test_a_degraded_compose_warns_too(self, ctx):
+        onto = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=onto.governing_predicates
+        )
+        _live(ctx, queue, [("counsel:dr", "REPRESENTS", "party:calder-plc", "M-1")], "j1")
+        answer = Planner(graph_reader=GraphReader(queue)).plan(ctx, "calder", GovernanceSettings())
+        assert answer.to_dict()["gate"]["degraded"]
+        assert any("could not be checked for conflicts" in w for w in answer.warnings)
+
+    def test_tier_one_stays_exempt(self, ctx):
+        """A compiled metric carries no ids to veto, so there is no gate to report."""
+        from src.metrics.loader import load_metrics
+        from src.metrics.models import StaticCatalog
+        from src.query.metric_matcher import MetricMatcher
+
+        matcher = MetricMatcher(
+            load_metrics("sample/metrics.yaml").metrics, StaticCatalog(tables={})
+        )
+        res = Resolver(metric_matcher=matcher).resolve(
+            ctx, "fees billed by month", GovernanceSettings(), execute=False
+        )
+        assert res.tier is Tier.GOVERNED_METRIC
+        assert res.gate is None
+
+
+class TestProductionWiringCanActuallyRefuse:
+    def test_the_wired_reader_has_a_pack(self):
+        """Without one, `blocking_facts` raises and the wall degrades on every request for the
+        life of the deployment -- which is the failure this whole change exists to end. Asserted
+        against the real `build_services`, because the constructor argument is the single point
+        where a refactor could switch the veto off without touching the veto.
+        """
+        from src.api.deps import build_services
+
+        reader = build_services().graph_reader
+        assert isinstance(reader, GraphReader)
+        assert reader._ontology is not None
+        assert reader._ontology.blocking_predicates
+
+
+class TestTheWallActuallyWithholdsEvidence:
+    """A block that names a subject and does not remove its rows is a label, not a veto."""
+
+    def test_a_blocked_subject_is_dropped_from_the_answer(self, ctx):
+        reader = _reader_with_conflict(ctx)
+        res = Resolver(graph_reader=reader).resolve(ctx, "calder", GovernanceSettings())
+        assert res.blocks, "the conflict produced no block, so nothing was under test"
+        subjects = {row.get("subject_id") for row in res.answer or []}
+        assert "party:calder-plc" not in subjects
+
+    def test_a_blocked_entity_is_dropped_when_it_is_the_object_of_an_edge(self, ctx):
+        """`object_id` is in `SEED_KEYS`, so it seeds a block; `Screen.allows` did not test it.
+        An edge "d1 MENTIONS party:calder" produced a conflict block and then survived it."""
+        from src.query.blocks import Block, Screen
+
+        screen = Screen(blocks=[Block(subject="party:calder-plc", reason="Conflict.", rule="r")])
+        rows = [{"subject_id": "document:d1", "object_id": "party:calder-plc"}]
+        assert screen.keep(rows) == []
+
+    def test_the_withheld_count_reaches_the_trace(self, ctx):
+        res = Resolver(graph_reader=_reader_with_conflict(ctx)).resolve(
+            ctx, "calder", GovernanceSettings()
+        )
+        assert res.gate["items_withheld"] >= 1
+
+    def test_the_synthesiser_never_sees_a_rule_blocked_fact(self, ctx):
+        """Same guarantee the screens have. A model that could reason about a blocked fact
+        would reinstate it."""
+
+        class Synth:
+            def __init__(self) -> None:
+                self.saw = ""
+
+            def summarise(self, question, *, parts, blocks) -> str:
+                self.saw = str(parts)
+                return "summary"
+
+        synth = Synth()
+        Planner(graph_reader=_reader_with_conflict(ctx), synthesiser=synth).plan(
+            ctx, "calder", GovernanceSettings()
+        )
+        assert "party:calder-plc" not in synth.saw

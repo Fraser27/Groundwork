@@ -20,6 +20,7 @@ from typing import Any
 
 from src.documents.review import ReviewQueue
 from src.graph.scope import AuthContext, TrustFilter
+from src.query.blocks import BlockCheckUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,46 @@ def _routes(assertion: Any) -> frozenset[str]:
     return frozenset(routes)
 
 
+def _seed_set(seeds: list[str]) -> frozenset[str]:
+    """Seeds plus their bare forms, so `document:d1` and `d1` both match one entity.
+
+    Callers already pass both -- `Resolver._try_hybrid` learned to the hard way -- but a caller
+    that passes only one must not get a veto that silently fails to match, which is the whole
+    failure mode this method exists to close.
+    """
+    out: set[str] = set()
+    for seed in seeds:
+        if not isinstance(seed, str) or not seed:
+            continue
+        out.add(seed)
+        _, sep, rest = seed.partition(":")
+        if sep and rest:
+            out.add(rest)
+    return frozenset(out)
+
+
+def _touches(entity_id: str, wanted: frozenset[str]) -> bool:
+    if entity_id in wanted:
+        return True
+    _, sep, rest = entity_id.partition(":")
+    return bool(sep and rest and rest in wanted)
+
+
+def _block_reason(ontology: Any, predicate: str, other_id: str) -> str:
+    """A sentence naming the predicate and the other end.
+
+    The predicate's wording comes from the pack, not from here: `blocks_for` renders an empty
+    reason as "blocked", which is a refusal with no explanation -- worse than no block, because it
+    looks like a screen nobody can appeal.
+
+    The other end is the raw entity id, not a prettified label. `_entity_label` turns
+    `matter:m-2` into "m 2", which is not a thing anyone can look up.
+    """
+    pdef = getattr(ontology, "predicates", {}).get(predicate)
+    label = getattr(pdef, "label", None) or predicate.replace("_", " ").lower()
+    return f"{label[:1].upper()}{label[1:]} involving {other_id}."
+
+
 @dataclass
 class Hit:
     """One assertion that matched, with why it matched."""
@@ -160,6 +201,68 @@ class GraphReader:
 
     def _is_governing(self, predicate: str) -> bool:
         return self._ontology is not None and self._ontology.is_governing(predicate)
+
+    def blocking_facts(
+        self,
+        ctx: AuthContext,
+        seeds: list[str],
+        *,
+        min_confidence: float = 0.8,
+    ) -> list[dict[str, Any]]:
+        """Facts that FORBID an answer about these seeds, as opposed to `expand()`'s that inform one.
+
+        Which predicates veto is the pack's call, not this module's: `blocks:` on a governing
+        predicate names the tainted end of the edge. Hardcoding `POTENTIAL_CONFLICT` here would put
+        a legal-specific list in domain-agnostic code and, worse, put it outside the closed
+        vocabulary — so a pack could declare a veto that nothing enforced.
+
+        One hop, not a walk. A blocking fact has to *touch* the evidence to veto it; two hops out
+        it is a fact about something adjacent, and blocking on that withholds most of a
+        well-connected tenant. This is the opposite mistake from `expand()`, which wants reach.
+
+        Never truncated, and no `limit` parameter to add one. `expand()` caps its output because a
+        fact it drops is a fact the answer lacks; a veto it dropped would be an answer that looks
+        cleared. Blocking predicates are rule conclusions over signed-off premises, so the set is
+        small by construction.
+        """
+        if self._ontology is None:
+            # Fails rather than returning no blocks. Without a pack the blocking vocabulary is
+            # unknowable, and "I found no vetoes" would be a claim this reader cannot make.
+            raise BlockCheckUnavailable(
+                "no ontology pack is wired into the graph reader, so which predicates veto an "
+                "answer is unknown"
+            )
+
+        blocking = self._ontology.blocking_predicates
+        if not blocking:
+            return []
+
+        wanted = _seed_set(seeds)
+        if not wanted:
+            return []
+
+        out: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for record in self._readable(ctx, min_confidence):
+            a = record.assertion
+            if a.predicate not in blocking:
+                continue
+            if not (
+                _touches(a.subject_id, wanted)
+                or _touches(a.object_id, wanted)
+                or (a.matter_id is not None and a.matter_id in wanted)
+            ):
+                continue
+            for end in self._ontology.blocked_endpoints(a.predicate):
+                tainted = a.subject_id if end == "subject" else a.object_id
+                other = a.object_id if end == "subject" else a.subject_id
+                out[(tainted, a.predicate, other)] = {
+                    "subject_id": tainted,
+                    "reason": _block_reason(self._ontology, a.predicate, other),
+                    "rule": a.rule_id or a.predicate,
+                    "matter_id": a.matter_id,
+                }
+
+        return [out[key] for key in sorted(out)]
 
     def _readable(self, ctx: AuthContext, min_confidence: float) -> list[Any]:
         """Current, in-scope, trusted-enough assertions.

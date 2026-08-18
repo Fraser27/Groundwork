@@ -639,6 +639,14 @@ export interface GateTrace {
   seeds_considered: number
   subjects_cleared: number
   items_withheld: number
+  /**
+   * Why the rule-block half did not run, or null when it did.
+   *
+   * Non-null means only the ethical screens were applied: the graph was not checked for
+   * conflicts, so "nothing refused" here is not a clearance. The wall fails open rather than
+   * refusing every answer on a transient graph error, which is only defensible if it says so.
+   */
+  degraded?: string | null
   blocks?: QueryBlock[]
 }
 

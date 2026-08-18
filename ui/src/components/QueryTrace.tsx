@@ -115,8 +115,9 @@ export default function QueryTrace({
           <LanesStep lanes={lanes} floor={floor} onOpenPassage={onOpenPassage} />
         </Step>
 
-        {/* Open from the start when something was refused. A refusal that needs a click to
-            find is the failure this step exists to prevent. */}
+        {/* Open from the start when something was refused, and when the wall failed open. A
+            refusal that needs a click to find is the failure this step exists to prevent, and a
+            check that did not run is the same failure wearing a green tag. */}
         <Step
           n={4}
           title="Ethical wall"
@@ -126,11 +127,17 @@ export default function QueryTrace({
               <span className="tag tag-red">
                 {gateBlocks.length} {gateBlocks.length === 1 ? 'refusal' : 'refusals'}
               </span>
+            ) : gate?.degraded ? (
+              // Never green here. "Nothing refused" over a check that did not run is the exact
+              // sentence this step exists to stop the system from saying.
+              <span className="tag tag-orange" title={gate.degraded}>
+                not fully checked
+              </span>
             ) : (
               <span className="tag tag-green">nothing refused</span>
             )
           }
-          defaultOpen={gateBlocks.length > 0}
+          defaultOpen={gateBlocks.length > 0 || Boolean(gate?.degraded)}
           last
         >
           <GateStep gate={gate} blocks={gateBlocks} usedFactCount={usedFactCount} />
@@ -725,6 +732,9 @@ function gateSummary(gate: GateTrace | null | undefined, blocks: QueryBlock[]): 
       ? `${blocks.length} ${blocks.length === 1 ? 'block' : 'blocks'} applied. No count of what cleared was recorded.`
       : 'Nothing was refused. No count of what cleared was recorded.'
   }
+  if (gate.degraded) {
+    return 'Screens applied, but the graph was not checked for conflicts.'
+  }
   return (
     `${gate.subjects_cleared} of ${gate.seeds_considered} cleared, ` +
     `${gate.items_withheld} ${gate.items_withheld === 1 ? 'item' : 'items'} withheld.`
@@ -741,6 +751,7 @@ function GateStep({
   usedFactCount: number
 }) {
   const screens = blocks.filter((b) => b.rule === 'ethical_screen')
+  const degraded = Boolean(gate?.degraded)
 
   return (
     <>
@@ -750,7 +761,17 @@ function GateStep({
         <FieldHelp text={HELP.ethicalScreen} />
       </p>
 
-      {gate != null ? (
+      {gate?.degraded && (
+        <p className="qtrace-note qtrace-withheld">
+          The ethical screens on your account were applied. The graph was not checked for
+          conflicts or other rule-based blocks, so nothing listed below is a clearance — this
+          answer may include evidence that would normally be withheld.
+          <br />
+          <span className="dim">Reported reason: {gate.degraded}</span>
+        </p>
+      )}
+
+      {gate != null && !degraded && (
         <dl className="qtrace-facts">
           <div>
             <dt>Subjects considered</dt>
@@ -767,7 +788,9 @@ function GateStep({
             </dd>
           </div>
         </dl>
-      ) : (
+      )}
+
+      {gate == null && (
         <p className="qtrace-note dim">
           This response carries no count of what the wall cleared, only what it refused. An answer
           with nothing listed below passed the wall; it does not say how much passed it.
@@ -775,10 +798,13 @@ function GateStep({
       )}
 
       {blocks.length === 0 ? (
-        <p className="qtrace-note">
-          Nothing was refused for this question. That is a result the wall produced, not an absence
-          of one: had a screened matter matched, it would be named here rather than quietly left out.
-        </p>
+        !degraded && (
+          <p className="qtrace-note">
+            Nothing was refused for this question. That is a result the wall produced, not an
+            absence of one: had a screened matter matched, it would be named here rather than
+            quietly left out.
+          </p>
+        )
       ) : (
         <div className="withheld-block" style={{ marginBottom: 0 }}>
           <div className="withheld-block-head">
