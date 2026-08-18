@@ -632,6 +632,8 @@ export default function Admin() {
           </p>
         </div>
 
+        <TierPermissions settings={settings} patch={patch} saving={saving} />
+
         <div className="card">
           <div className="card-header">
             <h3>Models</h3>
@@ -978,5 +980,90 @@ export default function Admin() {
 
       <Toast toast={toast} />
     </>
+  )
+}
+
+/** The tiers a tenant permits at all, as three switches.
+ *
+ * A hard cap rather than a preference: a question that would have been answered at a forbidden
+ * tier is refused, not quietly answered at another one. `allowed_tiers` has been enforced by the
+ * resolver, planner and router since it was added — this is the control that was missing, so the
+ * only way to change it was an API call.
+ */
+function TierPermissions({
+  settings,
+  patch,
+  saving,
+}: {
+  settings: TenantSettings
+  patch: (key: string, body: Partial<TenantSettings>, message: string) => void
+  saving: string | null
+}) {
+  const allowed = settings.allowed_tiers ?? [1, 2, 3]
+  const tiers: { n: number; name: string; note: string }[] = [
+    {
+      n: 1,
+      name: 'Governed metrics',
+      note: 'Compiled from an approved definition, so the SQL is deterministic and no model writes it.',
+    },
+    {
+      n: 2,
+      name: 'Graph traversal',
+      note: 'Facts read from documents, each citing a page and a quote. Conflict checks live here.',
+    },
+    {
+      n: 3,
+      name: 'Hybrid',
+      note: 'Passage retrieval plus the relationships and table schema around what it found.',
+    },
+  ]
+
+  const toggle = (n: number, on: boolean) => {
+    const next = on ? [...allowed, n].sort() : allowed.filter((t) => t !== n)
+    patch(
+      `tier-${n}`,
+      { allowed_tiers: next },
+      on ? `Tier ${n} may now run` : `Tier ${n} will no longer run`,
+    )
+  }
+
+  return (
+    <div className="card" style={{ borderColor: allowed.length === 0 ? 'var(--red)' : undefined }}>
+      <div className="card-header">
+        <h3>Resolution tiers</h3>
+        <span className={`tag ${allowed.length === 3 ? 'tag-green' : 'tag-orange'}`}>
+          {allowed.length} of 3 permitted
+        </span>
+      </div>
+      {tiers.map((tier) => (
+        <label className="switch" key={tier.n} style={{ marginBottom: 10 }}>
+          <input
+            type="checkbox"
+            checked={allowed.includes(tier.n)}
+            disabled={saving === `tier-${tier.n}`}
+            onChange={(e) => toggle(tier.n, e.target.checked)}
+          />
+          <span className="switch-track" />
+          <span>
+            Tier {tier.n} — {tier.name}
+            <span className="dim" style={{ display: 'block', fontSize: 11.5, marginTop: 2 }}>
+              {tier.note}
+            </span>
+          </span>
+        </label>
+      ))}
+      {allowed.length === 0 && (
+        <p className="card-note qtrace-withheld">
+          No tier is permitted, so no question can be answered at all. Every request will be
+          refused with that as its stated reason.
+        </p>
+      )}
+      <p className="card-note" style={{ marginTop: 9 }}>
+        A forbidden tier is refused rather than substituted: "answered at a tier you disallowed"
+        and "answered at the tier you asked for" must not look the same. Turning one off does not
+        remove the facts underneath it — a disabled tier is named in the trace of every question
+        that would have used it.
+      </p>
+    </div>
   )
 }

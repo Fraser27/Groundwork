@@ -803,6 +803,40 @@ class TestSettingsProjectsWhatThePageCanChange:
         body = client.get(f"/api/tenants/{TENANT}/settings").json()
         assert body["allowed_tiers"] == [1, 2, 3]
 
+    def test_a_tier_can_be_turned_off_and_stays_off(self, client):
+        """The cap was enforced everywhere and settable nowhere: the resolver, planner and router
+        all read it, but no control wrote it, so the only way to change it was a hand-made API
+        call. This is the round trip an Admin switch makes."""
+        assert self._save(client, {"allowed_tiers": [1, 2]})["allowed_tiers"] == [1, 2]
+        assert client.get(f"/api/tenants/{TENANT}/settings").json()["allowed_tiers"] == [1, 2]
+
+    def test_turning_a_tier_off_stops_its_lanes_running(self, client):
+        """The setting is only worth having if it reaches the query path, and a disabled tier is
+        *named* rather than silently absent -- "no lane ran" and "this lane is forbidden" are
+        different facts about an empty answer."""
+        self._save(client, {"allowed_tiers": [1, 2]})
+        body = client.post(
+            f"/api/tenants/{TENANT}/query/compose", json={"query": "which matters involve calder"}
+        ).json()
+
+        skipped = body["lanes_skipped"]
+        assert "tier 3 is not permitted" in skipped["passages"]
+        assert "graph" not in skipped, "tier 2 was left permitted and should still have run"
+
+    def test_a_retired_tier_cannot_be_re_enabled(self, client):
+        """A `4` survived in a default long after the tier was retired, and `Tier(4)` raises where
+        a refusal belongs. Refused at the boundary rather than at query time."""
+        r = client.patch(f"/api/tenants/{TENANT}/governance", json={"allowed_tiers": [1, 4]})
+        assert r.status_code == 422
+        assert "not a resolution tier" in r.json()["detail"]
+
+    def test_disabling_every_tier_is_allowed_and_explains_itself(self, client):
+        """Deliberately permitted: a firm may want the platform to answer nothing while it is being
+        configured. What it must not do is fail obscurely."""
+        assert self._save(client, {"allowed_tiers": []})["allowed_tiers"] == []
+        body = client.post(f"/api/tenants/{TENANT}/query", json={"query": "anything"}).json()
+        assert "no resolution tier is permitted" in str(body).lower()
+
     def test_the_ontology_is_the_tenants_not_the_processs(self, client):
         """It read `services.ontology.domain` -- the pack loaded at boot, process-wide -- so a
         tenant switched to healthcare still reported legal. The entity vocabulary depends on which
