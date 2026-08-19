@@ -94,10 +94,10 @@ changes.
 
 ## Predicate vocabulary: two tiers
 
-- **Governing** (closed, 14 in the legal pack): `REPRESENTS`, `ADVERSE_TO`, `CITES`,
-  `OVERRULES`, `SUBJECT_TO_PRIVILEGE`, `DEADLINE_FOR`, … Anything a conflict check,
-  privilege wall, or limitation-period calculation reads. Unapproved predicate =
-  rejected write.
+- **Governing** (closed, 17 in the legal pack): `REPRESENTS`, `ADVERSE_TO`, `CITES`,
+  `OVERRULES`, `AFFILIATE_OF`, `SUBJECT_TO_PRIVILEGE`, `DEADLINE_FOR`, … Anything a
+  conflict check, privilege wall, or limitation-period calculation reads. Unapproved
+  predicate = rejected write.
 - **Descriptive** (open): `CONCERNS_TOPIC`, `IN_INDUSTRY`, `MENTIONS`. Sprawl costs
   retrieval precision, not a malpractice claim.
 
@@ -105,6 +105,76 @@ Grounding is `STANDARD` only — exact and label matching, no LLM. An LLM decidi
 that `acts_on_behalf_of` means `REPRESENTS` is a schema decision made by a model.
 
 The test for tier: *would a wrong answer embarrass you, or expose you?*
+
+## The rules, and what each one actually asks
+
+Three rules ship in the legal pack. They are easy to confuse in the UI, because the
+trace groups every refusal under one heading — so a stale-citation warning arrives
+looking like a conflict. They are not the same kind of finding and they call for
+different reactions.
+
+| Rule | Asks | Kind of finding | Remedy | Effect |
+|---|---|---|---|---|
+| `conflict_check` | is the firm on both sides of one party? | ethics / conduct | decline, or raise a barrier | notify |
+| `conflict_via_affiliate` | is the firm against a company its own client part-owns? | ethics / conduct | as above, usually a barrier | notify |
+| `authority_stale` | does this document rest on law that has since been overturned? | quality / competence | revise the advice | notify |
+
+### Notify, withhold, and the one true wall
+
+`effect:` is the second axis on a block, and no rule finding in the legal pack withholds.
+A rule finding is something the graph *noticed*; a lawyer decides what it means, and they
+cannot decide from evidence they were never shown. Withholding a conflicted party's file
+is how "who is the counsel for Halveston" came back empty.
+
+An **ethical screen** is the remaining prohibition, and the shape is right: a screen is a
+recorded instruction that a named person must not see a matter. It never passed through
+`blocks:` at all. Healthcare's `CONTRAINDICATION_ALERT` keeps `withhold` — a clinician
+acting on a suppressed allergy is direct harm — so the two packs disagree by a one-word
+YAML diff, which is what the abstraction is for.
+
+A notify finding still sorts first by premise count, still names its premises, and
+suppresses nothing.
+
+### `authority_stale` is not an ethics finding
+
+```
+when:  (d:Document)-[:CITES]->(a:Authority)          a document relies on a case
+       (x:Authority)-[:OVERRULES]->(a:Authority)     another case overturned it
+then:  (d)-[:RELIES_ON_STALE_AUTHORITY]->(a)
+```
+
+Nothing about acting against a client. The advice was very likely correct when
+written — which is exactly why it is worth surfacing rather than treating as an error.
+The demo fixture states the consequence: *"Any advice relying on The Aquitaine for a
+notice-period calculation should be revised."* A deadline calculated from overruled law
+is a negligence exposure, which is why the predicate is governing rather than a note.
+
+**Known rough edge.** The finding is document-level, so it is reported against the whole
+passage rather than the topic it concerns. Asking "does acting for Halveston create a
+conflict?" can therefore raise a notice about an advice document because it cites an
+overruled case *on notice periods* — two unrelated subjects. Correct as far as it goes,
+and confusing to read. Much less costly since it became `notify`: the reader sees the
+document and the finding together, rather than losing the passage to an unrelated cause.
+
+### Which end a block taints, and why it differs per rule
+
+`blocks:` names the endpoint a finding is *about* — which is what the trace reports and,
+for a `withhold` finding, what stops being handed over. It is a separate axis from
+`governing`: every block is governing, but most governing predicates are ordinary facts.
+Orthogonal to `effect:` on purpose, so narrowing a finding to `notify` does not throw away
+which end it concerns.
+
+| Predicate | Blocks | Reasoning |
+|---|---|---|
+| `POTENTIAL_CONFLICT` | `object` — the party | Blocking the *matter* blacks out the file the disputes team is retained to run. Withholding the party is the barrier's substance; withholding the matter withholds the work. |
+| `RELIES_ON_STALE_AUTHORITY` | `subject` — the document | Blocking the authority would suppress "*The Marisol* overrules *The Aquitaine*" — the single fact the reader most needs. |
+| `CONTRAINDICATION_ALERT` (healthcare) | `object` — the drug | Evidence about the patient is what the clinician is treating them from; suppressing it would withhold the record to protect the record. |
+
+`POTENTIAL_CONFLICT` was `both` until a conflict about a party the firm also
+represented made that client's own file unanswerable — "who is the counsel for
+Halveston" returned nothing. The per-person half of a barrier is an ethical screen
+(`MatterScreen`, keyed by user), which is the control a real risk memo describes:
+named individuals, not a matter nobody may read.
 
 ## Data flow
 
