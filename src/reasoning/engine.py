@@ -132,6 +132,17 @@ class ReasonerReport:
     rules_skipped: dict[str, str] = field(default_factory=dict)
     facts_considered: int = 0
 
+    rules_starved: dict[str, str] = field(default_factory=dict)
+    """Rules that were evaluated and whose join came up empty, and which premise emptied it.
+
+    The third state, and the one that was unreportable. `rules_skipped` is a rule that could never
+    fire and `conclusions_refused` is one the contract refused, but a rule whose premises simply
+    matched nothing produced no signal at all -- and a starved conflict check is indistinguishable
+    from a clean one, which is the failure this whole design is organised against.
+
+    Names the *premise*, not just the rule: "no ADVERSE_TO fact has a Matter subject" is
+    actionable, "conflict_check found nothing" is not."""
+
     conclusions_refused: list[str] = field(default_factory=list)
     """Matches an invariant refused, one line each.
 
@@ -163,6 +174,7 @@ class ReasonerReport:
             "count": self.count,
             "rules_evaluated": self.rules_evaluated,
             "rules_skipped": self.rules_skipped,
+            "rules_starved": self.rules_starved,
             "conclusions_refused": list(self.conclusions_refused),
             "facts_considered": self.facts_considered,
         }
@@ -278,6 +290,17 @@ class Reasoner:
                     grown.append((merged, [*used, *chain]))
             partial = grown
             if not partial:
+                # Which premise emptied the join, and whether it had candidates at all. "No fact
+                # matches this premise" and "facts matched but none joined" are different problems:
+                # the first is a missing or wrongly-shaped fact, the second is a genuine absence of
+                # the relationship. Silence here made a starved conflict check look like a clean one.
+                report.rules_starved[rule.rule_id] = (
+                    f"no {pattern.predicate} fact matches "
+                    f"({pattern.subject_var}:{pattern.subject_type})->"
+                    f"({pattern.object_var}:{pattern.object_type})"
+                    if not candidates
+                    else f"{len(candidates)} {pattern.predicate} facts, none joining the rest"
+                )
                 return []
 
         # Shortest first, so where two chains reach one conclusion the cited proof is the

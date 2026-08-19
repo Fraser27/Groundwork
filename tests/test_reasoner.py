@@ -341,6 +341,47 @@ class TestAForbiddenConclusionIsRefusedAndReported:
         assert len(report.conclusions_refused) == 1
         assert "party -> party" in report.conclusions_refused[0]
 
+    def test_the_starved_rule_says_which_premise_emptied_the_join(self, ctx):
+        """The state that was unreportable, and the reason this bug was found by hand.
+
+        `rules_skipped` covers a rule that could never fire and `conclusions_refused` a conclusion
+        the contract refused. A rule whose premises simply matched nothing produced no signal at
+        all — so a conflict check starved by a wrongly-shaped fact looked exactly like a clean
+        conflict check, which is the failure the whole design is organised against.
+        """
+        report = Reasoner(load_ontology("legal")).run(ctx, self._party_subject_adversity())
+
+        assert report.count == 0
+        starved = report.rules_starved["conflict_check"]
+        assert "ADVERSE_TO" in starved, "naming the rule alone is not actionable"
+        assert "Matter" in starved, "the reader needs the shape that was wanted"
+
+    def test_it_distinguishes_no_candidates_from_none_joining(self, ctx):
+        """Two different problems. No matching fact is a missing or wrongly-shaped claim; facts
+        that matched but did not join is a genuine absence of the relationship."""
+        onto = load_ontology("legal")
+        matched_but_unjoined = [
+            fact("counsel:sian-aldridge", "REPRESENTS", "party:halveston-chartering-limited"),
+            fact("matter:" + NTL, "ADVERSE_TO", "party:someone-unrelated", matter=NTL),
+        ]
+        starved = Reasoner(onto).run(ctx, matched_but_unjoined).rules_starved["conflict_check"]
+        assert "none joining" in starved
+
+    def test_a_rule_that_fires_is_not_reported_as_starved(self, ctx):
+        """The guard on the guard. A report that named every rule would be noise nobody reads."""
+        facts = [
+            fact("counsel:thorne-vaux", "REPRESENTS", "party:calder-shipping-ag", matter=MBC),
+            fact("matter:" + NTL, "ADVERSE_TO", "party:calder-shipping-ag", matter=NTL),
+        ]
+        report = Reasoner(load_ontology("legal")).run(ctx, facts)
+
+        assert report.count == 1
+        assert "conflict_check" not in report.rules_starved
+
+    def test_it_reaches_the_report_a_person_reads(self, ctx):
+        report = Reasoner(load_ontology("legal")).run(ctx, self._party_subject_adversity())
+        assert "conflict_check" in report.to_dict()["rules_starved"]
+
     def test_the_affiliate_rule_needs_the_matter_orientation_too(self, ctx):
         """Why this mattered beyond the one bad conflict. `conflict_via_affiliate` was reachable in
         production -- `AFFILIATE_OF` was extracted and approved -- and drew nothing, because every
