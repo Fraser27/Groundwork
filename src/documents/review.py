@@ -292,6 +292,14 @@ class ReviewQueue:
 
         Cross-tenant and out-of-scope matters are rejected before anything is written,
         so a single bad assertion cannot leave a document half-staged.
+
+        **A claim somebody has already decided is left alone.** `assertion_id` is
+        content-addressed, so re-extracting a document or re-running the reasoner produces the
+        *same* id for an unchanged fact — and writing a fresh STAGED record over it would reset
+        `review_state`, `lifecycle` and `reviewed_by`. Approving an inferred conflict then silently
+        un-approved it: the reasoning pass that runs after an approval re-derived the same
+        conclusion and overwrote the decision, so the veto never took effect while the UI reported
+        success. Re-staging is meant to converge, and converging must not mean forgetting.
         """
         for a in assertions:
             if a.tenant_id != ctx.tenant_id:
@@ -301,8 +309,9 @@ class ReviewQueue:
             if a.matter_id is not None:
                 ctx.assert_can_read_matter(a.matter_id)
 
-        near = self._near_duplicates(ctx, assertions)
-        for a in assertions:
+        fresh = [a for a in assertions if not self._already_decided(ctx, a.assertion_id)]
+        near = self._near_duplicates(ctx, fresh)
+        for a in fresh:
             self.store.put(
                 AssertionRecord(
                     assertion=a,
@@ -311,8 +320,26 @@ class ReviewQueue:
                     near_duplicates=near.get(a.assertion_id, ()),
                 )
             )
-        logger.info("staged %d assertions for job %s", len(assertions), job_id)
+        skipped = len(assertions) - len(fresh)
+        logger.info(
+            "staged %d assertions for job %s (%d already decided, left as they are)",
+            len(fresh),
+            job_id,
+            skipped,
+        )
+        # Every id the caller handed over, decided or not: it asked what is in the queue for this
+        # job, and omitting the ones that were already settled would read as a partial failure.
         return [a.assertion_id for a in assertions]
+
+    def _already_decided(self, ctx: AuthContext, assertion_id: str) -> bool:
+        """Whether this exact claim already carries a review decision worth keeping.
+
+        PENDING is not a decision, so a pending record is refreshed as before — that keeps
+        re-extraction updating a claim nobody has looked at yet. Anything else is somebody's
+        judgement, or a system of record's, and re-staging must not overwrite it.
+        """
+        existing = self.store.get(ctx.tenant_id, assertion_id)
+        return existing is not None and existing.assertion.review_state is not ReviewState.PENDING
 
     def _near_duplicates(
         self, ctx: AuthContext, assertions: Sequence[Assertion]

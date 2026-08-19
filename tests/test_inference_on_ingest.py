@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.documents.review import Lifecycle
 from src.graph.assertions import ReviewState
 from src.graph.scope import AuthContext
 from src.ontology.loader import load_ontology
@@ -358,6 +359,128 @@ class TestApprovalDrawsWhatItMakesPossible:
         assert r.status_code == 200
         assert r.json()["review_state"] == "APPROVED"
         assert r.json()["inferred"] == 0
+
+
+class TestApprovingAConclusionSurvivesTheNextPass:
+    """The regression that made approving a conflict a no-op.
+
+    `assertion_id` is content-addressed, so a reasoning pass over unchanged premises re-derives
+    the *same* conclusion with the *same* id. Re-staging it wrote a fresh PENDING record over the
+    approved one — so approving a conflict silently un-approved it, the veto never took effect,
+    and the UI reported success. "Idempotent" was true of the id and false of the decision.
+
+    Found by a reviewer who approved a conflict and watched it come back.
+    """
+
+    def _approved_conflict(self, c, services, ctx):
+        onto = load_ontology("legal")
+        from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
+
+        premises = [
+            build_assertion(
+                tenant_id=TENANT,
+                subject_id=subject,
+                predicate=predicate,
+                object_id=obj,
+                epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+                method="llm:test@v1",
+                confidence=0.9,
+                source_locator=SourceLocator(
+                    document_id="d1", filename="x.pdf", page=1, quote="a quote"
+                ),
+                matter_id=matter,
+                allowed_predicates=onto.extractable_predicates,
+            )
+            for subject, predicate, obj, matter in (
+                ("counsel:sian-aldridge", "REPRESENTS", "party:calder-shipping-ag", MBC),
+                ("matter:" + NTL, "ADVERSE_TO", "party:calder-shipping-ag", NTL),
+            )
+        ]
+        services.review_queue.stage(ctx, premises, job_id="j1")
+        for p in premises:
+            c.post(f"/api/tenants/{TENANT}/assertions/{p.assertion_id}/approve")
+
+        conflict = next(
+            r
+            for r in services.review_queue.visible(ctx)
+            if r.assertion.predicate == "POTENTIAL_CONFLICT"
+        )
+        c.post(f"/api/tenants/{TENANT}/assertions/{conflict.assertion_id}/approve")
+        return conflict.assertion_id
+
+    def test_the_approval_holds(self, client, ctx):
+        c, services = client
+        conflict_id = self._approved_conflict(c, services, ctx)
+
+        record = services.review_queue.fetch(ctx, conflict_id)
+        assert record.assertion.review_state is ReviewState.APPROVED
+        assert record.assertion.reviewed_by is not None
+
+    def test_it_holds_through_a_later_pass(self, client, ctx):
+        """The pass that clobbered it ran inside the approval request. Running another one
+        explicitly is the same hazard, and the ingest and /reason paths have always done it."""
+        c, services = client
+        conflict_id = self._approved_conflict(c, services, ctx)
+
+        infer_and_stage(load_ontology("legal"), services.review_queue, ctx)
+
+        record = services.review_queue.fetch(ctx, conflict_id)
+        assert record.assertion.review_state is ReviewState.APPROVED
+        assert record.lifecycle is Lifecycle.LIVE
+
+    def test_the_approved_conflict_actually_refuses(self, client, ctx):
+        """What the whole thing is for. A veto that resets to PENDING refuses nothing, which is
+        indistinguishable from a clean conflict check."""
+        c, services = client
+        self._approved_conflict(c, services, ctx)
+
+        from src.query.blocks import blocks_for
+        from src.query.graph_reader import GraphReader
+
+        reader = GraphReader(services.review_queue, ontology=load_ontology("legal"))
+        screen = blocks_for(ctx, graph_reader=reader, seeds=["party:calder-shipping-ag"])
+        assert screen, "the approved conflict must veto"
+        assert screen.awaiting_review == (), "it is signed off, so it is a veto not an advisory"
+
+    def test_a_pending_claim_is_still_refreshed(self, client, ctx):
+        """The restraint. Re-extraction must keep updating a claim nobody has looked at, so only
+        a *decided* record is protected."""
+        _, services = client
+        onto = load_ontology("legal")
+        from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
+
+        def claim():
+            return build_assertion(
+                tenant_id=TENANT,
+                subject_id="counsel:sian-aldridge",
+                predicate="REPRESENTS",
+                object_id="party:calder-shipping-ag",
+                epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+                method="llm:test@v1",
+                confidence=0.9,
+                source_locator=SourceLocator(
+                    document_id="d1", filename="x.pdf", page=1, quote="a quote"
+                ),
+                matter_id=MBC,
+                allowed_predicates=onto.extractable_predicates,
+            )
+
+        first = claim()
+        services.review_queue.stage(ctx, [first], job_id="j1")
+        services.review_queue.stage(ctx, [claim()], job_id="j2")
+
+        record = services.review_queue.fetch(ctx, first.assertion_id)
+        assert record.job_id == "j2", "a pending claim should still be refreshed"
+
+    def test_staging_still_reports_every_id_it_was_given(self, client, ctx):
+        """The caller asked what is in the queue for this job. Omitting the settled ones would
+        read as a partial failure."""
+        c, services = client
+        conflict_id = self._approved_conflict(c, services, ctx)
+        record = services.review_queue.fetch(ctx, conflict_id)
+
+        staged = services.review_queue.stage(ctx, [record.assertion], job_id="again")
+        assert staged == [conflict_id]
 
 
 class TestApprovingABatchRunsOnePass:
