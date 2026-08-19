@@ -247,6 +247,15 @@ governing_predicates:
     # The document only. The authority is still a real case and withholding it would suppress
     # "Brown was overruled" — the single fact the reader most needs to be told.
     blocks: subject
+    # Told, and the argument is stronger here than for a conflict. This is a quality finding, not a
+    # conduct one: nobody is harmed by seeing their own memo, and suppressing it hides the very
+    # advice that needs revising. A reader who is shown the document and told its authority was
+    # overruled can act; a reader shown nothing cannot.
+    #
+    # With this, no rule finding in the legal pack withholds and an ethical screen is the only wall
+    # left — which is the right shape. A screen is a recorded instruction that a person must not see
+    # a matter. A rule finding is something the graph noticed and a lawyer decides about.
+    effect: notify
 
 # ── Open, with exact-name grounding. No LLM adjudication. ─────────────────────
 descriptive_predicates:

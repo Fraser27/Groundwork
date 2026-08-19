@@ -278,6 +278,18 @@ class TestThePackDecidesWhatAFindingDoes:
         endpoint would erase which end the finding is about, and the reason text is built from it."""
         assert load_ontology("legal").blocked_endpoints("POTENTIAL_CONFLICT") == ("object",)
 
+    def test_stale_authority_notifies_too(self):
+        """A quality finding, not a conduct one: nobody is harmed by seeing their own memo, and
+        suppressing it hides the very advice that needs revising."""
+        assert load_ontology("legal").effect_of("RELIES_ON_STALE_AUTHORITY") == "notify"
+
+    def test_no_rule_finding_in_the_legal_pack_withholds(self):
+        """The shape this arrives at, stated as an invariant. An ethical screen is the only wall
+        left: a recorded instruction that a person must not see a matter. A rule finding is
+        something the graph noticed and a lawyer decides about."""
+        assert load_ontology("legal").blocking_predicates == frozenset()
+        assert load_ontology("legal").finding_predicates
+
     def test_a_healthcare_contraindication_still_withholds(self):
         """The packs are allowed to disagree, and this one should: a clinician acting on a
         suppressed allergy is direct harm, which is not true of a conflict a lawyer must weigh."""
@@ -321,11 +333,16 @@ class TestThePackDecidesWhatAFindingDoes:
 class TestThePackDecidesWhatBlocks:
     """Rule 5: the vocabulary is closed, so a veto cannot be a list in Python."""
 
-    def test_both_packs_declare_a_block(self):
-        """A veto expressible in the legal pack and not the healthcare one would make this a
-        legal feature the generic code happens to run."""
-        assert load_ontology("legal").blocking_predicates
-        assert load_ontology("healthcare").blocking_predicates
+    def test_both_packs_declare_a_finding(self):
+        """A finding expressible in the legal pack and not the healthcare one would make this a
+        legal feature the generic code happens to run.
+
+        `finding_predicates` rather than `blocking_predicates`: the legal pack now declares both of
+        its findings `effect: notify`, so nothing there withholds and an ethical screen is the only
+        wall. That is the intended shape, and it is why the invariant is "a finding is declared and
+        queryable" rather than "something vetoes"."""
+        assert load_ontology("legal").finding_predicates
+        assert load_ontology("healthcare").finding_predicates
 
     def test_every_blocking_predicate_is_governing(self):
         """A descriptive predicate is open, so a veto resting on one could be minted by any
@@ -724,7 +741,7 @@ class TestProductionWiringCanActuallyRefuse:
         reader = build_services().graph_reader
         assert isinstance(reader, GraphReader)
         assert reader._ontology is not None
-        assert reader._ontology.blocking_predicates
+        assert reader._ontology.finding_predicates
 
 
 def _reader_with_stale_authority(ctx: AuthContext) -> GraphReader:
@@ -823,16 +840,61 @@ class TestAConflictNotifiesRatherThanWithholds:
 class TestTheWallActuallyWithholdsEvidence:
     """A block that names a subject and does not remove its rows is a label, not a veto.
 
-    Uses stale authority, which the legal pack still declares `effect: withhold`. A conflict no
-    longer withholds, so it cannot stand in for the suppression path.
+    Uses an **ethical screen**, which is now the only thing in the legal pack that withholds.
+    Both rule findings declare `effect: notify`, so neither can stand in for the suppression path
+    -- and a screen is the more honest subject anyway, since it is the one true prohibition: a
+    recorded instruction that a person must not see a matter, whatever else they hold.
     """
 
+    @staticmethod
+    def _screened(ctx: AuthContext) -> AuthContext:
+        return AuthContext(
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            matter_denylist=frozenset({"M-1"}),
+            screen_reasons={"M-1": "acted for the opposing party"},
+        )
+
+    @staticmethod
+    def _unscoped():
+        """A reader that returns screened rows anyway, so the `Screen` layer is what is tested.
+
+        The real `GraphReader` applies the matter wall in `_readable`, so a screened row never
+        reaches `Screen.keep` and `items_withheld` is always zero -- a test resting on the first
+        line cannot tell whether the second exists. Same reasoning as `UnscopedReader` in
+        `test_resolver_tiers.py`.
+        """
+
+        row = {
+            "assertion_id": "a1",
+            "subject_id": "document:advice",
+            "predicate": "CITES",
+            "object_id": "authority:aquitaine",
+            "matter_id": "M-1",
+            "confidence": 0.9,
+            "epistemic_class": "EXTRACTED_MODEL",
+            "matched_on": ["aquitaine"],
+            "source": {},
+        }
+
+        class Unscoped:
+            def search(self, ctx, question, **kw):
+                return [dict(row)]
+
+            def expand(self, ctx, seeds, **kw):
+                return [dict(row)]
+
+            def blocking_facts(self, ctx, seeds, **kw):
+                return []
+
+        return Unscoped()
+
     def test_a_blocked_subject_is_dropped_from_the_answer(self, ctx):
-        reader = _reader_with_stale_authority(ctx)
-        res = Resolver(graph_reader=reader).resolve(ctx, "aquitaine", GovernanceSettings())
-        assert res.blocks, "the finding produced no block, so nothing was under test"
-        subjects = {row.get("subject_id") for row in res.answer or []}
-        assert "document:advice" not in subjects
+        res = Resolver(graph_reader=self._unscoped()).resolve(
+            self._screened(ctx), "aquitaine", GovernanceSettings()
+        )
+        assert res.blocks, "the screen produced no block, so nothing was under test"
+        assert res.answer == [], "a screened row must not survive the block check"
 
     def test_a_blocked_entity_is_dropped_when_it_is_the_object_of_an_edge(self, ctx):
         """`object_id` is in `SEED_KEYS`, so it seeds a block; `Screen.allows` did not test it.
@@ -844,8 +906,8 @@ class TestTheWallActuallyWithholdsEvidence:
         assert screen.keep(rows) == []
 
     def test_the_withheld_count_reaches_the_trace(self, ctx):
-        res = Resolver(graph_reader=_reader_with_stale_authority(ctx)).resolve(
-            ctx, "aquitaine", GovernanceSettings()
+        res = Resolver(graph_reader=self._unscoped()).resolve(
+            self._screened(ctx), "aquitaine", GovernanceSettings()
         )
         assert res.gate["items_withheld"] >= 1
 
@@ -862,7 +924,7 @@ class TestTheWallActuallyWithholdsEvidence:
                 return "summary"
 
         synth = Synth()
-        Planner(graph_reader=_reader_with_stale_authority(ctx), synthesiser=synth).plan(
-            ctx, "aquitaine", GovernanceSettings()
+        Planner(graph_reader=self._unscoped(), synthesiser=synth).plan(
+            self._screened(ctx), "aquitaine", GovernanceSettings()
         )
         assert "document:advice" not in synth.saw
