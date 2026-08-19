@@ -110,8 +110,16 @@ export default function ReviewQueue() {
   const decide = async (a: Assertion, decision: Decision, note?: string): Promise<boolean> => {
     setBusy((b) => ({ ...b, [a.assertion_id]: true }))
     try {
-      if (decision === 'approved') await api.approveAssertion(tenant, a.assertion_id, note)
-      else await api.rejectAssertion(tenant, a.assertion_id, note)
+      if (decision === 'approved') {
+        const approved = await api.approveAssertion(tenant, a.assertion_id, note)
+        // Told, not left to be discovered. An approval that completes a conflict has done more
+        // than record one fact, and the conclusion lands in this same queue awaiting review.
+        if (approved.inferred)
+          showToast(
+            `Approved. ${approved.inferred} conclusion${approved.inferred === 1 ? '' : 's'} now ` +
+              'follow from the facts on file and are waiting in this queue.',
+          )
+      } else await api.rejectAssertion(tenant, a.assertion_id, note)
       setDecided((d) => ({ ...d, [a.assertion_id]: decision }))
       setSelected((s) => {
         const next = new Set(s)
@@ -162,6 +170,42 @@ export default function ReviewQueue() {
         : `Approve ${targets.length} claims?`
       if (!confirm(msg)) return
     } else if (!confirm(`Reject ${targets.length} claims?`)) return
+
+    // Approvals go in one request. Each one triggers a reasoning pass over the tenant's live
+    // facts, so a loop of twenty approvals is twenty passes — and a conflict whose premises were
+    // approved together should be drawn from all of them, not from however many were live partway
+    // through the loop. Rejections keep the loop: they trigger nothing joint.
+    if (decision === 'approved') {
+      const ids = targets.map((a) => a.assertion_id)
+      setBusy((b) => ({ ...b, ...Object.fromEntries(ids.map((id) => [id, true])) }))
+      try {
+        const r = await api.approveAssertions(tenant, ids)
+        const done = new Set(r.approved.map((a) => a.assertion_id))
+        setDecided((d) => ({
+          ...d,
+          ...Object.fromEntries([...done].map((id) => [id, 'approved' as Decision])),
+        }))
+        setSelected((s) => new Set([...s].filter((id) => !done.has(id))))
+        const drawn = r.inferred
+          ? ` ${r.inferred} conclusion${r.inferred === 1 ? '' : 's'} now follow, waiting in this queue.`
+          : ''
+        if (r.failed.length === 0) showToast(`${done.size} claims approved.${drawn}`)
+        else
+          showToast(
+            `${done.size} of ${targets.length} approved.${drawn} Not changed: ` +
+              r.failed.map((f) => f.reason).join('; '),
+            'error',
+          )
+      } catch (e) {
+        showToast(
+          `Could not record those decisions: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
+          'error',
+        )
+      } finally {
+        setBusy((b) => ({ ...b, ...Object.fromEntries(ids.map((id) => [id, false])) }))
+      }
+      return
+    }
 
     let ok = 0
     for (const a of targets) if (await decide(a, decision)) ok++

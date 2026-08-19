@@ -79,6 +79,12 @@ class AssertionOut(BaseModel):
     """Whether this sits under the retrieval trust floor. Shown so a reviewer knows
     the claim is not currently shaping any answer."""
 
+    inferred: int = 0
+    """Conclusions the pack's rules drew once this approval made its premises usable.
+
+    Reported so an approval that completes a conflict says so. Nearly always 0: most facts are not
+    the last premise of anything."""
+
     near_duplicates: list[str] = Field(default_factory=list)
     """Existing entity ids this claim's endpoints may be another spelling of.
 
@@ -130,6 +136,25 @@ def _settle_document(services: Any, ctx: AuthContext, record: Any) -> None:
     # better outcome than failing an approval that went through.
     except Exception as e:  # noqa: BLE001
         logger.warning("could not settle the document state for %s: %s", document_id, e)
+
+
+def _infer_after_review(services: Any, ctx: AuthContext) -> int:
+    """Draw what the pack's rules conclude now this approval's premises are live.
+
+    Idempotent, which is what makes it safe to call per approval: `assertion_id` is
+    content-addressed, so a pass over unchanged facts re-derives the same conclusions and the
+    store collapses them. A reviewer clearing a queue therefore converges rather than accumulating.
+
+    Never raises. The approval already succeeded and is the reviewer's decision; failing the
+    request afterwards would report a decision as lost when it was recorded.
+    """
+    from src.reasoning.engine import infer_and_stage
+
+    try:
+        return infer_and_stage(services.ontology, services.review_queue, ctx).count
+    except Exception as e:  # noqa: BLE001
+        logger.warning("inference after approval failed for %s: %s", ctx.tenant_id, e)
+        return 0
 
 
 def _to_out(record: Any, floor: float) -> AssertionOut:
@@ -245,6 +270,55 @@ async def entity_duplicates(services: ServicesDep, principal: TenantDep) -> dict
     return {"groups": groups, "count": len(groups)}
 
 
+class ApproveManyRequest(BaseModel):
+    assertion_ids: list[str] = Field(min_length=1, max_length=500)
+    note: str | None = None
+
+
+@router.post("/tenants/{tenant}/assertions/approve")
+async def approve_many(
+    services: ServicesDep,
+    principal: TenantDep,
+    body: Annotated[ApproveManyRequest, Body()],
+) -> dict[str, Any]:
+    """Approve several claims and draw what they jointly imply, once.
+
+    The reason this exists rather than the caller looping: inference is a pass over the tenant's
+    live facts, so N approvals through the single endpoint means N passes. Correct but wasteful,
+    and the waste grows with the graph.
+
+    Partial success is reported rather than raised. A reviewer clearing twenty claims should not
+    lose nineteen decisions because the twentieth was already rejected by a cascade — and the
+    failures are named, because "approved 19 of 20" with no list is not something anyone can act
+    on.
+    """
+    require_reviewer(principal)
+    ctx, _ = principal
+    floor = services.settings_for(ctx.tenant_id).min_confidence_floor
+
+    approved: list[AssertionOut] = []
+    failed: list[dict[str, str]] = []
+    for assertion_id in body.assertion_ids:
+        try:
+            record = services.review_queue.approve(ctx, assertion_id, note=body.note)
+        except ScopeViolation as e:
+            raise scope_violation_to_http(e) from e
+        except (AssertionNotFound, ReviewError) as e:
+            failed.append({"assertion_id": assertion_id, "reason": str(e)})
+            continue
+        _settle_document(services, ctx, record)
+        approved.append(_to_out(record, floor))
+
+    # Once, after every approval has landed, so a conflict whose premises were approved together
+    # is drawn from all of them rather than from however many happened to be live mid-loop.
+    inferred = _infer_after_review(services, ctx) if approved else 0
+    return {
+        "approved": [a.model_dump() for a in approved],
+        "failed": failed,
+        "inferred": inferred,
+    }
+
+
 @router.post("/tenants/{tenant}/assertions/{assertion_id}/approve")
 async def approve(
     services: ServicesDep,
@@ -265,7 +339,14 @@ async def approve(
         # is — already rejected, retracted by a cascade, or auto-asserted.
         raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
     _settle_document(services, ctx, record)
-    return _to_out(record, floor)
+    # Approval is the moment a premise becomes usable, so it is the moment a conclusion resting on
+    # it becomes drawable. Ingest cannot do this job alone: a conflict's premises are
+    # EXTRACTED_MODEL, so they are PENDING when the document lands and `live_assertions` rightly
+    # excludes them. Without this, two premises could sit approved and live while the conflict they
+    # imply existed nowhere — which is the state a reviewer actually found.
+    out = _to_out(record, floor)
+    out.inferred = _infer_after_review(services, ctx)
+    return out
 
 
 @router.post("/tenants/{tenant}/assertions/{assertion_id}/reject")

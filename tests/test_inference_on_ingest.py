@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.graph.assertions import ReviewState
 from src.graph.scope import AuthContext
 from src.ontology.loader import load_ontology
 from src.reasoning.engine import infer_and_stage
@@ -247,6 +248,205 @@ class TestItIsIdempotent:
             if r.assertion.predicate == "POTENTIAL_CONFLICT"
         ]
         assert len(conflicts) == 1
+
+
+class TestApprovalDrawsWhatItMakesPossible:
+    """The gap ingest alone left, found by a reviewer looking at a real queue.
+
+    A conflict's premises are EXTRACTED_MODEL, so they are PENDING when the document lands and
+    `live_assertions` rightly excludes them — the ingest pass correctly finds nothing. Approval is
+    the moment they become usable, and nothing re-ran inference there. So both premises sat
+    approved and live while the conflict they imply existed nowhere, and the wall reported "nothing
+    refused" over a graph that could have refused.
+    """
+
+    def _pending_premises(self, services, ctx):
+        """Two model claims that together imply a conflict, staged and awaiting review."""
+        onto = load_ontology("legal")
+        from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
+
+        claims = [
+            build_assertion(
+                tenant_id=TENANT,
+                subject_id=subject,
+                predicate=predicate,
+                object_id=obj,
+                epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+                method="llm:test@v1",
+                confidence=0.9,
+                source_locator=SourceLocator(
+                    document_id="d1", filename="advice.pdf", page=1, quote="a quote"
+                ),
+                matter_id=matter,
+                allowed_predicates=onto.extractable_predicates,
+            )
+            for subject, predicate, obj, matter in (
+                ("counsel:sian-aldridge", "REPRESENTS", "party:calder-shipping-ag", MBC),
+                ("matter:" + NTL, "ADVERSE_TO", "party:calder-shipping-ag", NTL),
+            )
+        ]
+        services.review_queue.stage(ctx, claims, job_id="j1")
+        return claims
+
+    def _conflicts(self, services, ctx):
+        return [
+            r
+            for r in services.review_queue.visible(ctx)
+            if r.assertion.predicate == "POTENTIAL_CONFLICT"
+        ]
+
+    def test_pending_premises_draw_nothing(self, client, ctx):
+        """Not a bug: an unreviewed model claim must not be a premise. This is the state the
+        ingest pass legitimately leaves behind."""
+        _, services = client
+        self._pending_premises(services, ctx)
+        assert infer_and_stage(load_ontology("legal"), services.review_queue, ctx).count == 0
+
+    def test_approving_the_last_premise_draws_the_conflict(self, client, ctx):
+        c, services = client
+        first, second = self._pending_premises(services, ctx)
+
+        c.post(f"/api/tenants/{TENANT}/assertions/{first.assertion_id}/approve")
+        assert self._conflicts(services, ctx) == [], "one premise is not a conflict"
+
+        r = c.post(f"/api/tenants/{TENANT}/assertions/{second.assertion_id}/approve")
+        assert r.status_code == 200
+        assert r.json()["inferred"] == 1
+
+        conflicts = self._conflicts(services, ctx)
+        assert len(conflicts) == 1
+        assert conflicts[0].assertion.object_id == "party:calder-shipping-ag"
+
+    def test_the_drawn_conflict_is_pending(self, client, ctx):
+        """Auto-drawing must not auto-publish. Whether a conflict is real stays a lawyer's call."""
+        c, services = client
+        for claim in self._pending_premises(services, ctx):
+            c.post(f"/api/tenants/{TENANT}/assertions/{claim.assertion_id}/approve")
+
+        assert self._conflicts(services, ctx)[0].assertion.review_state is ReviewState.PENDING
+
+    def test_approving_an_ordinary_fact_reports_nothing_drawn(self, client, ctx):
+        """Most facts are not the last premise of anything, and the field should say so rather
+        than being noise on every approval."""
+        c, services = client
+        first, _ = self._pending_premises(services, ctx)
+        body = c.post(f"/api/tenants/{TENANT}/assertions/{first.assertion_id}/approve").json()
+        assert body["inferred"] == 0
+
+    def test_a_rejection_draws_nothing(self, client, ctx):
+        """Rejecting removes a premise rather than supplying one, so there is nothing to draw."""
+        c, services = client
+        first, second = self._pending_premises(services, ctx)
+        c.post(f"/api/tenants/{TENANT}/assertions/{first.assertion_id}/approve")
+        c.post(
+            f"/api/tenants/{TENANT}/assertions/{second.assertion_id}/reject",
+            json={"note": "the letter does not support this"},
+        )
+        assert self._conflicts(services, ctx) == []
+
+    def test_a_failed_inference_does_not_lose_the_approval(self, client, ctx, monkeypatch):
+        """The approval is the reviewer's decision and already succeeded. Failing the request
+        afterwards would report a recorded decision as lost."""
+        c, services = client
+        first, _ = self._pending_premises(services, ctx)
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("reasoner unavailable")
+
+        monkeypatch.setattr("src.reasoning.engine.infer_and_stage", boom)
+        r = c.post(f"/api/tenants/{TENANT}/assertions/{first.assertion_id}/approve")
+        assert r.status_code == 200
+        assert r.json()["review_state"] == "APPROVED"
+        assert r.json()["inferred"] == 0
+
+
+class TestApprovingABatchRunsOnePass:
+    """N approvals must not mean N passes over the tenant's graph, and a conflict approved as a
+    batch should be drawn from all of its premises rather than from however many were live
+    partway through a loop."""
+
+    def _two_premises(self, services, ctx):
+        onto = load_ontology("legal")
+        from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
+
+        claims = [
+            build_assertion(
+                tenant_id=TENANT,
+                subject_id=subject,
+                predicate=predicate,
+                object_id=obj,
+                epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+                method="llm:test@v1",
+                confidence=0.9,
+                source_locator=SourceLocator(
+                    document_id="d1", filename="advice.pdf", page=1, quote="a quote"
+                ),
+                matter_id=matter,
+                allowed_predicates=onto.extractable_predicates,
+            )
+            for subject, predicate, obj, matter in (
+                ("counsel:sian-aldridge", "REPRESENTS", "party:calder-shipping-ag", MBC),
+                ("matter:" + NTL, "ADVERSE_TO", "party:calder-shipping-ag", NTL),
+            )
+        ]
+        services.review_queue.stage(ctx, claims, job_id="j1")
+        return claims
+
+    def test_one_call_approves_both_and_draws_the_conflict(self, client, ctx):
+        c, services = client
+        claims = self._two_premises(services, ctx)
+
+        body = c.post(
+            f"/api/tenants/{TENANT}/assertions/approve",
+            json={"assertion_ids": [a.assertion_id for a in claims]},
+        ).json()
+
+        assert len(body["approved"]) == 2
+        assert body["failed"] == []
+        assert body["inferred"] == 1
+
+    def test_the_pass_runs_once_not_per_assertion(self, client, ctx, monkeypatch):
+        c, services = client
+        claims = self._two_premises(services, ctx)
+
+        calls = {"n": 0}
+        real = infer_and_stage
+
+        def counted(*args, **kwargs):
+            calls["n"] += 1
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr("src.reasoning.engine.infer_and_stage", counted)
+        c.post(
+            f"/api/tenants/{TENANT}/assertions/approve",
+            json={"assertion_ids": [a.assertion_id for a in claims]},
+        )
+        assert calls["n"] == 1
+
+    def test_one_bad_id_does_not_lose_the_others(self, client, ctx):
+        """A reviewer clearing twenty claims should not lose nineteen decisions to a twentieth a
+        cascade had already rejected -- and the failures are named, because "19 of 20" with no
+        list is not something anyone can act on."""
+        c, services = client
+        claims = self._two_premises(services, ctx)
+
+        body = c.post(
+            f"/api/tenants/{TENANT}/assertions/approve",
+            json={"assertion_ids": [claims[0].assertion_id, "does-not-exist"]},
+        ).json()
+
+        assert len(body["approved"]) == 1
+        assert body["failed"][0]["assertion_id"] == "does-not-exist"
+        assert "does-not-exist" in body["failed"][0]["reason"]
+
+    def test_nothing_approved_means_no_pass(self, client, ctx):
+        c, _ = client
+        body = c.post(
+            f"/api/tenants/{TENANT}/assertions/approve",
+            json={"assertion_ids": ["nope"]},
+        ).json()
+        assert body["approved"] == []
+        assert body["inferred"] == 0
 
 
 class TestTheSharedDefinition:

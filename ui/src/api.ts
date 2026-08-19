@@ -114,6 +114,13 @@ export interface Assertion {
    * a cascade. Empty means either no collision or that nothing was wired to look.
    */
   near_duplicates?: string[]
+  /**
+   * Conclusions the pack's rules drew because this approval made its premises usable.
+   *
+   * Nearly always 0 — most facts are not the last premise of anything. Non-zero means approving
+   * this one completed a derivation, and the conclusion is in the queue awaiting review.
+   */
+  inferred?: number
 }
 
 /** One node of a proof tree: an assertion plus the assertions it rests on. */
@@ -1353,6 +1360,24 @@ export const api = {
     request<Assertion>(`/tenants/${tenant}/assertions/${id}/approve`, {
       method: 'POST',
       body: JSON.stringify({ note }),
+    }),
+  /**
+   * Approve several claims in one request.
+   *
+   * Not a loop over `approveAssertion`: each approval runs a reasoning pass over the tenant's live
+   * facts, so a loop of twenty is twenty passes — and a conflict whose premises were approved
+   * together should be drawn from all of them rather than from however many were live partway
+   * through. Reports partial success, so nineteen decisions are not lost to a twentieth that a
+   * cascade had already rejected.
+   */
+  approveAssertions: (tenant: string, ids: string[], note?: string) =>
+    request<{
+      approved: Assertion[]
+      failed: { assertion_id: string; reason: string }[]
+      inferred: number
+    }>(`/tenants/${tenant}/assertions/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ assertion_ids: ids, note }),
     }),
   rejectAssertion: (tenant: string, id: string, note?: string) =>
     request<Assertion>(`/tenants/${tenant}/assertions/${id}/reject`, {
