@@ -662,6 +662,9 @@ class TestTheQueryEndpointSendsItsBlocks:
                 # A screen is an instruction, not a derivation, so nothing was combined to reach
                 # it. Which is also why it sorts below a conflict the graph had to work out.
                 "premise_count": 0,
+                # A screen is the one true prohibition: it never went through the pack's `blocks:`
+                # declaration, so it keeps the withholding default.
+                "effect": "withhold",
             }
         ]
 
@@ -676,6 +679,7 @@ class TestTheQueryEndpointSendsItsBlocks:
             "matter_id",
             "contact",
             "premise_count",
+            "effect",
         }
 
     def test_the_response_carries_the_gate_counters(self):
@@ -688,6 +692,7 @@ class TestTheQueryEndpointSendsItsBlocks:
         assert set(gate) == {
             "seeds_considered",
             "subjects_cleared",
+            "subjects_flagged",
             "items_withheld",
             "degraded",
             "blocks",

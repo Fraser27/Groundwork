@@ -589,6 +589,14 @@ export interface QueryBlock {
   /** Signed-off facts combined to reach this refusal. 0 for an ethical screen, which is an
    *  instruction rather than a derivation. Higher means less likely anyone found it unaided. */
   premise_count?: number
+  /**
+   * Whether this finding suppressed the evidence or only reported itself.
+   *
+   * Absent reads as `withhold`, which is the pack default. A conflict notifies: whether it is a
+   * real conflict is a lawyer's judgement, and they cannot make it from evidence they were never
+   * shown. An ethical screen always withholds — it is the one true prohibition.
+   */
+  effect?: 'withhold' | 'notify'
 }
 
 /** Which index a routing hit came from. `passages` is the document-chunk index. */
@@ -674,6 +682,13 @@ export interface RouterTrace {
 export interface GateTrace {
   seeds_considered: number
   subjects_cleared: number
+  /**
+   * Subjects a finding named, whether or not it withheld anything.
+   *
+   * Distinct from both other counters. A notify finding suppresses nothing, so "4 of 5 cleared, 0
+   * items withheld" beside a live conflict would be true and read as reassurance.
+   */
+  subjects_flagged?: number
   items_withheld: number
   /**
    * Why the rule-block half did not run, or null when it did.

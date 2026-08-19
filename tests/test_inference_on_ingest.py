@@ -428,9 +428,13 @@ class TestApprovingAConclusionSurvivesTheNextPass:
         assert record.assertion.review_state is ReviewState.APPROVED
         assert record.lifecycle is Lifecycle.LIVE
 
-    def test_the_approved_conflict_actually_refuses(self, client, ctx):
-        """What the whole thing is for. A veto that resets to PENDING refuses nothing, which is
-        indistinguishable from a clean conflict check."""
+    def test_the_approved_conflict_actually_reports(self, client, ctx):
+        """What the whole thing is for. An approval that silently reset to PENDING produced a
+        conflict nobody was told about, which is indistinguishable from a clean conflict check.
+
+        Asserts *reporting* rather than refusing: the pack declares `effect: notify`, so a signed-off
+        conflict names itself and suppresses nothing. `awaiting_review` must be empty because that
+        channel is for the unreviewed -- a finding in both places would read as two findings."""
         c, services = client
         self._approved_conflict(c, services, ctx)
 
@@ -439,8 +443,8 @@ class TestApprovingAConclusionSurvivesTheNextPass:
 
         reader = GraphReader(services.review_queue, ontology=load_ontology("legal"))
         screen = blocks_for(ctx, graph_reader=reader, seeds=["party:calder-shipping-ag"])
-        assert screen, "the approved conflict must veto"
-        assert screen.awaiting_review == (), "it is signed off, so it is a veto not an advisory"
+        assert screen.advisories, "the approved conflict must be reported"
+        assert screen.awaiting_review == (), "it is signed off, so it is not awaiting review"
 
     def test_a_pending_claim_is_still_refreshed(self, client, ctx):
         """The restraint. Re-extraction must keep updating a claim nobody has looked at, so only

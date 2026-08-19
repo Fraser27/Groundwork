@@ -34,7 +34,14 @@ from typing import Any
 
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
-from src.query.blocks import DEGRADED_WARNING, Block, Screen, blocks_for, seeds_from
+from src.query.blocks import (
+    DEGRADED_WARNING,
+    Block,
+    Screen,
+    advisory_warning,
+    blocks_for,
+    seeds_from,
+)
 from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 
@@ -406,6 +413,8 @@ class Resolver:
                     "why, is listed with the answer."
                 ),
             ]
+        if screen.advisories:
+            result.warnings = [*result.warnings, advisory_warning(screen)]
         return result
 
     def _attempt(

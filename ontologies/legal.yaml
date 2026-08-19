@@ -229,6 +229,15 @@ governing_predicates:
     # is the control the fixture's memo actually describes — five named individuals, not a matter
     # nobody may read.
     blocks: object
+    # Told, not withheld. Whether a potential conflict is a real one is a lawyer's judgement, and
+    # they cannot make it from evidence they were never shown — suppressing the file is how "who is
+    # the counsel for Halveston" came back with nothing. The firm's own risk memo reaches the same
+    # conclusion in the fixture: the engagement "may be accepted subject to an information barrier",
+    # which is a screen over named individuals, not a matter nobody may read.
+    #
+    # A screen remains the one true prohibition. This narrows a governance control on purpose, so
+    # the finding still appears in the trace, still names its premises, and still sorts first.
+    effect: notify
   - id: RELIES_ON_STALE_AUTHORITY
     label: relies on overruled authority
     domain: [Document]

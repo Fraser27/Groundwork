@@ -109,9 +109,16 @@ def _the_incident(ctx, onto):
 
 
 class TestTheIncidentIsReproducible:
-    """A remediation test proves nothing unless it can first create the broken state."""
+    """A remediation test proves nothing unless it can first create the broken state.
 
-    def test_the_invalid_conflict_withholds_the_answer(self, ctx, onto):
+    **What the incident now means.** When this was written `POTENTIAL_CONFLICT` declared
+    `blocks: both`, and the invalid Party->Party conflict withheld the answer outright. The pack now
+    declares `effect: notify`, so the same bad fact suppresses nothing -- it flags the firm's own
+    client as being in conflict with itself. Still wrong and still worth sweeping, but the harm is a
+    false accusation rather than a blackout. These assert the harm that exists today.
+    """
+
+    def test_the_invalid_conflict_flags_the_answer(self, ctx, onto):
         queue, _, _ = _the_incident(ctx, onto)
         reader = GraphReader(queue, ontology=onto)
 
@@ -119,14 +126,17 @@ class TestTheIncidentIsReproducible:
         assert any(h["predicate"] == "INSTRUCTS" for h in hits), "the answer must be findable"
 
         screen = blocks_for(ctx, graph_reader=reader, seeds=seeds_from(hits))
-        assert screen, "the invalid conflict must veto, or there is nothing to remediate"
-        assert screen.keep(hits) == [], "every row is withheld -- this is the incident"
+        assert screen.advisories, "the invalid conflict must be reported, or nothing is under test"
+        # Notify, so the evidence survives -- which is *why* the sweep still matters: the finding is
+        # now a false statement about the client rather than a wall in front of them.
+        assert screen.keep(hits) == hits
 
     def test_the_conflict_names_the_firms_own_client(self, ctx, onto):
         queue, _, _ = _the_incident(ctx, onto)
         reader = GraphReader(queue, ontology=onto)
         screen = blocks_for(ctx, graph_reader=reader, seeds=["party:halveston-chartering-limited"])
-        assert "party:halveston-chartering-limited" in screen.subjects
+        flagged = {b.subject for b in screen.advisories}
+        assert "party:halveston-chartering-limited" in flagged
 
 
 class TestTheSweepFindsIt:
@@ -216,6 +226,9 @@ class TestTheRemediation:
         kept = screen.keep(hits)
 
         assert not screen, "nothing should veto once the invalid conflict is withdrawn"
+        # The finding notifies rather than withholds, so "the rows survived" is true before the
+        # sweep too. What the sweep changes is that the client is no longer *accused*.
+        assert screen.advisories == [], "the false conflict must be gone, not merely non-blocking"
         assert any(h["predicate"] == "INSTRUCTS" for h in kept)
         assert any(h["object_id"] == "counsel:sian-aldridge" for h in kept)
 

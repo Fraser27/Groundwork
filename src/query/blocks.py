@@ -54,6 +54,17 @@ class Block:
     because the matching matter was invisible is the harm the wall exists to prevent. None for a
     rule block, which is not somebody's decision to explain."""
 
+    effect: str = "withhold"
+    """`withhold` to suppress the evidence, `notify` to report the finding and leave it.
+
+    On `Block` rather than as a second list on `Screen`, and that is load-bearing:
+    `Planner._without_blocked` rebuilds `Screen(blocks=...)` from a flat list, so a split held on
+    `Screen` would be lost in the rebuild and `/query` would notify where `/query/compose`
+    withheld. That divergence is the failure this module's docstring opens with.
+
+    An ethical screen keeps the default. A screen is the one true prohibition, and it never went
+    through the pack's `blocks:` declaration at all."""
+
     premise_count: int = 0
     """How many signed-off facts had to be combined before this refusal was visible.
 
@@ -70,6 +81,7 @@ class Block:
             "matter_id": self.matter_id,
             "contact": self.contact,
             "premise_count": self.premise_count,
+            "effect": self.effect,
         }
 
 
@@ -99,15 +111,38 @@ class Screen:
     `Screen` truthy and starts withholding rows."""
 
     def __bool__(self) -> bool:
-        return bool(self.blocks)
+        # Truthiness drives whether a caller filters, so only a withholding finding counts. An
+        # advisory alone must never start suppressing rows -- the same invariant `awaiting_review`
+        # already documents.
+        return bool(self.withholding)
+
+    @property
+    def withholding(self) -> list[Block]:
+        return [b for b in self.blocks if b.effect == "withhold"]
+
+    @property
+    def advisories(self) -> list[Block]:
+        """Findings a reader is told about and nothing is suppressed for."""
+        return [b for b in self.blocks if b.effect != "withhold"]
 
     @property
     def cleared(self) -> int:
-        """Seeds no block named. Zero when degraded: nothing was cleared, it was skipped."""
+        """Seeds no finding named. Zero when degraded: nothing was cleared, it was skipped.
+
+        Over *every* finding, not only the withholding ones. Counting against `subjects` would let a
+        party with a live conflict register as cleared, so the trace would read "3 of 3 cleared"
+        beside a conflict notice -- a true sentence that reads as a false one.
+        """
         if self.degraded:
             return 0
-        subjects = self.subjects
-        return sum(1 for s in set(self.seeds) if s not in subjects)
+        named = {b.subject for b in self.blocks if b.subject}
+        return sum(1 for s in set(self.seeds) if s not in named)
+
+    @property
+    def flagged(self) -> int:
+        """Seeds a finding named. The counterpart to `cleared`, so the two account for the seeds."""
+        named = {b.subject for b in self.blocks if b.subject}
+        return sum(1 for s in set(self.seeds) if s in named)
 
     def trace(self, *, items_withheld: int) -> dict[str, Any]:
         """The counters the trace UI reads. `items_withheld` is the caller's, not ours: only the
@@ -115,6 +150,9 @@ class Screen:
         return {
             "seeds_considered": len(set(self.seeds)),
             "subjects_cleared": self.cleared,
+            # Separate from `subjects_cleared` because a flagged subject is neither cleared nor
+            # necessarily withheld: a notify finding names it and suppresses nothing.
+            "subjects_flagged": self.flagged,
             "items_withheld": items_withheld,
             "degraded": self.degraded or None,
             "blocks": self.to_dict(),
@@ -123,11 +161,12 @@ class Screen:
 
     @property
     def subjects(self) -> set[str]:
-        return {b.subject for b in self.blocks if b.subject}
+        """Subjects evidence is *suppressed* for. Advisories are named, not filtered on."""
+        return {b.subject for b in self.withholding if b.subject}
 
     @property
     def matters(self) -> set[str | None]:
-        return {b.matter_id for b in self.blocks if b.matter_id}
+        return {b.matter_id for b in self.withholding if b.matter_id}
 
     def allows(self, row: Any) -> bool:
         """False for a row a block names. Non-dict rows pass: there is no id to match on."""
@@ -146,7 +185,7 @@ class Screen:
         )
 
     def keep(self, rows: list[Any]) -> list[Any]:
-        if not self.blocks:
+        if not self.withholding:
             return rows
         return [row for row in rows if self.allows(row)]
 
@@ -226,6 +265,7 @@ def blocks_for(
                         rule=str(found.get("rule") or found.get("predicate") or ""),
                         matter_id=found.get("matter_id"),
                         premise_count=int(found.get("premise_count") or 0),
+                        effect=str(found.get("effect") or "withhold"),
                     )
                 )
 
@@ -272,6 +312,27 @@ def _awaiting_review(graph_reader: Any, ctx: AuthContext, seeds: list[str]) -> t
             if isinstance(value, str) and value:
                 named.add(value)
     return tuple(sorted(named))
+
+
+def advisory_warning(screen: Screen) -> str:
+    """What a reader is told when a finding reports itself rather than withholding.
+
+    Worded as a judgement to make, not a refusal. The point of `effect: notify` is that a lawyer
+    decides whether a potential conflict is a real one, and they cannot do that from evidence they
+    were never shown — so the sentence has to say the evidence is *there*, and that the finding is
+    theirs to weigh.
+
+    Defined here rather than in either endpoint, so `/query` and `/query/compose` cannot drift into
+    telling a reader different things about the same graph.
+    """
+    findings = screen.advisories
+    subjects = sorted({b.subject for b in findings if b.subject})
+    named = ", ".join(subjects) if subjects else "this question"
+    return (
+        f"{len(findings)} {'finding' if len(findings) == 1 else 'findings'} to consider, about "
+        f"{named}. Nothing was withheld — the evidence below is complete, and whether the finding "
+        "matters is a judgement for you. Each one is listed with its reason and what it rests on."
+    )
 
 
 #: Shown when the rule-block half failed. Names the half that still ran, because "the wall is

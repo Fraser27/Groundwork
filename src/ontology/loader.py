@@ -33,6 +33,22 @@ BLOCK_ENDPOINTS: dict[str, tuple[str, ...]] = {
     "both": ("subject", "object"),
 }
 
+#: What a finding *does* to an answer, as opposed to which end of the edge it is about.
+#:
+#: Orthogonal to `blocks:` on purpose. Three different things were routed through one mechanism
+#: whose only behaviour was to drop the row: an ethical screen, where withholding is right; a
+#: potential conflict, which is a judgement a lawyer must make and cannot make from evidence they
+#: are not shown; and a document resting on overruled authority, where suppressing the memo hides
+#: the very advice that needs revising. A screen is a prohibition, a conflict is a finding, and
+#: only the first is a wall.
+#:
+#: `withhold` is the default because forgetting the flag should fail in the loud direction --
+#: over-withholding gets complained about, while a default of `notify` would silently un-veto
+#: every block in both packs.
+BLOCK_EFFECTS: frozenset[str] = frozenset({"withhold", "notify"})
+
+DEFAULT_BLOCK_EFFECT = "withhold"
+
 #: Runs of anything that is not a letter or digit, in the part of an entity id after the colon.
 #: Collapsed to one hyphen, so `Calder Shipping AG`, `calder_shipping_ag` and `calder--shipping`
 #: are one id. Unicode-aware (`\w` minus `_`) rather than ASCII-only: a German or French party
@@ -58,6 +74,14 @@ class PredicateDef:
     Declared rather than derived from `rule_conclusions`, which it currently coincides with in
     both packs. The coincidence is not a guarantee: an enrichment rule concluding something benign
     would silently become a veto, and a veto nobody declared is as bad as a veto that never ran."""
+
+    effect: str = DEFAULT_BLOCK_EFFECT
+    """Whether a fact with this predicate withholds evidence or merely reports itself.
+
+    Meaningless without `blocks:`, which says *which end* the finding is about; this says what
+    happens because of it. See `BLOCK_EFFECTS`. Only the pack author can decide: a suppressed
+    allergy is direct harm, so a contraindication withholds, while a conflict a lawyer is not shown
+    is one they cannot rule on."""
 
     transitive: bool = False
     """Whether a rule may walk a chain of these edges as one premise.
@@ -181,14 +205,36 @@ class Ontology:
         return predicate in self.governing_predicates
 
     @functools.cached_property
-    def blocking_predicates(self) -> frozenset[str]:
-        """Predicates whose facts forbid an answer rather than informing one.
+    def finding_predicates(self) -> frozenset[str]:
+        """Predicates whose facts a reader must be told about, whether or not they withhold.
 
-        Closed, and closed for a stronger reason than the rest of the vocabulary: a veto nobody
-        can query is a governance control that reports "nothing refused" because it is incapable
-        of refusing, and that reads exactly like a clean conflict check.
+        Closed, and closed for a stronger reason than the rest of the vocabulary: a finding nobody
+        can query is a governance control that reports "nothing refused" because it is incapable of
+        refusing, and that reads exactly like a clean conflict check.
+
+        This is the set to scan. `blocking_predicates` is the subset that also *suppresses*, and
+        keeping them separate is what lets one pass over the graph serve both without two
+        definitions of which end of an edge is tainted.
         """
         return frozenset(p.id for p in self.predicates.values() if p.blocks)
+
+    @functools.cached_property
+    def blocking_predicates(self) -> frozenset[str]:
+        """Findings that forbid an answer rather than reporting themselves.
+
+        Narrower than `finding_predicates` since `effect:` exists, so the docstring stays literally
+        true: these are the ones that withhold.
+        """
+        return frozenset(
+            p.id
+            for p in self.predicates.values()
+            if p.blocks and p.effect == DEFAULT_BLOCK_EFFECT
+        )
+
+    def effect_of(self, predicate: str) -> str:
+        """`withhold` or `notify`. Defaults for a predicate the pack does not know."""
+        pdef = self.predicates.get(predicate)
+        return pdef.effect if pdef is not None else DEFAULT_BLOCK_EFFECT
 
     @functools.cached_property
     def transitive_predicates(self) -> frozenset[str]:
@@ -440,6 +486,7 @@ def _parse(raw: dict[str, Any]) -> Ontology:
                 help=p.get("help"),
                 symmetric=bool(p.get("symmetric", False)),
                 blocks=str(p.get("blocks", "") or ""),
+                effect=str(p.get("effect", "") or DEFAULT_BLOCK_EFFECT),
                 transitive=bool(p.get("transitive", False)),
             )
 
@@ -510,6 +557,19 @@ def _validate_blocks(predicates: dict[str, PredicateDef], domain: str) -> None:
             raise ValueError(
                 f"predicate {pdef.id!r} in the {domain} pack declares blocks: {pdef.blocks!r} but "
                 "is descriptive; only a governing predicate may veto an answer"
+            )
+        if pdef.effect not in BLOCK_EFFECTS:
+            raise ValueError(
+                f"predicate {pdef.id!r} in the {domain} pack declares effect: {pdef.effect!r}, "
+                f"which is not one of {sorted(BLOCK_EFFECTS)}; an unreadable effect would fall "
+                "back to withholding and quietly suppress evidence the author meant to surface"
+            )
+        if pdef.effect != DEFAULT_BLOCK_EFFECT and not pdef.blocks:
+            # `effect:` says what happens *because of* a finding; `blocks:` says which end the
+            # finding is about. One without the other describes a consequence attached to nothing.
+            raise ValueError(
+                f"predicate {pdef.id!r} in the {domain} pack declares effect: {pdef.effect!r} "
+                "without blocks:; there is no finding for that effect to apply to"
             )
 
 

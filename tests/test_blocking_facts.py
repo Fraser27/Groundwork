@@ -221,6 +221,7 @@ class TestTheRealReaderCanRefuse:
                 "matter_id",
                 "confidence",
                 "premise_count",
+                "effect",
             }
             assert row["subject_id"] and row["reason"] and row["rule"]
 
@@ -253,6 +254,68 @@ class TestTheRealReaderCanRefuse:
         reader = _reader_with_conflict(ctx)
         first = reader.blocking_facts(ctx, ["party:calder-plc"])
         assert first == reader.blocking_facts(ctx, ["party:calder-plc"])
+
+
+class TestThePackDecidesWhatAFindingDoes:
+    """`blocks:` says which end a finding is about; `effect:` says what happens because of it.
+
+    Two axes, because collapsing them would lose the endpoint. Three different things routed
+    through one mechanism whose only behaviour was to drop the row, and only one of them is a wall.
+    """
+
+    def test_a_conflict_notifies(self):
+        assert load_ontology("legal").effect_of("POTENTIAL_CONFLICT") == "notify"
+
+    def test_a_conflict_is_still_a_finding(self):
+        """Notify must not mean invisible. It stays in the set `blocking_facts` scans, or the
+        reader is told nothing at all -- which is worse than withholding."""
+        onto = load_ontology("legal")
+        assert "POTENTIAL_CONFLICT" in onto.finding_predicates
+        assert "POTENTIAL_CONFLICT" not in onto.blocking_predicates
+
+    def test_the_endpoint_survives_the_effect(self):
+        """Why `effect:` is a second key rather than a `blocks: notify` value. Spelling it as an
+        endpoint would erase which end the finding is about, and the reason text is built from it."""
+        assert load_ontology("legal").blocked_endpoints("POTENTIAL_CONFLICT") == ("object",)
+
+    def test_a_healthcare_contraindication_still_withholds(self):
+        """The packs are allowed to disagree, and this one should: a clinician acting on a
+        suppressed allergy is direct harm, which is not true of a conflict a lawyer must weigh."""
+        onto = load_ontology("healthcare")
+        assert onto.effect_of("CONTRAINDICATION_ALERT") == "withhold"
+        assert "CONTRAINDICATION_ALERT" in onto.blocking_predicates
+
+    def test_withhold_is_the_default(self):
+        """Forgetting the flag must fail in the loud direction. A default of notify would silently
+        un-veto every block in both packs."""
+        assert load_ontology("legal").effect_of("REPRESENTS") == "withhold"
+        assert load_ontology("legal").effect_of("NOT_A_PREDICATE") == "withhold"
+
+    def test_an_unreadable_effect_fails_the_pack(self, tmp_path):
+        from src.ontology import loader
+
+        pack = tmp_path / "bad.yaml"
+        pack.write_text(
+            "domain: bad\nversion: 1\nentity_types: []\n"
+            "governing_predicates:\n  - id: X\n    blocks: object\n    effect: maybe\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        with pytest.raises(ValueError, match="effect"):
+            loader._parse(__import__("yaml").safe_load(pack.read_text()))
+
+    def test_an_effect_with_no_finding_fails_the_pack(self, tmp_path):
+        """A consequence attached to nothing. `effect:` says what happens *because of* a finding,
+        so without `blocks:` there is no finding for it to apply to."""
+        from src.ontology import loader
+
+        pack = tmp_path / "bad2.yaml"
+        pack.write_text(
+            "domain: bad\nversion: 1\nentity_types: []\n"
+            "governing_predicates:\n  - id: X\n    effect: notify\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        with pytest.raises(ValueError, match="no finding"):
+            loader._parse(__import__("yaml").safe_load(pack.read_text()))
 
 
 class TestThePackDecidesWhatBlocks:
@@ -548,6 +611,7 @@ class TestFailsOpenButLoudly:
         assert screen.trace(items_withheld=0) == {
             "seeds_considered": 1,
             "subjects_cleared": 1,
+            "subjects_flagged": 0,
             "items_withheld": 0,
             "degraded": None,
             "blocks": [],
@@ -589,6 +653,7 @@ class TestTheApiReportsWhatTheWallDid:
         assert set(gate) == {
             "seeds_considered",
             "subjects_cleared",
+            "subjects_flagged",
             "items_withheld",
             "degraded",
             "blocks",
@@ -662,15 +727,112 @@ class TestProductionWiringCanActuallyRefuse:
         assert reader._ontology.blocking_predicates
 
 
-class TestTheWallActuallyWithholdsEvidence:
-    """A block that names a subject and does not remove its rows is a label, not a veto."""
+def _reader_with_stale_authority(ctx: AuthContext) -> GraphReader:
+    """A finding that still *withholds*, so the suppression path stays under test.
 
-    def test_a_blocked_subject_is_dropped_from_the_answer(self, ctx):
+    `POTENTIAL_CONFLICT` notifies now, so it can no longer stand in for a veto. Stale authority
+    is the pack's remaining `effect: withhold` finding in the legal pack.
+    """
+    onto = load_ontology("legal")
+    queue = ReviewQueue(InMemoryAssertionStore(), governing_predicates=onto.governing_predicates)
+    _live(
+        ctx,
+        queue,
+        [
+            ("document:advice", "CITES", "authority:aquitaine", "M-1"),
+            ("authority:marisol", "OVERRULES", "authority:aquitaine", "M-1"),
+        ],
+        "j1",
+    )
+    live = [r.assertion for r in queue.visible(ctx) if r.is_current]
+    inferences = [i.assertion for i in Reasoner(onto).run(ctx, live).inferences]
+    assert any(a.predicate == "RELIES_ON_STALE_AUTHORITY" for a in inferences), (
+        "the reasoner drew no stale-authority finding, so this fixture proves nothing"
+    )
+    queue.stage(ctx, inferences, job_id="j2")
+    for a in inferences:
+        if a.review_state is ReviewState.PENDING:
+            queue.approve(ctx, a.assertion_id)
+    queue.promote(ctx, job_id="j2")
+    return GraphReader(queue, ontology=onto)
+
+
+class TestAConflictNotifiesRatherThanWithholds:
+    """The distinction the pack now draws, and the reason it draws it.
+
+    Whether a potential conflict is a real one is a lawyer's judgement, and they cannot make it
+    from evidence they were never shown. So a conflict names itself, sorts first, carries its
+    premises — and suppresses nothing. An ethical screen remains the one true prohibition.
+    """
+
+    def test_the_conflict_is_still_reported(self, ctx):
+        res = Resolver(graph_reader=_reader_with_conflict(ctx)).resolve(
+            ctx, "calder", GovernanceSettings()
+        )
+        assert res.blocks, "a notify finding must still be named, or nobody learns of it"
+        assert [b.rule for b in res.blocks] == ["conflict_check"]
+
+    def test_but_the_evidence_survives(self, ctx):
+        """The behaviour the user asked for: notified, not walled."""
         reader = _reader_with_conflict(ctx)
         res = Resolver(graph_reader=reader).resolve(ctx, "calder", GovernanceSettings())
-        assert res.blocks, "the conflict produced no block, so nothing was under test"
+        assert res.gate["items_withheld"] == 0
+        assert any(
+            row.get("subject_id") == "party:calder-plc" or row.get("object_id") == "party:calder-plc"
+            for row in res.answer or []
+        ), "the party the conflict is about must still appear in the evidence"
+
+    def test_an_advisory_alone_does_not_make_the_screen_truthy(self, ctx):
+        """`bool(screen)` is what drives filtering, so a notify finding must not trip it."""
+        screen = blocks_for(
+            ctx, graph_reader=_reader_with_conflict(ctx), seeds=["party:calder-plc"]
+        )
+        assert screen.advisories
+        assert not screen.withholding
+        assert not screen
+
+    def test_a_flagged_party_is_not_counted_as_cleared(self, ctx):
+        """The trap. Counting a flagged subject as cleared would render "3 of 3 cleared" beside a
+        conflict notice -- a true sentence that reads as a false one."""
+        screen = blocks_for(
+            ctx, graph_reader=_reader_with_conflict(ctx), seeds=["party:calder-plc"]
+        )
+        trace = screen.trace(items_withheld=0)
+        assert trace["subjects_cleared"] == 0
+        assert trace["subjects_flagged"] == 1
+
+    def test_the_synthesiser_does_see_a_notified_fact(self, ctx):
+        """The inverse of the withholding guarantee, and the point of notifying: a model asked to
+        summarise a conflict question needs the facts the conflict is about."""
+
+        class Synth:
+            def __init__(self) -> None:
+                self.saw = ""
+
+            def summarise(self, question, *, parts, blocks) -> str:
+                self.saw = str(parts)
+                return "summary"
+
+        synth = Synth()
+        Planner(graph_reader=_reader_with_conflict(ctx), synthesiser=synth).plan(
+            ctx, "calder", GovernanceSettings()
+        )
+        assert "party:calder-plc" in synth.saw
+
+
+class TestTheWallActuallyWithholdsEvidence:
+    """A block that names a subject and does not remove its rows is a label, not a veto.
+
+    Uses stale authority, which the legal pack still declares `effect: withhold`. A conflict no
+    longer withholds, so it cannot stand in for the suppression path.
+    """
+
+    def test_a_blocked_subject_is_dropped_from_the_answer(self, ctx):
+        reader = _reader_with_stale_authority(ctx)
+        res = Resolver(graph_reader=reader).resolve(ctx, "aquitaine", GovernanceSettings())
+        assert res.blocks, "the finding produced no block, so nothing was under test"
         subjects = {row.get("subject_id") for row in res.answer or []}
-        assert "party:calder-plc" not in subjects
+        assert "document:advice" not in subjects
 
     def test_a_blocked_entity_is_dropped_when_it_is_the_object_of_an_edge(self, ctx):
         """`object_id` is in `SEED_KEYS`, so it seeds a block; `Screen.allows` did not test it.
@@ -682,8 +844,8 @@ class TestTheWallActuallyWithholdsEvidence:
         assert screen.keep(rows) == []
 
     def test_the_withheld_count_reaches_the_trace(self, ctx):
-        res = Resolver(graph_reader=_reader_with_conflict(ctx)).resolve(
-            ctx, "calder", GovernanceSettings()
+        res = Resolver(graph_reader=_reader_with_stale_authority(ctx)).resolve(
+            ctx, "aquitaine", GovernanceSettings()
         )
         assert res.gate["items_withheld"] >= 1
 
@@ -700,7 +862,7 @@ class TestTheWallActuallyWithholdsEvidence:
                 return "summary"
 
         synth = Synth()
-        Planner(graph_reader=_reader_with_conflict(ctx), synthesiser=synth).plan(
-            ctx, "calder", GovernanceSettings()
+        Planner(graph_reader=_reader_with_stale_authority(ctx), synthesiser=synth).plan(
+            ctx, "aquitaine", GovernanceSettings()
         )
-        assert "party:calder-plc" not in synth.saw
+        assert "document:advice" not in synth.saw

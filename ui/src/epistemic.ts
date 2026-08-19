@@ -130,6 +130,8 @@ export const HELP = {
     'Being on a matter’s team. You can read a matter only if someone put you on it, so the starting position for everyone is no access at all. Taking someone off does not erase the record that they were on it, the file has to show who could read what, and when.',
   ethicalScreen:
     'A recorded instruction that one person must not see one matter, whatever else they hold. It overrides being on the team, and it overrides holding the administrator role, because a wall a senior person can read through is not a wall. Lifting one is also recorded rather than tidied away.',
+  blockKinds:
+    'Three different findings are listed here, and they call for different reactions. An ethical screen is a recorded instruction that one person must not see one matter. A potential conflict means the firm may be on both sides of a party — a conduct question for a lawyer to judge. Relying on overruled authority is neither: it means a document rests on a case that has since been overturned, so the advice was very likely right when written and now needs revising. Only the first two are about ethics, and only a screen withholds anything \u2014 a conflict and a stale citation are reported for you to weigh, with the evidence left intact.',
   accessDecision:
     'The reason a matter is or is not open to someone, in four possibilities: they are on the team; they are screened from it; nobody has put them on it; or they hold the administrator role and can reach it without being on the team. Naming the reason matters, “screened” calls for a conversation with the risk team, while “not on the team” is usually just someone forgetting to staff them.',
   accessAudit:

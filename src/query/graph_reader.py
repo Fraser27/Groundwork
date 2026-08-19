@@ -204,7 +204,15 @@ class GraphReader:
         return self._ontology is not None and self._ontology.is_governing(predicate)
 
     def blocking_facts(self, ctx: AuthContext, seeds: list[str]) -> list[dict[str, Any]]:
-        """Facts that FORBID an answer about these seeds, as opposed to `expand()`'s that inform one.
+        """Findings about these seeds — what the graph has to say *about* the evidence.
+
+        Each row carries an `effect`: `withhold` suppresses the evidence, `notify` reports the
+        finding and leaves it. Three different things route through here and only one is a wall. An
+        ethical screen is a prohibition. A potential conflict is a judgement a lawyer must make, and
+        one they cannot make from evidence they were never shown. A document resting on overruled
+        authority needs revising, and suppressing it hides the advice that says so. The pack decides
+        which is which; this method finds them all in one pass so there is never a second definition
+        of which end of an edge a finding is about.
 
         Which predicates veto is the pack's call, not this module's: `blocks:` on a governing
         predicate names the tainted end of the edge. Hardcoding `POTENTIAL_CONFLICT` here would put
@@ -243,7 +251,10 @@ class GraphReader:
                 "answer is unknown"
             )
 
-        blocking = self._ontology.blocking_predicates
+        # Every finding, not only the withholding ones. One pass keeps a single definition of which
+        # end of an edge is tainted; the `effect` on each row is what decides whether the caller
+        # suppresses evidence or merely reports the finding.
+        blocking = self._ontology.finding_predicates
         if not blocking:
             return []
 
@@ -278,6 +289,9 @@ class GraphReader:
                     # have found this unaided" -- and it is deliberately not confidence, which
                     # moves the other way: reach makes a finding less certain and more valuable.
                     "premise_count": len(a.premises),
+                    # The pack's call: does this finding suppress the evidence, or report itself
+                    # to a reader who then judges it?
+                    "effect": self._ontology.effect_of(a.predicate),
                 }
 
         # Furthest reach first, then the firmer of two equals, then the id so a tie is broken the
@@ -309,7 +323,10 @@ class GraphReader:
                 "no ontology pack is wired into the graph reader, so which predicates veto an "
                 "answer is unknown"
             )
-        blocking = self._ontology.blocking_predicates
+        # Findings, not only the withholding ones. A conflict that merely notifies still matters
+        # more while nobody has reviewed it, so narrowing this to `blocking_predicates` would drop
+        # exactly the claims this advisory exists to surface.
+        blocking = self._ontology.finding_predicates
         wanted = _seed_set(seeds)
         if not blocking or not wanted:
             return []

@@ -41,7 +41,14 @@ from typing import Any
 
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
-from src.query.blocks import DEGRADED_WARNING, Block, Screen, blocks_for, seeds_from
+from src.query.blocks import (
+    DEGRADED_WARNING,
+    Block,
+    Screen,
+    advisory_warning,
+    blocks_for,
+    seeds_from,
+)
 from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 from src.query.resolver import UNGOVERNED_BLOCKED, BlockedQuery, Tier
@@ -383,6 +390,10 @@ class Planner:
         answer.gate = screen.trace(items_withheld=withheld)
         if screen.degraded:
             answer.warnings.append(DEGRADED_WARNING)
+        if screen.advisories:
+            # Both endpoints, one wording. A reader told about a conflict on `/query` and not on
+            # `/query/compose` would get two different accounts of the same graph.
+            answer.warnings.append(advisory_warning(screen))
 
         if allow_synthesis and answer.parts and self._synthesiser is not None:
             answer.synthesis = self._synthesise(question, answer)

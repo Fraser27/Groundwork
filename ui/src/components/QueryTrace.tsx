@@ -66,6 +66,9 @@ export default function QueryTrace({
   onOpenPassage?: (p: QueryPassage) => void
 }) {
   const gateBlocks = gate?.blocks ?? blocks
+  // Absent `effect` reads as withhold, matching the pack default and older responses.
+  const withheldBlocks = gateBlocks.filter((b) => (b.effect ?? 'withhold') === 'withhold')
+  const advisoryBlocks = gateBlocks.filter((b) => b.effect === 'notify')
   const ran = lanes.filter((l) => l.ran)
   const skipped = lanes.filter((l) => !l.ran)
 
@@ -124,9 +127,15 @@ export default function QueryTrace({
           title="Ethical wall"
           summary={gateSummary(gate, gateBlocks)}
           tag={
-            gateBlocks.length > 0 ? (
+            withheldBlocks.length > 0 ? (
               <span className="tag tag-red">
-                {gateBlocks.length} {gateBlocks.length === 1 ? 'refusal' : 'refusals'}
+                {withheldBlocks.length} {withheldBlocks.length === 1 ? 'refusal' : 'refusals'}
+              </span>
+            ) : advisoryBlocks.length > 0 ? (
+              // Orange, not red: nothing was suppressed. But not green either — a conflict the
+              // reader is not told about is the failure this step exists to prevent.
+              <span className="tag tag-orange">
+                {advisoryBlocks.length} to review
               </span>
             ) : gate?.degraded ? (
               // Never green here. "Nothing refused" over a check that did not run is the exact
@@ -139,6 +148,8 @@ export default function QueryTrace({
             )
           }
           defaultOpen={gateBlocks.length > 0 || Boolean(gate?.degraded)}
+          // Advisories are inside `gateBlocks`, so they open the step too — a conflict that needs
+          // a click to find is the same failure as a refusal that does.
           last
         >
           <GateStep gate={gate} blocks={gateBlocks} usedFactCount={usedFactCount} />
@@ -787,10 +798,14 @@ function gateSummary(gate: GateTrace | null | undefined, blocks: QueryBlock[]): 
   if (gate.degraded) {
     return 'Screens applied, but the graph was not checked for conflicts.'
   }
-  return (
-    `${gate.subjects_cleared} of ${gate.seeds_considered} cleared, ` +
-    `${gate.items_withheld} ${gate.items_withheld === 1 ? 'item' : 'items'} withheld.`
-  )
+  // `subjects_flagged` is why this is not just cleared-and-withheld. A notify finding withholds
+  // nothing, so "4 of 5 cleared, 0 items withheld" beside a conflict would be true and read as
+  // reassurance. Naming the flagged count is what stops the summary being misleading.
+  const flagged = gate.subjects_flagged ?? 0
+  const parts = [`${gate.subjects_cleared} of ${gate.seeds_considered} cleared`]
+  if (flagged > 0) parts.push(`${flagged} flagged for review`)
+  parts.push(`${gate.items_withheld} ${gate.items_withheld === 1 ? 'item' : 'items'} withheld`)
+  return `${parts.join(', ')}.`
 }
 
 function GateStep({
@@ -803,6 +818,7 @@ function GateStep({
   usedFactCount: number
 }) {
   const screens = blocks.filter((b) => b.rule === 'ethical_screen')
+  const withheld = blocks.filter((b) => (b.effect ?? 'withhold') === 'withhold')
   const degraded = Boolean(gate?.degraded)
 
   return (
@@ -875,16 +891,23 @@ function GateStep({
         <div className="withheld-block" style={{ marginBottom: 0 }}>
           <div className="withheld-block-head">
             <h3>
-              {blocks.length} {blocks.length === 1 ? 'block' : 'blocks'} applied
-              <FieldHelp text={HELP.ethicalScreen} />
+              {blocks.length} {blocks.length === 1 ? 'finding' : 'findings'}
+              {/* Not `ethicalScreen`: this heading covers rule findings too, and a
+                  stale-authority one is a quality problem rather than a conduct one. */}
+              <FieldHelp text={HELP.blockKinds} />
             </h3>
-            <span className="tag tag-red">
-              {screens.length === blocks.length ? 'Screened' : 'Withheld'}
-            </span>
+            {withheld.length > 0 ? (
+              <span className="tag tag-red">
+                {screens.length === blocks.length ? 'Screened' : 'Withheld'}
+              </span>
+            ) : (
+              <span className="tag tag-orange">To review</span>
+            )}
           </div>
           <p className="withheld-block-note">
-            Named on purpose. An answer that looks complete because the inconvenient part was
-            invisible is the failure a screen exists to prevent.
+            {withheld.length > 0
+              ? 'Named on purpose. An answer that looks complete because the inconvenient part was invisible is the failure a screen exists to prevent.'
+              : 'Nothing was withheld. The evidence below is complete, and whether these findings matter is a judgement for you \u2014 which is why they are named rather than acted on.'}
             {blocks.some((b) => (b.premise_count ?? 0) > 2) && (
               <>
                 {' '}
@@ -899,6 +922,20 @@ function GateStep({
                 <div className="withheld-item-head">
                   <strong>{b.matter_id ?? entityLabel(b.subject)}</strong>
                   <code>{b.rule || 'blocked'}</code>
+                  {/* Per item, because one list can hold both: a screen that walled a matter off
+                      and a conflict that only wants a lawyer's eye are not the same news. */}
+                  {(b.effect ?? 'withhold') === 'withhold' ? (
+                    <span className="tag tag-red" title="Evidence about this was withheld.">
+                      withheld
+                    </span>
+                  ) : (
+                    <span
+                      className="tag tag-orange"
+                      title="Nothing was withheld. Reported for you to weigh."
+                    >
+                      to review
+                    </span>
+                  )}
                   {(b.premise_count ?? 0) > 2 && (
                     <span
                       className="tag tag-red"
@@ -937,7 +974,7 @@ function GateStep({
                     {b.rule === 'ethical_screen'
                       ? 'A screen is a recorded instruction, not an assertion, so there is no ' +
                         'subgraph to draw.'
-                      : 'A rule block names what was refused, not an edge you can open.'}
+                      : 'A rule finding names what it is about, not an edge you can open.'}
                     {usedFactCount > 0 && ' What the answer did use opens in the graph below.'}
                   </span>
                 </div>
