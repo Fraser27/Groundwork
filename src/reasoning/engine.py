@@ -132,6 +132,15 @@ class ReasonerReport:
     rules_skipped: dict[str, str] = field(default_factory=dict)
     facts_considered: int = 0
 
+    conclusions_refused: list[str] = field(default_factory=list)
+    """Matches an invariant refused, one line each.
+
+    Distinct from `rules_skipped`, which is a rule that could never fire. This is a rule that
+    fired and whose conclusion the contract rejected — which became an ordinary outcome once
+    declared endpoint kinds were enforced, since a rule can bind a variable to the wrong sort of
+    thing. Reported rather than only logged: a rule that draws nothing must not look like a rule
+    that found nothing."""
+
     @property
     def count(self) -> int:
         return len(self.inferences)
@@ -154,6 +163,7 @@ class ReasonerReport:
             "count": self.count,
             "rules_evaluated": self.rules_evaluated,
             "rules_skipped": self.rules_skipped,
+            "conclusions_refused": list(self.conclusions_refused),
             "facts_considered": self.facts_considered,
         }
 
@@ -211,7 +221,7 @@ class Reasoner:
                     f"{rule.conclusion.predicate} is not in the {self.ontology.domain} vocabulary"
                 )
                 continue
-            for inference in self._fire(ctx, rule, by_predicate, known):
+            for inference in self._fire(ctx, rule, by_predicate, known, report):
                 report.inferences.append(inference)
 
         if report.count:
@@ -229,6 +239,7 @@ class Reasoner:
         rule: ParsedRule,
         by_predicate: dict[str, list[Assertion]],
         known: frozenset[str],
+        report: ReasonerReport,
     ) -> list[Inference]:
         """Join the premises and build one conclusion per distinct match.
 
@@ -285,7 +296,7 @@ class Reasoner:
                 # so it would collapse in the store anyway.
                 continue
             seen.add(key)
-            inferred = self._build(ctx, rule, binding, used, known)
+            inferred = self._build(ctx, rule, binding, used, known, report)
             if inferred is not None:
                 out.append(inferred)
         return out
@@ -331,6 +342,7 @@ class Reasoner:
         binding: dict[str, str],
         premises: list[Assertion],
         known: frozenset[str],
+        report: ReasonerReport,
     ) -> Inference | None:
         subject = binding[rule.conclusion.subject_var]
         obj = binding[rule.conclusion.object_var]
@@ -373,10 +385,15 @@ class Reasoner:
                 rule_id=rule.rule_id,
                 rule_version=rule.version,
                 allowed_predicates=known,
+                endpoint_kinds=self.ontology.endpoint_kinds(rule.conclusion.predicate),
             )
         except Exception as e:
-            # An invariant refused it. Logged and skipped rather than raised: one bad
-            # conclusion must not abort a pass that is otherwise producing good ones.
+            # An invariant refused it. Skipped rather than raised: one bad conclusion must not
+            # abort a pass that is otherwise producing good ones. Reported as well as logged,
+            # because with endpoint kinds enforced this is now an ordinary outcome -- a rule can
+            # bind a variable to the wrong sort of thing -- and a rule that draws nothing must not
+            # be indistinguishable from a rule that found nothing.
+            report.conclusions_refused.append(f"{rule.rule_id}: {e}")
             logger.warning("rule %s produced an invalid assertion: %s", rule.rule_id, e)
             return None
 

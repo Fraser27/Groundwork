@@ -150,6 +150,49 @@ def _reject_unnormalised(label: str, entity_id: str) -> None:
         )
 
 
+def _kind_of(entity_id: str) -> str | None:
+    """The lowercase kind prefix of an id, or None when it has none.
+
+    Not `Ontology.entity_kind_of`, which also checks the prefix against the closed vocabulary and
+    so needs the pack. Here the prefix is only being read, and an unrecognised one is refused by
+    the endpoint check below rather than silently accepted.
+    """
+    kind, sep, rest = entity_id.partition(":")
+    return kind.lower() if sep and rest else None
+
+
+def _reject_undeclared_endpoints(
+    predicate: str, subject_id: str, object_id: str, kinds: EndpointKinds | None
+) -> None:
+    """Refuse a predicate used against the endpoints its pack does not declare.
+
+    Invariant 4 for entity *kinds* rather than predicate names: a predicate outside the closed
+    vocabulary and a predicate pointed at the wrong sort of thing are the same class of violation,
+    and both were declared in the pack while only the first was enforced.
+
+    Only a **definite** contradiction is refused. An id with no prefix passes, because
+    `_reject_unnormalised` deliberately allows `Matter-4471` and narrowing that here would be an
+    unrelated tightening. `kinds` being None passes too, which is load-bearing rather than
+    defensive: every descriptive predicate declares no domain or range, and the catalog scanner's
+    `HAS_TABLE`/`HAS_COLUMN` are not in either pack at all.
+    """
+    if kinds is None:
+        return
+    subject_kind = _kind_of(subject_id)
+    object_kind = _kind_of(object_id)
+    if subject_kind is None or object_kind is None:
+        return
+    if kinds.admits(subject_kind, object_kind):
+        return
+    raise AssertionError_(
+        f"{predicate} is declared for {sorted(kinds.subject)} -> {sorted(kinds.object)}, "
+        f"so it cannot be written {subject_kind} -> {object_kind}. A predicate pointed at the "
+        "wrong sort of thing is as unqueryable as one outside the vocabulary: this is how a "
+        "conflict declared Matter -> Party came to be stored Party -> Party, tainting the "
+        "firm's own client."
+    )
+
+
 def answerable_confidence(confidence: float, *, governing: bool = True) -> float:
     """Where a claim lands once a human has approved it.
 
@@ -180,6 +223,35 @@ class ReviewState(str, Enum):
 #: Signed off, one way or the other: a system of record or a check said so, or a person did.
 #: The states retrieval admits and `promote` moves to live.
 SIGNED_OFF_STATES = frozenset({ReviewState.AUTO_ASSERTED, ReviewState.APPROVED})
+
+
+@dataclass(frozen=True)
+class EndpointKinds:
+    """Which entity kinds a predicate's declared domain and range admit.
+
+    Passed in rather than looked up, for the reason `allowed_predicates` is: this module does not
+    import the ontology, and only two sets of lowercase kind slugs need to cross that boundary.
+    `ReviewPolicy` is the same shape — a policy object defined here, built from the pack by the
+    caller.
+
+    The gap this closes: `POTENTIAL_CONFLICT` declares `Matter -> Party`, and a rule bound its
+    subject to a *Party* instead. Nothing checked, so the conflict was stored Party->Party — and
+    since it declares `blocks: both`, the wall then withheld the firm's own client's file. A
+    question about that client's own counsel returned nothing.
+    """
+
+    subject: frozenset[str]
+    object: frozenset[str]
+
+    symmetric: bool = False
+    """Whether the endpoints are interchangeable. `canonical_pair` sorts a symmetric predicate's
+    endpoints by raw bytes before this is checked, so for those the reversed orientation has to
+    count as legal too — otherwise canonicalisation itself could make a sound fact illegal."""
+
+    def admits(self, subject_kind: str, object_kind: str) -> bool:
+        if subject_kind in self.subject and object_kind in self.object:
+            return True
+        return self.symmetric and object_kind in self.subject and subject_kind in self.object
 
 
 @dataclass(frozen=True)
@@ -441,6 +513,7 @@ def build_assertion(
     valid_from: str | None = None,
     valid_until: str | None = None,
     allowed_predicates: frozenset[str] | None = None,
+    endpoint_kinds: EndpointKinds | None = None,
     policy: ReviewPolicy | None = None,
 ) -> Assertion:
     """The only sanctioned way to create an assertion.
@@ -465,6 +538,10 @@ def build_assertion(
        second node for one entity, and a conflict check joining on the other one finds
        nothing while reporting clean. `Ontology.canonical_entity_id` fixes an id; this
        refuses one nothing fixed.
+    7. A predicate is used against the endpoint kinds its pack declares. Invariant 4 for
+       entity kinds rather than predicate names: `POTENTIAL_CONFLICT` declares
+       `Matter -> Party` and was stored `Party -> Party`, so `blocks: both` withheld the
+       firm's own client's file.
 
     Cascading retraction is the sixth invariant and lives in
     `src.documents.retract`, since it must walk the premise graph rather than
@@ -478,6 +555,7 @@ def build_assertion(
         raise AssertionError_(f"confidence must be in [0,1], got {confidence}")
     _reject_unnormalised("subject_id", subject_id)
     _reject_unnormalised("object_id", object_id)
+    _reject_undeclared_endpoints(predicate, subject_id, object_id, endpoint_kinds)
     if raw_confidence is not None and not 0.0 <= raw_confidence <= 1.0:
         raise AssertionError_(f"raw_confidence must be in [0,1], got {raw_confidence}")
 

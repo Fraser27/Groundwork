@@ -236,6 +236,29 @@ class Ontology:
                 return e
         return None
 
+    def endpoint_kinds(self, predicate: str) -> Any | None:
+        """The kinds this predicate's declared domain and range admit, for `build_assertion`.
+
+        Returns None when the pack declares neither side, or when it does not know the predicate
+        at all. Both are ordinary: every descriptive predicate declares no endpoints, and the Glue
+        scanner's `HAS_TABLE`/`HAS_COLUMN` are in no pack. None means "nothing to check", which is
+        why the caller may pass it straight through.
+
+        Lowercased via `EntityDef.slug`, because the vocabulary is declared capitalised (`Party`)
+        and ids carry the prefix form (`party:acme`). Comparing the two without normalising is how
+        `court:` came to exist in the graph while `Court` sat apparently unused.
+        """
+        from src.graph.assertions import EndpointKinds
+
+        pdef = self.predicates.get(predicate)
+        if pdef is None or not pdef.domain or not pdef.range:
+            return None
+        return EndpointKinds(
+            subject=frozenset(k.lower() for k in pdef.domain),
+            object=frozenset(k.lower() for k in pdef.range),
+            symmetric=pdef.symmetric,
+        )
+
     def canonical_entity_id(self, entity_id: str) -> str | None:
         """One spelling of an entity, so two documents naming it land on one node.
 

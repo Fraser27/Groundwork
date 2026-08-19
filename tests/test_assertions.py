@@ -12,6 +12,7 @@ import pytest
 from src.graph.assertions import (
     AUTO_ASSERT_CLASSES,
     AssertionError_,
+    EndpointKinds,
     EpistemicClass,
     ReviewState,
     SourceLocator,
@@ -258,6 +259,127 @@ class TestEntityIdsMustBeInNormalForm:
         """Requiring a prefix needs the vocabulary, which this module does not have. Callers
         legitimately write `Party-Acme`, and refusing it here would be a guess about kinds."""
         assert _base(object_id="Party-Acme")
+
+
+class TestDeclaredEndpointsAreEnforced:
+    """Invariant 4 for entity kinds rather than predicate names.
+
+    The incident: `POTENTIAL_CONFLICT` declares `Matter -> Party`, a rule bound its subject to a
+    Party, nothing checked, and the conflict was stored Party->Party. Since it declares
+    `blocks: both`, the wall then withheld the firm's own client's file -- so a question about that
+    client's own counsel returned nothing at all.
+
+    Domain and range were declared in both packs from the beginning and read only for display.
+    """
+
+    def _kinds(self, subject, object_, *, symmetric=False):
+        return EndpointKinds(
+            subject=frozenset(subject), object=frozenset(object_), symmetric=symmetric
+        )
+
+    def test_a_subject_of_the_wrong_kind_is_refused(self):
+        with pytest.raises(AssertionError_, match="cannot be written party -> party"):
+            _base(
+                predicate="POTENTIAL_CONFLICT",
+                subject_id="party:calder-shipping-ag",
+                object_id="party:halveston-chartering-limited",
+                endpoint_kinds=self._kinds(["matter"], ["party"]),
+            )
+
+    def test_an_object_of_the_wrong_kind_is_refused(self):
+        with pytest.raises(AssertionError_, match="cannot be written matter -> matter"):
+            _base(
+                predicate="RELATES_TO_MATTER",
+                subject_id="matter:mbc-2024-0431",
+                object_id="matter:ntl-2026-0114",
+                endpoint_kinds=self._kinds(["document", "party", "deadline"], ["matter"]),
+            )
+
+    def test_the_declared_shape_is_accepted(self):
+        assert _base(
+            predicate="POTENTIAL_CONFLICT",
+            subject_id="matter:ntl-2026-0114",
+            object_id="party:calder-shipping-ag",
+            endpoint_kinds=self._kinds(["matter"], ["party"]),
+        )
+
+    def test_a_predicate_declaring_two_subject_kinds_accepts_either(self):
+        """`ADVERSE_TO` is `[Party, Matter] -> [Party]`, so party->party is legal and must stay so.
+        This is the test that stops the check being written as "subject must be domain[0]" -- which
+        would refuse a sound fact and, worse, look like the incident had been fixed."""
+        kinds = self._kinds(["party", "matter"], ["party"], symmetric=True)
+        assert _base(
+            predicate="ADVERSE_TO",
+            subject_id="party:calder-shipping-ag",
+            object_id="party:halveston-chartering-limited",
+            endpoint_kinds=kinds,
+        )
+
+    def test_a_symmetric_predicate_accepts_the_reversed_orientation(self):
+        """`canonical_pair` sorts a symmetric predicate's endpoints by raw bytes *before* this
+        check, so for those the reversed order has to count as legal -- otherwise canonicalisation
+        could turn a sound fact into a refused one depending on how two ids happen to sort."""
+        kinds = self._kinds(["matter"], ["party"], symmetric=True)
+        assert _base(
+            predicate="SOMETHING_SYMMETRIC",
+            subject_id="party:calder-shipping-ag",
+            object_id="matter:ntl-2026-0114",
+            endpoint_kinds=kinds,
+            allowed_predicates=None,
+        )
+
+    def test_an_unprefixed_id_is_not_refused(self):
+        """`_reject_unnormalised` deliberately allows `Matter-4471`, so there is no kind to check
+        and narrowing that here would be an unrelated tightening."""
+        assert _base(
+            predicate="POTENTIAL_CONFLICT",
+            subject_id="Matter-4471",
+            object_id="Party-Acme",
+            endpoint_kinds=self._kinds(["matter"], ["party"]),
+        )
+
+    def test_no_declaration_means_nothing_to_check(self):
+        """Load-bearing rather than defensive: every descriptive predicate declares no endpoints,
+        and the Glue scanner's `HAS_TABLE`/`HAS_COLUMN` are in no pack at all. Without this the
+        catalog paths stop writing."""
+        assert _base(predicate="MENTIONS", endpoint_kinds=None)
+
+    def test_the_message_names_both_the_declaration_and_what_was_written(self):
+        """An operator needs to know which end was wrong, not merely that something was."""
+        with pytest.raises(AssertionError_) as caught:
+            _base(
+                predicate="POTENTIAL_CONFLICT",
+                subject_id="party:calder-shipping-ag",
+                object_id="party:halveston-chartering-limited",
+                endpoint_kinds=self._kinds(["matter"], ["party"]),
+            )
+        message = str(caught.value)
+        assert "['matter'] -> ['party']" in message
+        assert "party -> party" in message
+
+
+class TestTheShippedPacksDeclareUsableEndpoints:
+    def test_every_conclusion_a_rule_draws_is_declared(self):
+        """A pack whose rule concludes a predicate it cannot legally write would fire and be
+        refused on every match -- a conflict check that silently draws nothing."""
+        from src.ontology.loader import load_ontology
+
+        for domain in ("legal", "healthcare"):
+            onto = load_ontology(domain)
+            for predicate in onto.rule_conclusions:
+                kinds = onto.endpoint_kinds(predicate)
+                if kinds is None:
+                    continue
+                assert kinds.subject and kinds.object, f"{domain}: {predicate} declares an end"
+
+    def test_the_conflict_predicate_is_matter_to_party(self):
+        """The declaration the incident violated, pinned so a later pack edit that widened it to
+        accept a Party subject would fail here rather than in production."""
+        from src.ontology.loader import load_ontology
+
+        kinds = load_ontology("legal").endpoint_kinds("POTENTIAL_CONFLICT")
+        assert kinds.subject == frozenset({"matter"})
+        assert kinds.object == frozenset({"party"})
 
 
 class TestIdentity:

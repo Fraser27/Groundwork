@@ -274,6 +274,57 @@ class TestASpellingVariantNoLongerHidesAConflict:
         assert Reasoner(load_ontology("legal")).run(ctx, facts).count == 0
 
 
+class TestAForbiddenConclusionIsRefusedAndReported:
+    """The incident, at the reasoner level.
+
+    `conflict_check` declares `(m:Matter)-[ADVERSE_TO]->(p:Party)`, but pattern types are not
+    enforced, so a party-subject `ADVERSE_TO` bound `m` to a Party and the rule drew
+    `POTENTIAL_CONFLICT(party -> party)` against its own declared domain. With endpoint kinds
+    enforced the write is refused — and the refusal has to be *reported*, or a rule that draws
+    nothing is indistinguishable from a rule that found nothing.
+    """
+
+    def _party_subject_adversity(self):
+        """What the extractor actually produced from the Halveston note. Legal on its own terms:
+        `ADVERSE_TO` declares `[Party, Matter] -> [Party]`."""
+        return [
+            fact("counsel:sian-aldridge", "REPRESENTS", "party:halveston-chartering-limited"),
+            fact(
+                "party:calder-shipping-ag",
+                "ADVERSE_TO",
+                "party:halveston-chartering-limited",
+                matter=HAL,
+            ),
+        ]
+
+    def test_the_party_to_party_conflict_is_not_written(self, ctx):
+        report = Reasoner(load_ontology("legal")).run(ctx, self._party_subject_adversity())
+        assert report.count == 0
+
+    def test_the_refusal_is_reported_rather_than_only_logged(self, ctx):
+        report = Reasoner(load_ontology("legal")).run(ctx, self._party_subject_adversity())
+        assert len(report.conclusions_refused) == 1
+        assert "conflict_check" in report.conclusions_refused[0]
+        assert "party -> party" in report.conclusions_refused[0]
+
+    def test_it_reaches_the_report_a_person_reads(self, ctx):
+        report = Reasoner(load_ontology("legal")).run(ctx, self._party_subject_adversity())
+        assert report.to_dict()["conclusions_refused"]
+
+    def test_the_matter_subject_form_still_fires(self, ctx):
+        """The guard on the guard. `matter -> party` is what the rule declares and what the
+        conflict predicate accepts, so this must still draw the conflict."""
+        facts = [
+            fact("counsel:thorne-vaux", "REPRESENTS", "party:calder-shipping-ag", matter=MBC),
+            fact("matter:" + NTL, "ADVERSE_TO", "party:calder-shipping-ag", matter=NTL),
+        ]
+        report = Reasoner(load_ontology("legal")).run(ctx, facts)
+
+        assert [i.rule_id for i in report.inferences] == ["conflict_check"]
+        assert report.inferences[0].assertion.subject_id == "matter:" + NTL
+        assert report.conclusions_refused == []
+
+
 class TestTheStaleAuthorityCheckFires:
     def test_reliance_on_an_overruled_case_is_flagged(self, ctx):
         report = Reasoner(load_ontology("legal")).run(ctx, _stale_authority_facts())
@@ -616,6 +667,7 @@ class TestUnparseableRulesAreSkippedNotFatal:
             rules = (*legal.rules, BadRule())
             governing_predicates = legal.governing_predicates
             descriptive_predicates = legal.descriptive_predicates
+            endpoint_kinds = legal.endpoint_kinds
 
         reasoner = Reasoner(Patched())
         report = reasoner.run(ctx, _conflict_facts())

@@ -451,6 +451,9 @@ class ModelExtractor:
                     source_locator=chunk.to_locator(*span),
                     matter_id=chunk.matter_id,
                     allowed_predicates=self.ontology.allowed_for(predicate),
+                    # After `canonical_pair`, so the check sees the orientation that will be
+                    # stored rather than the one the model happened to write.
+                    endpoint_kinds=self.ontology.endpoint_kinds(predicate),
                     policy=self._policy(),
                 )
             except AssertionError_ as e:

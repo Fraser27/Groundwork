@@ -263,7 +263,11 @@ class TestPredicateGrounding:
         )
 
     def test_governing_predicate_grounds_and_is_reviewed(self):
-        [a] = extractor().validate([interpretation(predicate="OVERRULES")], chunk=chunk())
+        """Subject is an authority, not the document: `OVERRULES` is declared Authority ->
+        Authority, and only a case can overrule a case. The fixture's default document subject is
+        right for `DISTINGUISHES`, which a document may do."""
+        claim = interpretation(predicate="OVERRULES", subject_id="authority:the-marisol-2025")
+        [a] = extractor().validate([claim], chunk=chunk())
         assert a.predicate == "OVERRULES"
         assert a.review_state is ReviewState.PENDING
 
