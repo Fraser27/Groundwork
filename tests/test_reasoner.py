@@ -301,15 +301,63 @@ class TestAForbiddenConclusionIsRefusedAndReported:
         report = Reasoner(load_ontology("legal")).run(ctx, self._party_subject_adversity())
         assert report.count == 0
 
-    def test_the_refusal_is_reported_rather_than_only_logged(self, ctx):
+    def test_the_premise_never_binds_so_there_is_nothing_to_refuse(self, ctx):
+        """Two guards stop this conflict, and which one fires is the point.
+
+        Premise type filtering rejects the fact before the rule binds `m`, so nothing is built and
+        `conclusions_refused` stays *empty*. The endpoint check in `build_assertion` is the belt
+        behind it, and it would populate that list instead. Asserting empty here is what proves the
+        filter ran rather than the contract catching it afterwards -- two different states, so the
+        assertion has something to bite on.
+        """
         report = Reasoner(load_ontology("legal")).run(ctx, self._party_subject_adversity())
+        assert report.conclusions_refused == []
+
+    def test_the_contract_still_refuses_it_if_the_filter_is_bypassed(self, ctx):
+        """Defence in depth, asserted directly rather than assumed. A rule with untyped premises
+        binds the party-subject adversity, and then invariant 7 is the only thing standing
+        between it and a conflict about the firm's own client."""
+
+        class Untyped:
+            id = "untyped_conflict"
+            version = "v1"
+            description = ""
+            when = ("(c)-[:REPRESENTS]->(p)", "(m)-[:ADVERSE_TO]->(p)")
+            then = "(m)-[:POTENTIAL_CONFLICT]->(p)"
+            min_premise_class = "EXTRACTED_MODEL"
+
+        legal = load_ontology("legal")
+
+        class Patched:
+            domain = legal.domain
+            rules = (Untyped(),)
+            governing_predicates = legal.governing_predicates
+            descriptive_predicates = legal.descriptive_predicates
+            endpoint_kinds = legal.endpoint_kinds
+            entity_kind_of = legal.entity_kind_of
+
+        report = Reasoner(Patched()).run(ctx, self._party_subject_adversity())
+        assert report.count == 0
         assert len(report.conclusions_refused) == 1
-        assert "conflict_check" in report.conclusions_refused[0]
         assert "party -> party" in report.conclusions_refused[0]
 
-    def test_it_reaches_the_report_a_person_reads(self, ctx):
-        report = Reasoner(load_ontology("legal")).run(ctx, self._party_subject_adversity())
-        assert report.to_dict()["conclusions_refused"]
+    def test_the_affiliate_rule_needs_the_matter_orientation_too(self, ctx):
+        """Why this mattered beyond the one bad conflict. `conflict_via_affiliate` was reachable in
+        production -- `AFFILIATE_OF` was extracted and approved -- and drew nothing, because every
+        `ADVERSE_TO` named the counterparty as *subject*. The rule wants the firm's matter adverse
+        to the affiliate, so the inverted orientation matched nothing and the real conflict, the
+        one the fixture's risk memo is about, stayed invisible."""
+        facts = [
+            fact("counsel:thorne-vaux", "REPRESENTS", "party:meridian-bulk-carriers-sa"),
+            fact("party:meridian-bulk-carriers-sa", "AFFILIATE_OF", "party:calder-shipping-ag"),
+            fact("matter:" + NTL, "ADVERSE_TO", "party:calder-shipping-ag", matter=NTL),
+        ]
+        report = Reasoner(load_ontology("legal")).run(ctx, facts)
+
+        assert [i.rule_id for i in report.inferences] == ["conflict_via_affiliate"]
+        drawn = report.inferences[0].assertion
+        assert drawn.subject_id == "matter:" + NTL
+        assert drawn.object_id == "party:meridian-bulk-carriers-sa"
 
     def test_the_matter_subject_form_still_fires(self, ctx):
         """The guard on the guard. `matter -> party` is what the rule declares and what the
@@ -668,6 +716,7 @@ class TestUnparseableRulesAreSkippedNotFatal:
             governing_predicates = legal.governing_predicates
             descriptive_predicates = legal.descriptive_predicates
             endpoint_kinds = legal.endpoint_kinds
+            entity_kind_of = legal.entity_kind_of
 
         reasoner = Reasoner(Patched())
         report = reasoner.run(ctx, _conflict_facts())

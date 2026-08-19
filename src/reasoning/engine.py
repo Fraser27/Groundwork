@@ -255,7 +255,7 @@ class Reasoner:
             candidates = [
                 f
                 for f in by_predicate.get(pattern.predicate, ())
-                if accepts(f, rule.min_premise_class)
+                if accepts(f, rule.min_premise_class) and self._matches_declared_types(pattern, f)
             ]
             grown: list[tuple[dict[str, str], list[Assertion]]] = []
             for binding, used in partial:
@@ -300,6 +300,34 @@ class Reasoner:
             if inferred is not None:
                 out.append(inferred)
         return out
+
+    def _matches_declared_types(self, pattern: Any, fact: Assertion) -> bool:
+        """Whether a fact's endpoints are the kinds the rule pattern names.
+
+        `conflict_check` writes `(m:Matter)-[:ADVERSE_TO]->(p:Party)`, and `ADVERSE_TO` legally
+        accepts a Party subject too. Without this the rule bound `m` to whichever the extractor
+        happened to produce: a matter-subject adversity fired it correctly, a party-subject one
+        drew a conflict about the wrong thing. Correctness came down to a coin flip, and "a
+        conflict check that never fires looks exactly like a clean conflict check".
+
+        A type on a pattern was documentation until now, on the stated grounds that inferring a
+        kind from an id prefix "would be a guess". It is not a guess any more: `entity_kinds` is
+        closed, `canonical_entity_id` mints the prefix, `build_assertion` refuses a miscased one,
+        and the extractor drops a claim whose kind the pack does not declare. Every edge in the
+        graph carries a declared kind on both ends by construction.
+
+        An untyped endpoint matches anything, which is what makes this additive: `then` clauses and
+        the many premises written without types behave exactly as before.
+        """
+        for declared, entity_id in (
+            (pattern.subject_type, fact.subject_id),
+            (pattern.object_type, fact.object_id),
+        ):
+            if declared is None:
+                continue
+            if self.ontology.entity_kind_of(entity_id) != declared.lower():
+                return False
+        return True
 
     def _match(
         self, pattern: Any, candidates: list[Assertion]

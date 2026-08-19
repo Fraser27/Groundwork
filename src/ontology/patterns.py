@@ -27,10 +27,23 @@ An intermediate *fact* was the bigger gap, and it needed no syntax at all: `AFFI
 a three-premise rule already finds a conflict through a group company. Paths earn their keep
 only where the chain's length is unknown — an ownership ladder, a run of `OVERRULES`.
 
-Types on the endpoints are optional in `then` (already bound) and expected in `when`, where
-they document what the rule is about. They are not enforced against the entity list here:
-an extractor names entities `party:acme`, and inferring a *kind* from an id prefix would be a
-guess. The predicate's declared domain/range is where that check belongs.
+Types on the endpoints are optional in `then` (already bound) and expected in `when`. They are
+not checked *here* — this module only reads the grammar — but they are no longer merely
+documentation, and the split is worth stating because the two halves catch different things:
+
+- A **premise** type is enforced by the reasoner, which drops a candidate fact whose endpoint is
+  the wrong kind. `conflict_check` writes `(m:Matter)-[:ADVERSE_TO]->(p:Party)` while
+  `ADVERSE_TO` also legally accepts a Party subject, so without that filter the rule bound `m`
+  to whichever the extractor happened to produce — and a conflict check whose correctness is a
+  coin flip is the failure this codebase most needs to avoid.
+- A **conclusion**'s endpoints are enforced by `build_assertion`, against the predicate's
+  declared domain and range. That is the backstop: it holds for every write, including one from
+  a rule whose premises carry no types at all.
+
+This once said inferring a kind from an id prefix "would be a guess". It is not: `entity_kinds`
+is closed, `canonical_entity_id` mints the prefix, `build_assertion` refuses a miscased one, and
+the extractor drops a claim whose kind the pack does not declare. Every edge carries a declared
+kind on both ends by construction.
 """
 
 from __future__ import annotations
