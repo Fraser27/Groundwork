@@ -120,6 +120,131 @@ class ReplayReport:
         }
 
 
+@dataclass
+class EndpointSweepReport:
+    """Live facts whose endpoints their pack does not declare, and what was done about them."""
+
+    checked: int = 0
+    offenders: list[dict[str, Any]] = field(default_factory=list)
+    retracted: list[str] = field(default_factory=list)
+    cascaded: list[str] = field(default_factory=list)
+    dry_run: bool = True
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def blocking(self) -> int:
+        """Offenders that veto an answer. These are the ones doing active harm."""
+        return sum(1 for o in self.offenders if o.get("blocks"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "checked": self.checked,
+            "offenders": self.offenders,
+            "blocking": self.blocking,
+            "retracted": self.retracted,
+            "cascaded": self.cascaded,
+            "dry_run": self.dry_run,
+            "errors": self.errors,
+            "note": (
+                "Nothing was written. Each fact listed here uses a predicate against endpoint "
+                "kinds its pack does not declare."
+                if self.dry_run
+                else "Retracted, not deleted: `superseded_at` is set, so an as-of read before now "
+                "still shows what the graph asserted while advice rested on it."
+            ),
+        }
+
+
+def sweep_undeclared_endpoints(
+    services: Any, ctx: AuthContext, *, dry_run: bool = True
+) -> EndpointSweepReport:
+    """Find live facts that violate their predicate's declared domain or range, and withdraw them.
+
+    `build_assertion` refuses these at write time now, but that is prospective: the graph already
+    holds facts written before the check existed. One of them was a `POTENTIAL_CONFLICT` stored
+    `Party -> Party` against its declared `Matter -> Party`, and because that predicate declares
+    `blocks: both` it withheld the firm's own client's file — a question about that client's own
+    counsel returned nothing.
+
+    Deliberately **not** a read-time filter in `blocking_facts`. Skipping an invalid veto at read
+    time would make the wall silently ignore a recorded refusal, which is verbatim the failure
+    `BlockCheckUnavailable` exists to prevent, and it would put a second definition of validity
+    somewhere it can drift from the first.
+
+    Deliberately **not** reset-and-replay either. That works, but it costs a full re-extraction and
+    discards every review decision in the tenant rather than the handful that are wrong.
+
+    `dry_run` defaults to True, following `retract` and the merge endpoint: this withdraws facts a
+    firm may have relied on, so seeing the list is the default and writing is the request.
+    """
+    report = EndpointSweepReport(dry_run=dry_run)
+    ontology = getattr(services, "ontology", None)
+    queue = getattr(services, "review_queue", None)
+    if ontology is None or queue is None:
+        report.errors.append("no ontology pack or review queue is wired, so nothing can be checked")
+        return report
+
+    from src.documents.retract import retract
+
+    for record in queue.live_assertions(ctx):
+        a = record.assertion
+        report.checked += 1
+        kinds = ontology.endpoint_kinds(a.predicate)
+        if kinds is None:
+            continue
+        subject_kind = ontology.entity_kind_of(a.subject_id)
+        object_kind = ontology.entity_kind_of(a.object_id)
+        if subject_kind is None or object_kind is None:
+            # No prefix to judge. `build_assertion` allows these too -- see `_reject_unnormalised`.
+            continue
+        if kinds.admits(subject_kind, object_kind):
+            continue
+
+        report.offenders.append(
+            {
+                "assertion_id": a.assertion_id,
+                "predicate": a.predicate,
+                "subject_id": a.subject_id,
+                "object_id": a.object_id,
+                "written": f"{subject_kind} -> {object_kind}",
+                "declared": f"{sorted(kinds.subject)} -> {sorted(kinds.object)}",
+                # Named because it decides urgency: an offender that vetoes answers is withholding
+                # evidence right now, while one that merely informs is a correctness problem.
+                "blocks": bool(ontology.blocked_endpoints(a.predicate)),
+                "review_state": a.review_state.value,
+            }
+        )
+        if dry_run:
+            continue
+        try:
+            result = retract(
+                queue,
+                ctx,
+                a.assertion_id,
+                reason=(
+                    f"{a.predicate} is declared {sorted(kinds.subject)} -> "
+                    f"{sorted(kinds.object)} and was written {subject_kind} -> {object_kind}"
+                ),
+            )
+        except Exception as e:  # noqa: BLE001
+            # One bad retraction must not abandon the rest: the remaining offenders are still
+            # withholding evidence.
+            report.errors.append(f"{a.assertion_id}: {e}")
+            continue
+        report.retracted.append(a.assertion_id)
+        report.cascaded.extend(result.cascaded)
+
+    logger.info(
+        "endpoint sweep for %s: %d checked, %d invalid (%d blocking), %d retracted",
+        ctx.tenant_id,
+        report.checked,
+        len(report.offenders),
+        report.blocking,
+        len(report.retracted),
+    )
+    return report
+
+
 def reset_derived(services: Any, ctx: AuthContext, scope: ResetScope | None = None) -> ResetReport:
     """Drop the derived tiers for one tenant. S3 is untouched.
 

@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from src.admin_ops import ResetScope, replay, reset_derived
+from src.admin_ops import ResetScope, replay, reset_derived, sweep_undeclared_endpoints
 from src.api.deps import (
     ServicesDep,
     TenantDep,
@@ -693,6 +693,35 @@ async def reset_derived_route(
         metrics=body.metrics,
     )
     return reset_derived(services, ctx, scope).to_dict()
+
+
+class EndpointSweepRequest(BaseModel):
+    dry_run: bool = True
+    """Defaults to a preview. This withdraws facts a firm may have relied on, so seeing the list
+    is the default and writing is the request — the same posture as `retract` and a merge."""
+
+
+@router.post("/tenants/{tenant}/admin/sweep-endpoints")
+async def sweep_endpoints_route(
+    services: ServicesDep,
+    principal: TenantDep,
+    # No default body, unlike the reset route: this one writes only when asked, so `dry_run` has
+    # to be stated. An omitted body defaulting to a preview would be safe but silently ambiguous.
+    body: Annotated[EndpointSweepRequest, Body()],
+) -> dict[str, Any]:
+    """Withdraw live facts whose endpoints their pack does not declare.
+
+    `build_assertion` refuses these on write now, but that is prospective: the graph already holds
+    facts written before the check existed. One was a `POTENTIAL_CONFLICT` stored `Party -> Party`
+    against its declared `Matter -> Party`, and since that predicate declares `blocks: both` it
+    withheld the firm's own client's file.
+
+    Retracts rather than deletes, so an as-of read before now still shows what the graph asserted
+    while advice rested on it.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+    return sweep_undeclared_endpoints(services, ctx, dry_run=body.dry_run).to_dict()
 
 
 @router.post("/tenants/{tenant}/admin/replay")
