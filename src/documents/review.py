@@ -176,6 +176,19 @@ class QueueItem:
     matter_id: str | None
     recorded_at: str
     job_id: str | None
+
+    quote: str = ""
+    """The verbatim span the claim was read from.
+
+    Carried here because this is the object a reviewer decides from, and it was the one thing
+    missing: `page` and the `char_*` offsets are debug aids -- `SourceLocator` says so -- and the
+    text itself was reachable only through a separate provenance call. So a reviewer working the
+    list approved claims without seeing the sentence.
+
+    Not hypothetical. "Calder Shipping AG has appeared as a counterparty in two *unrelated*
+    Halveston fixtures" was approved as a live `ADVERSE_TO`, and the word that contradicts it is
+    in the quote."""
+
     near_duplicates: tuple[str, ...] = ()
 
     @classmethod
@@ -197,6 +210,7 @@ class QueueItem:
             matter_id=a.matter_id,
             recorded_at=a.recorded_at,
             job_id=record.job_id,
+            quote=loc.quote or "",
             near_duplicates=record.near_duplicates,
         )
 

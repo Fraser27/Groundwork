@@ -110,11 +110,19 @@ class TestQueueContents:
 
         Previously asserted char offsets; those index the extracted text buffer rather
         than the PDF, so they are debug metadata now, not the citation.
+
+        The quote is the part this docstring always claimed and never checked. `page` and the
+        `char_*` offsets are debug aids, so an item carrying them and not the words is an item a
+        reviewer cannot decide from — and "appeared as a counterparty in two *unrelated* fixtures"
+        was approved as a live `ADVERSE_TO` on exactly that basis.
         """
         q = ReviewQueue()
-        q.stage(ctx(), [model()])
+        staged = model()
+        q.stage(ctx(), [staged])
         item = q.list_pending(ctx())[0]
         assert (item.document_id, item.page) == ("doc-1", 2)
+        assert item.quote == staged.source_locator.quote
+        assert item.quote, "an item with no words is one a reviewer cannot judge"
 
     def test_lowest_confidence_first(self):
         """A reviewer's attention is worth most where the model was least sure."""
