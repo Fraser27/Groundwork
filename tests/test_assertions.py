@@ -304,14 +304,20 @@ class TestDeclaredEndpointsAreEnforced:
         )
 
     def test_a_predicate_declaring_two_subject_kinds_accepts_either(self):
-        """`ADVERSE_TO` is `[Party, Matter] -> [Party]`, so party->party is legal and must stay so.
-        This is the test that stops the check being written as "subject must be domain[0]" -- which
-        would refuse a sound fact and, worse, look like the incident had been fixed."""
-        kinds = self._kinds(["party", "matter"], ["party"], symmetric=True)
+        """`CITES` is `[Document, Authority] -> [Authority]`, and both subject kinds are sound. This
+        is the test that stops the check being written as "subject must be domain[0]" -- which would
+        refuse a real fact and, worse, look like the incident had been fixed."""
+        kinds = self._kinds(["document", "authority"], ["authority"])
         assert _base(
-            predicate="ADVERSE_TO",
-            subject_id="party:calder-shipping-ag",
-            object_id="party:halveston-chartering-limited",
+            predicate="CITES",
+            subject_id="document:doc-1",
+            object_id="authority:410-us-113",
+            endpoint_kinds=kinds,
+        )
+        assert _base(
+            predicate="CITES",
+            subject_id="authority:410-us-113",
+            object_id="authority:347-us-483",
             endpoint_kinds=kinds,
         )
 
@@ -356,6 +362,57 @@ class TestDeclaredEndpointsAreEnforced:
         message = str(caught.value)
         assert "['matter'] -> ['party']" in message
         assert "party -> party" in message
+
+
+
+class TestTheLegalPackRefusesAPartyToPartyAdversity:
+    """The orientation, checked against the shipped pack rather than a hand-built `EndpointKinds`.
+
+    `ADVERSE_TO` used to declare `[Party, Matter] -> [Party]` *and* `symmetric: true`, so
+    `canonical_pair` byte-sorted the ends and nothing downstream could tell the firm's client from
+    the counterparty. `conflict_check` wants `(m:Matter)-[ADVERSE_TO]->(p:Party)` -- "this
+    engagement of ours is against them" -- and a party-subject claim does not say who we act for.
+
+    Reading the pack is the point. The tests above prove the *mechanism*; this proves the pack
+    actually asks for it, so relaxing the YAML cannot pass while they stay green.
+    """
+
+    def test_party_to_party_is_refused(self):
+        from src.ontology.loader import load_ontology
+
+        onto = load_ontology("legal")
+        with pytest.raises(AssertionError_, match="cannot be written party -> party"):
+            _base(
+                predicate="ADVERSE_TO",
+                subject_id="party:calder-shipping-ag",
+                object_id="party:halveston-chartering-limited",
+                endpoint_kinds=onto.endpoint_kinds("ADVERSE_TO"),
+            )
+
+    def test_matter_to_party_is_accepted(self):
+        from src.ontology.loader import load_ontology
+
+        onto = load_ontology("legal")
+        assert _base(
+            predicate="ADVERSE_TO",
+            subject_id="matter:NTL-2026-0114",
+            object_id="party:calder-shipping-ag",
+            endpoint_kinds=onto.endpoint_kinds("ADVERSE_TO"),
+        )
+
+    def test_the_reverse_is_refused_because_it_is_no_longer_symmetric(self):
+        """`party -> matter` was admitted while the predicate was symmetric with unequal ends: a
+        latent second orientation no validator caught. Dropping `symmetric:` closed it."""
+        from src.ontology.loader import load_ontology
+
+        onto = load_ontology("legal")
+        with pytest.raises(AssertionError_, match="cannot be written party -> matter"):
+            _base(
+                predicate="ADVERSE_TO",
+                subject_id="party:calder-shipping-ag",
+                object_id="matter:NTL-2026-0114",
+                endpoint_kinds=onto.endpoint_kinds("ADVERSE_TO"),
+            )
 
 
 class TestTheShippedPacksDeclareUsableEndpoints:

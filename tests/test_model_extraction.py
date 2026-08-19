@@ -333,7 +333,16 @@ class TestPrompt:
         payload = json.loads(
             build_prompt(chunk(), allowed_predicates=["MENTIONS"], entity_kinds=[])
         )
-        assert set(payload) == {"page", "passage", "allowed_predicates", "entity_kinds"}
+        assert set(payload) == {
+            "page",
+            "passage",
+            "allowed_predicates",
+            "entity_kinds",
+            # The matter this document belongs to. Not an allowlist -- it is one id the chunk
+            # already carries, and without it the model has no way to say "our engagement is
+            # against them", which is the fact a conflict check reads.
+            "this_matter",
+        }
 
     def test_passage_and_page_are_sent(self):
         payload = json.loads(
@@ -346,8 +355,31 @@ class TestPrompt:
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
         ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk())
         sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
-        assert "ADVERSE_TO" in sent["allowed_predicates"]
-        assert "MENTIONS" in sent["allowed_predicates"]
+        listed = {p["predicate"] for p in sent["allowed_predicates"]}
+        assert "ADVERSE_TO" in listed
+        assert "MENTIONS" in listed
+
+    def test_a_predicate_carries_its_declared_ends(self):
+        """The vocabulary being closed is only half of what a write has to satisfy. `ADVERSE_TO` is
+        Matter -> Party and a party-to-party claim is refused, so sending the name without the shape
+        asked the model to guess an orientation and then dropped the claim when it guessed wrong --
+        which starved the conflict rule while looking like a document with nothing to say."""
+        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
+        ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk())
+        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        adverse = next(p for p in sent["allowed_predicates"] if p["predicate"] == "ADVERSE_TO")
+        assert adverse["subject_kinds"] == ["Matter"]
+        assert adverse["object_kinds"] == ["Party"]
+
+    def test_the_chunks_own_matter_is_offered_as_a_subject(self):
+        """`ADVERSE_TO` needs a Matter subject, and the only matter id in scope is the one the
+        document was filed under. A descriptive predicate carries no shape, so it is sent bare."""
+        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
+        ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk(matter_id="matter:NTL-2026-0114"))
+        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        assert sent["this_matter"] == "matter:NTL-2026-0114"
+        mentions = next(p for p in sent["allowed_predicates"] if p["predicate"] == "MENTIONS")
+        assert "subject_kinds" not in mentions
 
     def test_temperature_is_omitted_by_default(self):
         """The newest Claude models reject the parameter, and a ValidationException on
@@ -502,19 +534,33 @@ class TestEntityKindsAreClosed:
         assert extractor().validate([claim], chunk=chunk()) == []
 
     def test_a_declared_kind_survives(self):
-        """Endpoints come back sorted because ADVERSE_TO is symmetric, so the pair is asserted as a
-        set rather than in whichever order the model happened to give them."""
+        """`ADVERSE_TO` is Matter -> Party: this engagement of ours is against them."""
         claim = interpretation(
-            subject_id="party:calder-shipping-ag",
+            subject_id="matter:ntl-2026-0114",
             predicate="ADVERSE_TO",
-            object_id="party:acme-corporation",
+            object_id="party:calder-shipping-ag",
         )
         out = extractor().validate([claim], chunk=chunk())
         assert len(out) == 1
-        assert {out[0].subject_id, out[0].object_id} == {
+        assert (out[0].subject_id, out[0].object_id) == (
+            "matter:ntl-2026-0114",
             "party:calder-shipping-ag",
-            "party:acme-corporation",
-        }
+        )
+
+    def test_a_party_to_party_adversity_is_refused(self):
+        """The claim that starved the conflict check, now rejected at the boundary.
+
+        "Calder is adverse to Northwind" does not say who the firm acts for, and while the pack
+        allowed it *and* declared the predicate symmetric, `canonical_pair` byte-sorted the ends --
+        so a rule asking "are we against a party we also represent" bound its matter variable to
+        whichever party sorted first and flagged the firm's own client. Refused loudly here rather
+        than silently matching nothing later."""
+        claim = interpretation(
+            subject_id="party:calder-shipping-ag",
+            predicate="ADVERSE_TO",
+            object_id="party:northwind-trading-limited",
+        )
+        assert extractor().validate([claim], chunk=chunk()) == []
 
     def test_an_unprefixed_id_is_dropped(self):
         """A bare id cannot be placed in the vocabulary, and guessing its kind would defeat the
@@ -640,29 +686,39 @@ class TestEntityIdsAreCanonicalised:
 
     def test_a_variant_spelling_is_a_self_edge(self):
         """Normalisation runs before the self-edge check on purpose: relating `party:acme` to
-        `Party:Acme` is one node related to itself, which the raw comparison would miss."""
+        `Party:Acme` is one node related to itself, which the raw comparison would miss.
+
+        On `AFFILIATE_OF` rather than `ADVERSE_TO`, because that one is Matter -> Party now: a
+        party-to-party claim would be refused by the kind guard first and the test would pass
+        without ever reaching the check it is named after."""
         claim = interpretation(
             subject_id="party:acme-corporation",
-            predicate="ADVERSE_TO",
+            predicate="AFFILIATE_OF",
             object_id="Party:Acme Corporation",
         )
         assert extractor().validate([claim], chunk=chunk()) == []
 
     def test_a_symmetric_fact_hashes_the_same_either_way(self):
         """`canonical_pair` sorts endpoints by their raw bytes, so before normalisation one
-        symmetric fact spelled two ways produced two orderings and two content hashes."""
+        symmetric fact spelled two ways produced two orderings and two content hashes.
+
+        Healthcare, because the legal pack no longer declares a symmetric predicate -- `ADVERSE_TO`
+        gave up `symmetric: true` when its ends became different kinds. `SAME_INGREDIENT_AS` is
+        Medication -> Medication, so its ends genuinely are interchangeable."""
+        onto = load_ontology("healthcare")
+        med = ModelExtractor(onto, bedrock=FakeBedrock("{}"))
         lower = interpretation(
-            subject_id="party:zeta-holdings",
-            predicate="ADVERSE_TO",
-            object_id="party:acme-corporation",
+            subject_id="medication:zestril",
+            predicate="SAME_INGREDIENT_AS",
+            object_id="medication:prinivil",
         )
         mixed = interpretation(
-            subject_id="Party:Zeta Holdings",
-            predicate="ADVERSE_TO",
-            object_id="party:acme-corporation",
+            subject_id="Medication:Zestril",
+            predicate="SAME_INGREDIENT_AS",
+            object_id="medication:prinivil",
         )
-        [a] = extractor().validate([lower], chunk=chunk())
-        [b] = extractor().validate([mixed], chunk=chunk())
+        [a] = med.validate([lower], chunk=chunk())
+        [b] = med.validate([mixed], chunk=chunk())
         assert a.assertion_id == b.assertion_id
 
 

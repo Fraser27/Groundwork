@@ -83,9 +83,15 @@ governing_predicates:
   - id: CONTRAINDICATED_WITH
     label: contraindicated with
     domain: [Medication]
-    range: [Medication, Diagnosis]
+    range: [Medication]
     description: Unsafe in combination.
     help: Governing for the same reason ADVERSE_TO is in the legal pack — a missed edge causes direct harm.
+    # Two drugs, and only two. `Diagnosis` was in the range as well, which left the ends unequal
+    # while they were also declared interchangeable, so `canonical_pair` byte-sorted a medication
+    # against a condition and whichever sorted first became the subject. Drug-with-drug genuinely is
+    # symmetric; a drug contraindicated *in* a condition is not, and folding both into one predicate
+    # is what made the symmetry incoherent. Nothing asserts the drug/condition form today, and when
+    # something does it needs its own directional predicate rather than this one's spare end.
     symmetric: true
   - id: ALLERGIC_TO
     label: allergic to

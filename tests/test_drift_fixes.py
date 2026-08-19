@@ -114,11 +114,17 @@ class TestSymmetricPredicatesCollapse:
     """`symmetric: true` was parsed and exposed through the API but enforced nowhere, so
     one relationship could occupy two edges with two different content hashes."""
 
-    def test_adverse_to_is_order_independent(self):
-        o = load_ontology("legal")
-        assert o.canonical_pair("ADVERSE_TO", "party:zeta", "party:alpha") == o.canonical_pair(
-            "ADVERSE_TO", "party:alpha", "party:zeta"
-        )
+    def test_a_symmetric_predicate_is_order_independent(self):
+        """`SAME_INGREDIENT_AS`, which is Medication -> Medication.
+
+        This used to assert `ADVERSE_TO`, and that predicate is no longer symmetric: it is now
+        Matter -> Party, and interchangeable ends with unequal declared kinds let canonicalisation
+        mint an orientation the pack never intended -- which is how a conflict check came to flag
+        the firm's own client."""
+        o = load_ontology("healthcare")
+        assert o.canonical_pair(
+            "SAME_INGREDIENT_AS", "medication:zeta", "medication:alpha"
+        ) == o.canonical_pair("SAME_INGREDIENT_AS", "medication:alpha", "medication:zeta")
 
     def test_asymmetric_predicate_keeps_its_direction(self):
         """REPRESENTS is not symmetric — counsel represents a party, not the reverse."""
@@ -133,23 +139,26 @@ class TestSymmetricPredicatesCollapse:
         assert o.canonical_pair("NOT_A_PREDICATE", "b", "a") == ("b", "a")
 
     def test_collapsing_yields_one_assertion_id(self):
-        """The consequence that matters: a conflict check reads one edge, not two."""
-        o = load_ontology("legal")
+        """The consequence that matters: a check reads one edge, not two."""
+        o = load_ontology("healthcare")
 
         def mk(subj, obj):
-            s, t = o.canonical_pair("ADVERSE_TO", subj, obj)
+            s, t = o.canonical_pair("SAME_INGREDIENT_AS", subj, obj)
             return build_assertion(
                 tenant_id="firm-acme",
                 subject_id=s,
-                predicate="ADVERSE_TO",
+                predicate="SAME_INGREDIENT_AS",
                 object_id=t,
                 epistemic_class=EpistemicClass.EXTRACTED_MODEL,
                 method="llm:opus-5",
                 confidence=0.7,
                 source_locator=DOC,
+                endpoint_kinds=o.endpoint_kinds("SAME_INGREDIENT_AS"),
             ).assertion_id
 
-        assert mk("party:alpha", "party:zeta") == mk("party:zeta", "party:alpha")
+        assert mk("medication:alpha", "medication:zeta") == mk(
+            "medication:zeta", "medication:alpha"
+        )
 
 
 class TestRulePremiseFloorIsReadable:

@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -98,6 +98,14 @@ citation nobody can search for cannot be checked.
 - The prefix MUST be one of `entity_kinds`, and `kind` must match it. Do not invent a kind, \
 however well it fits: an unlisted one is discarded, so the entity is lost rather than \
 approximated. Use the closest listed kind, or omit the claim if none fits.
+- A predicate in `allowed_predicates` may carry `subject_kinds` and `object_kinds`. Those are \
+enforced: `subject_id` must be of a listed subject kind and `object_id` of a listed object kind, \
+or the claim is REJECTED. They are not interchangeable. `ADVERSE_TO` is `Matter -> Party`, so \
+write `{"subject_id": "<this_matter>", "predicate": "ADVERSE_TO", "object_id": "party:..."}` — \
+"our engagement is against them", never one party against another.
+- `this_matter` is the matter this document belongs to, and is available as a subject id. Use it \
+for any claim about the engagement rather than about the paper. It may be null, in which case \
+omit claims that would need it.
 - Do not guess. If the passage does not clearly support a claim, omit it.
 - Return ONLY a JSON object, no prose.
 
@@ -137,18 +145,44 @@ def build_prompt(
     *,
     allowed_predicates: Sequence[str],
     entity_kinds: Sequence[str],
+    predicate_shapes: Mapping[str, tuple[Sequence[str], Sequence[str]]] | None = None,
 ) -> str:
     """The user turn: one passage, the closed vocabulary, and nothing else.
 
     No list of known courts or reporters. That was the allowlist failure — anything not
     enumerated was absent from the graph with no error anywhere.
+
+    `predicate_shapes` carries each predicate's declared subject and object kinds, because the
+    vocabulary being closed is only half of what a write must satisfy: `ADVERSE_TO` is Matter ->
+    Party, and a party-to-party claim is refused. Sending the names without the shapes asked the
+    model to guess an orientation and then rejected it silently.
+
+    `this_matter` offers the chunk's own matter as a subject. Without it the model has no id for
+    "the engagement this document belongs to" and no way to state the fact a conflict check reads.
     """
+    shapes = predicate_shapes or {}
     return json.dumps(
         {
             "page": chunk.page,
             "passage": chunk.text,
-            "allowed_predicates": list(allowed_predicates),
+            # One list, not a names list plus a shapes list: two renderings of the closed
+            # vocabulary in one prompt is two places for it to disagree.
+            "allowed_predicates": [
+                {
+                    "predicate": p,
+                    **(
+                        {
+                            "subject_kinds": list(shapes[p][0]),
+                            "object_kinds": list(shapes[p][1]),
+                        }
+                        if p in shapes
+                        else {}
+                    ),
+                }
+                for p in allowed_predicates
+            ],
             "entity_kinds": list(entity_kinds),
+            "this_matter": chunk.matter_id,
         },
         indent=2,
     )
@@ -308,6 +342,11 @@ class ModelExtractor:
             # asserted directly would look identical and defend nothing.
             allowed_predicates=sorted(self.ontology.extractable_predicates),
             entity_kinds=sorted(self.ontology.entities),
+            predicate_shapes={
+                p: (pdef.domain, pdef.range)
+                for p in self.ontology.extractable_predicates
+                if (pdef := self.ontology.predicates.get(p)) is not None and pdef.domain
+            },
         )
         try:
             raw = self.invoke(prompt)

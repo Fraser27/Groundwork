@@ -285,8 +285,11 @@ class TestAForbiddenConclusionIsRefusedAndReported:
     """
 
     def _party_subject_adversity(self):
-        """What the extractor actually produced from the Halveston note. Legal on its own terms:
-        `ADVERSE_TO` declares `[Party, Matter] -> [Party]`."""
+        """What the extractor actually produced from the Halveston note. It was legal on the pack's
+        own terms at the time -- `ADVERSE_TO` declared `[Party, Matter] -> [Party]` -- and the pack
+        has since narrowed to `[Matter] -> [Party]`, so `build_assertion` now refuses this shape
+        outright. The facts are built here without the endpoint check, deliberately: a graph written
+        before the narrowing still holds them, and a starved rule must stay reportable over it."""
         return [
             fact("counsel:sian-aldridge", "REPRESENTS", "party:halveston-chartering-limited"),
             fact(

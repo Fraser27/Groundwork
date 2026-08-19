@@ -115,7 +115,10 @@ class TestOntologyEndpoint:
     def test_predicates_carry_domain_range_and_help(self, client):
         body = client.get("/api/ontology/legal").json()
         adverse = next(p for p in body["governing_predicates"] if p["id"] == "ADVERSE_TO")
-        assert adverse["symmetric"] is True
+        # Matter -> Party, and not symmetric: the ends are different kinds now, so they are not
+        # interchangeable. Recording it from the matter is what says who the firm acts for.
+        assert adverse["symmetric"] is False
+        assert adverse["domain"] == ["Matter"]
         assert adverse["range"] == ["Party"]
         assert adverse["help"]
 

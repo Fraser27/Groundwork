@@ -513,6 +513,7 @@ def _parse(raw: dict[str, Any]) -> Ontology:
     )
     _validate_blocks(predicates, ontology.domain)
     _validate_transitive(predicates, ontology.domain)
+    _validate_symmetric(predicates, ontology.domain)
     _validate_entity_ids(entities, ontology.domain)
     _validate_rules(ontology)
     return ontology
@@ -603,6 +604,29 @@ def _validate_transitive(predicates: dict[str, PredicateDef], domain: str) -> No
                 f"predicate {pdef.id!r} in the {domain} pack declares transitive: true but its "
                 f"domain {list(pdef.domain)} and range {list(pdef.range)} do not overlap, so a "
                 "chain has nothing to continue into"
+            )
+
+
+def _validate_symmetric(predicates: dict[str, PredicateDef], domain: str) -> None:
+    """Refuse `symmetric: true` where the two ends are not the same kinds.
+
+    Symmetric means the ends are interchangeable, and `canonical_pair` acts on that by byte-sorting
+    them before anything reads the edge. With unequal kinds the sort invents an orientation the pack
+    never declared: `ADVERSE_TO` was `[Party, Matter] -> [Party]` and symmetric, so a matter subject
+    survived only when its id happened to sort first, and a party subject was indistinguishable from
+    a matter one. A conflict rule binding `(m:Matter)` then bound it to a party and flagged the
+    firm's own client.
+
+    Equality, not overlap. Overlap would still admit one legal orientation and one canonicalisation
+    mints, which is the same defect narrowed.
+    """
+    for pdef in predicates.values():
+        if pdef.symmetric and set(pdef.domain) != set(pdef.range):
+            raise ValueError(
+                f"predicate {pdef.id!r} in the {domain} pack declares symmetric: true but its "
+                f"domain {list(pdef.domain)} and range {list(pdef.range)} differ; interchangeable "
+                "endpoints of different kinds let canonicalisation pick an orientation the pack "
+                "never declared, and a rule matching on kind then binds the wrong end"
             )
 
 

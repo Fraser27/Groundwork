@@ -119,11 +119,19 @@ governing_predicates:
     help: Half of every conflict check. Kept closed so `acts_for` and `is_counsel_to` can never fragment it.
   - id: ADVERSE_TO
     label: adverse to
-    domain: [Party, Matter]
+    # A matter is adverse to a party: *this engagement of ours* is against *them*. Party -> Party
+    # was also allowed, and that permissiveness was the bug. Combined with `symmetric: true` it made
+    # the two ends interchangeable, because `canonical_pair` byte-sorts them before anything reads
+    # them -- so nothing downstream could tell the firm's client from the counterparty. A rule
+    # asking "are we against a party we also act for" then bound its matter variable to whichever
+    # party sorted first, and produced a conflict flag against the firm's own client.
+    domain: [Matter]
     range: [Party]
-    description: Positioned against this party.
-    help: The other half of a conflict check. If this predicate fragments, conflict checks silently under-report.
-    symmetric: true
+    description: This matter is positioned against this party.
+    help: "The other half of a conflict check. Recorded from the matter rather than between two parties, because \"we are acting against them\" is the claim a conflict check needs and \"these two are opposed\" does not say who we act for."
+    # Not symmetric, now that the ends are different kinds. Interchangeable endpoints with unequal
+    # declared kinds let canonicalisation mint an orientation the pack never intended.
+
   - id: PARTY_TO
     label: party to
     domain: [Party]

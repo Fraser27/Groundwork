@@ -45,9 +45,9 @@ class TestTransitiveIsDeclaredNotAssumed:
         assert "AFFILIATE_OF" in load_ontology("legal").transitive_predicates
 
     def test_adversity_does_not_chain(self):
-        """Opposing A, who opposes B, does not put the firm against B. Declaring this
-        transitive would manufacture conflicts out of unrelated litigation — and since
-        ADVERSE_TO is symmetric, a walk would also oscillate between two nodes."""
+        """Opposing A, who opposes B, does not put the firm against B. Declaring this transitive
+        would manufacture conflicts out of unrelated litigation. It is also Matter -> Party now, so
+        the object of one hop is not a legal subject of the next and the chain has nowhere to go."""
         assert "ADVERSE_TO" not in load_ontology("legal").transitive_predicates
 
     def test_representation_does_not_chain(self):
@@ -97,6 +97,84 @@ class TestTransitiveIsDeclaredNotAssumed:
         onto = loader._parse(__import__("yaml").safe_load(pack.read_text()))
         assert onto.transitive_predicates == frozenset({"OWNS"})
 
+
+class TestSymmetricNeedsEqualEnds:
+    """Interchangeable endpoints and unequal kinds cannot both be true.
+
+    `canonical_pair` acts on `symmetric: true` by byte-sorting the endpoints before anything reads
+    the edge, so with unequal kinds the sort *invents* an orientation the pack never declared.
+    `ADVERSE_TO` was `[Party, Matter] -> [Party]` and symmetric: a matter subject survived only when
+    its id happened to sort first, and `conflict_check` binding `(m:Matter)` bound it to a party and
+    flagged the firm's own client. The pack is where that has to be caught, because by the time a
+    rule matches, the orientation is already gone.
+    """
+
+    def test_the_shipped_packs_are_coherent(self):
+        for domain in ("legal", "healthcare"):
+            onto = load_ontology(domain)
+            for pdef in onto.predicates.values():
+                if pdef.symmetric:
+                    assert set(pdef.domain) == set(pdef.range), f"{domain}: {pdef.id}"
+
+    def test_unequal_ends_are_refused(self, tmp_path):
+        """The shape `ADVERSE_TO` had. Loud at load, so the class cannot come back through a
+        different predicate."""
+        from src.ontology import loader
+
+        pack = tmp_path / "bad.yaml"
+        pack.write_text(
+            "domain: bad\nversion: 1\nentity_types: []\n"
+            "governing_predicates:\n  - id: OPPOSES\n    domain: [Party, Matter]\n"
+            "    range: [Party]\n    symmetric: true\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        with pytest.raises(ValueError, match="symmetric"):
+            loader._parse(__import__("yaml").safe_load(pack.read_text()))
+
+    def test_a_partial_overlap_is_still_refused(self, tmp_path):
+        """Equality, not overlap. Overlap admits one orientation the pack declared and one
+        canonicalisation mints, which is the same defect with a smaller blast radius."""
+        from src.ontology import loader
+
+        pack = tmp_path / "bad2.yaml"
+        pack.write_text(
+            "domain: bad\nversion: 1\nentity_types: []\n"
+            "governing_predicates:\n  - id: OPPOSES\n    domain: [Party]\n"
+            "    range: [Party, Matter]\n    symmetric: true\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        with pytest.raises(ValueError, match="symmetric"):
+            loader._parse(__import__("yaml").safe_load(pack.read_text()))
+
+    def test_equal_ends_are_accepted(self, tmp_path):
+        from src.ontology import loader
+
+        pack = tmp_path / "ok.yaml"
+        pack.write_text(
+            "domain: ok\nversion: 1\nentity_types: []\n"
+            "governing_predicates:\n  - id: SIBLING_OF\n    domain: [Party]\n"
+            "    range: [Party]\n    symmetric: true\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        assert loader._parse(__import__("yaml").safe_load(pack.read_text())).predicates[
+            "SIBLING_OF"
+        ].symmetric
+
+    def test_an_asymmetric_predicate_may_have_unequal_ends(self, tmp_path):
+        """The validator must only fire on the combination. Most governing predicates relate two
+        different kinds and that is ordinary."""
+        from src.ontology import loader
+
+        pack = tmp_path / "ok2.yaml"
+        pack.write_text(
+            "domain: ok\nversion: 1\nentity_types: []\n"
+            "governing_predicates:\n  - id: ACTS_FOR\n    domain: [Counsel]\n"
+            "    range: [Party]\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        assert not loader._parse(
+            __import__("yaml").safe_load(pack.read_text())
+        ).predicates["ACTS_FOR"].symmetric
 
 class TestTwoTierVocabulary:
     def test_governing_and_descriptive_are_disjoint(self):
