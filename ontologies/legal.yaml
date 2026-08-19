@@ -217,9 +217,18 @@ governing_predicates:
     range: [Party]
     description: The firm may be acting both for and against this party.
     help: Inferred, never extracted. It carries the premises that produced it, so the answer to "why do you believe this" is the two documents it rests on. Always read as *potential* - the judgement about whether it is a real conflict is a lawyer's.
-    # Both ends. Evidence about the matter and evidence about the party are equally unsafe to
-    # hand over while the firm may be on both sides of it.
-    blocks: both
+    # The party only, on the same reasoning as RELIES_ON_STALE_AUTHORITY below.
+    #
+    # `both` blacked out the matter as well, which means the file the disputes team is retained to
+    # run — on a memo whose own decision was "may be accepted subject to an information barrier".
+    # Withholding the *party* is the barrier's substance; withholding the matter withholds the work.
+    # A conflict about a party the firm also represents made that client's own file unanswerable:
+    # "who is the counsel for Halveston" returned nothing.
+    #
+    # The per-person half of a barrier is an ethical screen (`MatterScreen`, keyed by user), which
+    # is the control the fixture's memo actually describes — five named individuals, not a matter
+    # nobody may read.
+    blocks: object
   - id: RELIES_ON_STALE_AUTHORITY
     label: relies on overruled authority
     domain: [Document]

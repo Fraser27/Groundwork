@@ -277,11 +277,42 @@ class TestThePackDecidesWhatBlocks:
         onto = load_ontology("legal")
         assert onto.blocked_endpoints("RELIES_ON_STALE_AUTHORITY") == ("subject",)
 
-    def test_a_conflict_blocks_both_ends(self):
-        assert load_ontology("legal").blocked_endpoints("POTENTIAL_CONFLICT") == (
-            "subject",
-            "object",
+    def test_a_conflict_blocks_the_party_not_the_matter(self):
+        """`both` blacked out the matter as well -- the file the disputes team is retained to run,
+        on a memo whose own decision was "may be accepted subject to an information barrier".
+        Withholding the party is the barrier's substance; withholding the matter withholds the
+        work. A conflict about a party the firm also represents made that client's own file
+        unanswerable."""
+        assert load_ontology("legal").blocked_endpoints("POTENTIAL_CONFLICT") == ("object",)
+
+    def test_a_conflict_does_not_withhold_the_matter_it_is_about(self, ctx):
+        """The behaviour, not just the declaration. A matter-subject conflict is the shape the
+        pack declares, and its matter has to stay readable."""
+        onto = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=onto.governing_predicates
         )
+        _live(
+            ctx,
+            queue,
+            [
+                ("counsel:dalgleish-rowe", "REPRESENTS", "party:calder-plc", "M-1"),
+                ("matter:m-2", "ADVERSE_TO", "party:calder-plc", "M-2"),
+            ],
+            "j1",
+        )
+        live = [r.assertion for r in queue.visible(ctx) if r.is_current]
+        inferences = [i.assertion for i in Reasoner(onto).run(ctx, live).inferences]
+        assert inferences, "the fixture proves nothing if the rule did not fire"
+        queue.stage(ctx, inferences, job_id="j2")
+        for a in inferences:
+            queue.approve(ctx, a.assertion_id)
+        queue.promote(ctx, job_id="j2")
+
+        reader = GraphReader(queue, ontology=onto)
+        subjects = {row["subject_id"] for row in reader.blocking_facts(ctx, ["matter:m-2"])}
+        assert subjects == {"party:calder-plc"}
+        assert "matter:m-2" not in subjects
 
     def test_a_contraindication_blocks_the_drug_not_the_patient(self):
         """Suppressing evidence about the patient would withhold the record in order to

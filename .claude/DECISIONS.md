@@ -338,3 +338,18 @@ COA needs 16 stacks; we need 6. What went, and why:
 6. **Entity resolution thresholds.** Semantica's default fuzzy threshold of 0.7 would
    happily merge "Acme Corp" with "Acme Holdings". In legal a bad merge is worse than
    a missed one — raise the threshold and route near-misses to review.
+7. **A rule block has no user dimension.** An ethical screen is per user
+   (`MatterScreen`, keyed `tenant/user/matter`); a `POTENTIAL_CONFLICT` block is not, so
+   it withholds a party's facts from everyone including the partner who acts for that
+   party. Narrowing it to `blocks: object` stopped a conflict blacking out the matter,
+   which was the acute problem, but the residual stands. The coherent answer is probably
+   that a derived conflict should *raise a screen* over the individuals who need
+   walling off — the control the fixture's own risk memo describes, naming five people —
+   rather than `Block` growing a `user_id`. That is a design change, not a patch.
+8. **`conflict_check` reads "some counsel represents X", not "we represent X".**
+   `Counsel` covers external firms by design, so `counsel:opposing-firm REPRESENTS
+   party:calder` plus an adversity would flag ordinary litigation as a conflict. Latent
+   rather than live: nothing currently extracts opposing counsel as `REPRESENTS`. The
+   discriminator has to be DECLARED by a case-management system rather than read off a
+   page, so the fix is a pack change plus an extraction path plus a feed that does not
+   exist yet.
