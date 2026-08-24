@@ -284,7 +284,7 @@ export default function ReviewQueue() {
               </button>
               <FieldHelp
                 title="Run rule checks"
-                text="Fires this firm's rules — conflict checks, stale authority — over every signed-off fact and reports what each one did. Conclusions are staged into this queue, never published. It also reports which rules could not check anything, which is the only way to tell a clean conflict check from one that had nothing to look at."
+                text="Fires this firm's rules (conflict checks, stale authority) over every signed-off fact and reports what each one did. Conclusions are staged into this queue, never published. It also reports which rules could not check anything, which is the only way to tell a clean conflict check from one that had nothing to look at."
               />
             </div>
           )}
@@ -421,7 +421,7 @@ export default function ReviewQueue() {
                     report is the only thing that separates the two, so it is offered here. */}
                 {isPlatformAdmin() && !report && (
                   <p style={{ marginTop: 9 }}>
-                    An empty queue is not by itself evidence that no conflict exists — a conflict
+                    An empty queue is not by itself evidence that no conflict exists, a conflict
                     check with no adversity facts to join stages nothing, exactly as a clean one
                     does. <strong>Run rule checks</strong> above reports which of the two this is.
                   </p>
@@ -472,7 +472,7 @@ export default function ReviewQueue() {
                         <div className="review-nearby">
                           <span className="tag tag-neutral">already in the graph</span>{' '}
                           <span className="dim">
-                            {a.near_duplicates.join(', ')} — if that is the same company, correct
+                            {a.near_duplicates.join(', ')}, if that is the same company, correct
                             this claim to use it. Two nodes for one company is what makes a later
                             conflict check come back clean.
                           </span>
@@ -714,7 +714,7 @@ export default function ReviewQueue() {
 function NewEntityHint() {
   return (
     <p className="hint">
-      Not an entity already in the graph — this will create a new one. If the company is already
+      Not an entity already in the graph, this will create a new one. If the company is already
       here under another spelling, pick that instead: two nodes for one company is what makes a
       later conflict check come back clean.
     </p>

@@ -212,7 +212,7 @@ function routerSummary(router?: RouterTrace | null): string {
   if (!router.enabled) return 'The router is switched off, so every permitted tier was tried.'
   if (router.degraded) {
     return router.reason
-      ? `Could not choose, so every permitted tier ran — ${router.reason}`
+      ? `Could not choose, so every permitted tier ran. ${router.reason}`
       : 'Could not choose, so every permitted tier ran.'
   }
   const layers = router.layers ?? []
@@ -626,7 +626,7 @@ function FactList({ facts, floor }: { facts: QueryHit[]; floor: number }) {
   return (
     <>
       <p className="qtrace-note dim">
-        Matched by name in the question — the graph was asked about these directly.
+        Matched by name in the question, the graph was asked about these directly.
       </p>
       <div className="path-chain">{matched.map(row)}</div>
       <p className="qtrace-note dim" style={{ marginTop: 10 }}>
@@ -832,7 +832,7 @@ function GateStep({
       {gate?.degraded && (
         <p className="qtrace-note qtrace-withheld">
           The ethical screens on your account were applied. The graph was not checked for
-          conflicts or other rule-based blocks, so nothing listed below is a clearance — this
+          conflicts or other rule-based blocks, so nothing listed below is a clearance, this
           answer may include evidence that would normally be withheld.
           <br />
           <span className="dim">Reported reason: {gate.degraded}</span>
@@ -866,8 +866,8 @@ function GateStep({
       )}
 
       {/* Before the "nothing was refused" note, because that note is exactly what this
-          qualifies. An unreviewed conflict cannot refuse anything — a model's proposal must not
-          withhold evidence — but a clean wall over a graph that holds one is a true sentence
+          qualifies. An unreviewed conflict cannot refuse anything, a model's proposal must not
+          withhold evidence, but a clean wall over a graph that holds one is a true sentence
           reading as a false one. */}
       {!!gate?.awaiting_review?.length && !degraded && (
         <p className="qtrace-note qtrace-awaiting">
@@ -907,7 +907,7 @@ function GateStep({
           <p className="withheld-block-note">
             {withheld.length > 0
               ? 'Named on purpose. An answer that looks complete because the inconvenient part was invisible is the failure a screen exists to prevent.'
-              : 'Nothing was withheld. The evidence below is complete, and whether these findings matter is a judgement for you \u2014 which is why they are named rather than acted on.'}
+              : 'Nothing was withheld. The evidence below is complete, and whether these findings matter is a judgement for you, which is why they are named rather than acted on.'}
             {blocks.some((b) => (b.premise_count ?? 0) > 2) && (
               <>
                 {' '}
@@ -945,7 +945,7 @@ function GateStep({
                         'anyone would have found it by reading the file.'
                       }
                     >
-                      indirect — {b.premise_count} facts
+                      indirect ({b.premise_count} facts)
                     </span>
                   )}
                 </div>
@@ -966,7 +966,7 @@ function GateStep({
                 <div className="withheld-field">
                   <span className="withheld-field-label">In the graph</span>
                   {/* Stated rather than linked, on purpose. `?highlight=` takes assertion ids
-                      and a block has none — a screen is a grant, not a fact. A link filtered to
+                      and a block has none, a screen is a grant, not a fact. A link filtered to
                       a screened matter would draw an empty canvas reading as "this matter holds
                       nothing", which is the silent failure this card exists to prevent. */}
                   <span className="dim">

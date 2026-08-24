@@ -131,7 +131,7 @@ export const HELP = {
   ethicalScreen:
     'A recorded instruction that one person must not see one matter, whatever else they hold. It overrides being on the team, and it overrides holding the administrator role, because a wall a senior person can read through is not a wall. Lifting one is also recorded rather than tidied away.',
   blockKinds:
-    'Three different findings are listed here, and they call for different reactions. An ethical screen is a recorded instruction that one person must not see one matter. A potential conflict means the firm may be on both sides of a party — a conduct question for a lawyer to judge. Relying on overruled authority is neither: it means a document rests on a case that has since been overturned, so the advice was very likely right when written and now needs revising. Only the first two are about ethics, and only a screen withholds anything \u2014 a conflict and a stale citation are reported for you to weigh, with the evidence left intact.',
+    'Three different findings are listed here, and they call for different reactions. An ethical screen is a recorded instruction that one person must not see one matter. A potential conflict means the firm may be on both sides of a party, a conduct question for a lawyer to judge. Relying on overruled authority is neither: it means a document rests on a case that has since been overturned, so the advice was very likely right when written and now needs revising. Only the first two are about ethics, and only a screen withholds anything. A conflict and a stale citation are reported for you to weigh, with the evidence left intact.',
   accessDecision:
     'The reason a matter is or is not open to someone, in four possibilities: they are on the team; they are screened from it; nobody has put them on it; or they hold the administrator role and can reach it without being on the team. Naming the reason matters, “screened” calls for a conversation with the risk team, while “not on the team” is usually just someone forgetting to staff them.',
   accessAudit:
@@ -185,7 +185,7 @@ export const HELP = {
   retraction:
     'Withdrawing a fact. Anything inferred from it is withdrawn at the same time, so no conclusion outlives the reason it was drawn.',
   reasonerStates:
-    'A rule that draws no conclusion has four possible reasons, and only one of them is good news. It ran, its premises matched, and nothing followed — that is a clean check. Its premises matched nothing, so it never checked anything and the missing relationship is named. It could not fire at all, so whatever it was meant to check is not being checked by anything. Or it did find a match and an invariant refused the conclusion. All four report zero, which is why they are drawn apart here rather than summed: “no conflict found” and “no conflict could be looked for” must never read the same.',
+    'A rule that draws no conclusion has four possible reasons, and only one of them is good news. It ran, its premises matched, and nothing followed, that is a clean check. Its premises matched nothing, so it never checked anything and the missing relationship is named. It could not fire at all, so whatever it was meant to check is not being checked by anything. Or it did find a match and an invariant refused the conclusion. All four report zero, which is why they are drawn apart here rather than summed: “no conflict found” and “no conflict could be looked for” must never read the same.',
 
   // ── Maintenance ───────────────────────────────────────────────────────────
   //
@@ -288,7 +288,7 @@ export const INGEST_STEP_HELP: Record<string, string> = {
   APPROVED: 'Signed off, and about to go live. A document sits here only briefly.',
   LIVE: 'Reviewed and in use. Approved facts can now shape answers.',
   STAGE_FAILED:
-    'The facts were read but could not be written to the graph. Nothing is lost — the document is still in S3 and Replay re-runs it.',
+    'The facts were read but could not be written to the graph. Nothing is lost, the document is still in S3 and Replay re-runs it.',
   PROMOTE_FAILED:
     'Approved but not yet in service: the step that makes facts live did not finish. The approval stands and Replay retries it.',
 }
@@ -437,5 +437,5 @@ export const PART_PROVENANCE_LABEL: Record<string, string> = {
   inferred: 'a model’s reading',
   // Not 'exact figure' either. model_selected picks between sums a person approved; this one wrote
   // the sum. The arithmetic is the thing to check, so the label points at it.
-  model_written: 'query written by AI — read the SQL',
+  model_written: 'query written by AI. Read the SQL',
 }

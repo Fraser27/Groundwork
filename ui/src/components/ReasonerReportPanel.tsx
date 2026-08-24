@@ -63,7 +63,7 @@ export default function ReasonerReportPanel({
             <strong>
               {report.count} {report.count === 1 ? 'conclusion' : 'conclusions'} staged for review.
             </strong>{' '}
-            Drawn from {scale}. Nothing was published — each one carries the facts it rests on, so
+            Drawn from {scale}. Nothing was published, each one carries the facts it rests on, so
             it can be followed back to the documents underneath before anyone acts on it.
             {unable.size > 0 &&
               ` ${unable.size} other ${unable.size === 1 ? 'rule' : 'rules'} still drew nothing for a reason worth reading below.`}
@@ -154,7 +154,7 @@ export default function ReasonerReportPanel({
           title={`${skipped.length} ${skipped.length === 1 ? 'rule' : 'rules'} could not fire at all`}
           tag={<span className="tag tag-red">never ran</span>}
           note={
-            'Not the same as an empty join. These were never evaluated — the rule could not be read, ' +
+            'Not the same as an empty join. These were never evaluated, the rule could not be read, ' +
             'or it concludes a relationship outside this pack’s vocabulary. Whatever they were ' +
             'meant to check is not being checked by anything.'
           }
@@ -190,12 +190,12 @@ export default function ReasonerReportPanel({
         <>
           <div className="qtrace-sublabel" style={{ marginTop: 16 }}>
             Checked and clean
-            <FieldHelp text="These rules were evaluated, every premise matched, and nothing followed. This is the only part of this report that is reassurance — and it is listed by name so that a rule quietly missing from it stands out." />
+            <FieldHelp text="These rules were evaluated, every premise matched, and nothing followed. This is the only part of this report that is reassurance, and it is listed by name so that a rule quietly missing from it stands out." />
           </div>
           <ul className="qtrace-list">
             {cleared.map((r) => (
               <li key={r.id}>
-                <strong>{r.id}</strong> — {r.description}
+                <strong>{r.id}</strong>: {r.description}
               </li>
             ))}
           </ul>
@@ -206,9 +206,9 @@ export default function ReasonerReportPanel({
           // The report names only the rules that failed, so without the pack the ones that ran
           // cleanly cannot be listed. Said rather than left as a shorter list.
           <p className="qtrace-note">
-            The vocabulary could not be loaded, so the rules that ran cleanly cannot be named here —
-            only the {unable.size} that could not check. The counts above are the server's and are
-            unaffected.
+            The vocabulary could not be loaded, so the rules that ran cleanly cannot be named
+            here, only the {unable.size} that could not check. The counts above are the
+            server's and are unaffected.
           </p>
         )
       )}

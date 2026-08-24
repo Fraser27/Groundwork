@@ -330,7 +330,7 @@ def advisory_warning(screen: Screen) -> str:
     named = ", ".join(subjects) if subjects else "this question"
     return (
         f"{len(findings)} {'finding' if len(findings) == 1 else 'findings'} to consider, about "
-        f"{named}. Nothing was withheld — the evidence below is complete, and whether the finding "
+        f"{named}. Nothing was withheld, the evidence below is complete, and whether the finding "
         "matters is a judgement for you. Each one is listed with its reason and what it rests on."
     )
 

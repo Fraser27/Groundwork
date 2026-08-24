@@ -187,7 +187,7 @@ export default function MergeDialog({
             <div className="consequence-title">
               {nothingToDo
                 ? 'Nothing would change'
-                : `What a merge would do — ${preview.affected.length + preview.cascaded.length} fact${
+                : `What a merge would do: ${preview.affected.length + preview.cascaded.length} fact${
                     preview.affected.length + preview.cascaded.length === 1 ? '' : 's'
                   } touched`}
             </div>

@@ -537,7 +537,7 @@ export default function QueryBuilder() {
                 <div className="card-header">
                   <h3>
                     AI-written SQL
-                    <FieldHelp text="Written by AI for this question, because no approved metric covers it. It could only name the tables listed below, and had to aggregate rather than return individual rows — both enforced on the query itself, not asked for in the prompt. Nobody approved what it measures, so read it." />
+                    <FieldHelp text="Written by AI for this question, because no approved metric covers it. It could only name the tables listed below, and had to aggregate rather than return individual rows, both enforced on the query itself rather than asked for in the prompt. Nobody approved what it measures, so read it." />
                   </h3>
                   <span className="tag tag-orange">not from an approved metric</span>
                 </div>
@@ -546,7 +546,7 @@ export default function QueryBuilder() {
                   Tables it was allowed to read: {generated.tables_offered.join(', ') || 'none'}
                 </div>
                 {/* The error, never an empty table. Columns are not validated by the firewall, so
-                    a query naming one that does not exist fails here — and showing that as no rows
+                    a query naming one that does not exist fails here, and showing that as no rows
                     would read as "no data" for a question that was never answered. */}
                 {generated.error && (
                   <div className="banner banner-error" style={{ marginTop: 10 }}>

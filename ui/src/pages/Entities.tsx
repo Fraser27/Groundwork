@@ -163,7 +163,7 @@ export default function Entities() {
         <div className="banner banner-warn">
           <span>
             <strong>No fork candidates could be computed.</strong> {duplicatesError}. Ids are still
-            listed below and a merge can still be done by hand — this only means nothing is
+            listed below and a merge can still be done by hand, this only means nothing is
             suggesting one.
           </span>
         </div>
@@ -196,7 +196,7 @@ export default function Entities() {
         <div className="card-header">
           <h3>
             Ids that may name one thing
-            <FieldHelp text="Grouped by blocking key. Words that are legal form rather than name — ag, gmbh, ltd, llp, plc and the rest — are set aside when computing the key. Holdings, group, partners and trading deliberately are not: Acme Corp and Acme Holdings are two companies." />
+            <FieldHelp text="Grouped by blocking key. Words that are legal form rather than name (ag, gmbh, ltd, llp, plc and the rest) are set aside when computing the key. Holdings, group, partners and trading deliberately are not: Acme Corp and Acme Holdings are two companies." />
           </h3>
           <Link to="/provenance" className="btn btn-ghost btn-sm">
             Audit view

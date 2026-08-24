@@ -558,7 +558,7 @@ export default function Admin() {
               style={{ width: '100%' }}
             />
             <p className="hint">
-              <strong>{margin.toFixed(2)}</strong> — a layer scoring within{' '}
+              <strong>{margin.toFixed(2)}</strong>, a layer scoring within{' '}
               {Math.round(margin * 100)}% of the best-scoring layer is searched as well. Not a
               relevance figure: it compares layers with each other, because a resemblance score
               means nothing on its own.
@@ -592,7 +592,7 @@ export default function Admin() {
               style={{ width: '100%' }}
             />
             <p className="hint">
-              <strong>{minSimilarity.toFixed(2)}</strong> — below this a match is not counted at
+              <strong>{minSimilarity.toFixed(2)}</strong>, below this a match is not counted at
               all. It answers only whether anything resembled the question; when nothing does, the
               router searches everything rather than picking the least bad option. Keep it low.
             </p>
@@ -1119,11 +1119,11 @@ function RetrievalReach({
           style={{ width: '100%' }}
         />
         <div className="dim" style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-          <span>1 — adjacent only</span>
-          <span>5 — widest</span>
+          <span>1 (adjacent only)</span>
+          <span>5 (widest)</span>
         </div>
         <p className="hint">
-          <strong>{depth}</strong> — every entity the walk touches is also checked for a conflict or
+          <strong>{depth}</strong>, every entity the walk touches is also checked for a conflict or
           an ethical wall, so this is what decides whether a conflict two parties away is found at
           all. Each extra hop widens that reach and costs latency: at 1 a non-adjacent conflict is
           missed, and on a well-connected firm 5 is slow.
@@ -1221,7 +1221,7 @@ function TierPermissions({
           />
           <span className="switch-track" />
           <span>
-            Tier {tier.n} — {tier.name}
+            Tier {tier.n}: {tier.name}
             <span className="dim" style={{ display: 'block', fontSize: 11.5, marginTop: 2 }}>
               {tier.note}
             </span>
@@ -1237,7 +1237,7 @@ function TierPermissions({
       <p className="card-note" style={{ marginTop: 9 }}>
         A forbidden tier is refused rather than substituted: "answered at a tier you disallowed"
         and "answered at the tier you asked for" must not look the same. Turning one off does not
-        remove the facts underneath it — a disabled tier is named in the trace of every question
+        remove the facts underneath it, a disabled tier is named in the trace of every question
         that would have used it.
       </p>
     </div>

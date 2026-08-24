@@ -593,7 +593,7 @@ function Questions({
         <div className="toolbar-field toolbar-spacer">
           <label>&nbsp;</label>
           <span className="search-count">
-            {events === null ? '—' : `${events.length} question${events.length === 1 ? '' : 's'}`}
+            {events === null ? '-' : `${events.length} question${events.length === 1 ? '' : 's'}`}
             {applied && events !== null && ` of ${scanned} scanned`}
           </span>
         </div>
