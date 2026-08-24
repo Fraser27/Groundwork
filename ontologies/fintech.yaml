@@ -1,0 +1,255 @@
+# Fintech domain pack — lending and counterparty risk.
+#
+# The third pack, and the one that decides whether "domain-agnostic" is a claim or a
+# property. Legal and healthcare are close cousins: both are about a professional's duty
+# to a person. This one is about exposure to a legal entity, which is a different shape,
+# and it is here to find out whether the abstraction bends that far.
+#
+# Same two-tier split, same test for which tier a predicate belongs in: would a wrong
+# answer embarrass you, or expose you? Here "expose" means a breached lending limit, an
+# undisclosed related-party loan, or a regulatory finding — so exposure, control and
+# covenant state are governing, and sector tagging is not.
+
+domain: fintech
+version: 1
+
+# Legal-form noise on a counterparty name, same use as the legal pack: to ask a human whether
+# two ids are one company, never to rewrite a stored id. The reasoning carries over exactly —
+# `Northwind Holdings BV` and `Northwind Trading BV` are commonly a parent and a subsidiary, and
+# CONTROLS is the predicate that records the difference. Collapsing them would turn a group
+# exposure into a single-name one and understate concentration, which is the error this domain
+# most needs not to make.
+entity_suffixes:
+  - ag
+  - sa
+  - nv
+  - bv
+  - gmbh
+  - plc
+  - ltd
+  - limited
+  - llc
+  - inc
+  - corp
+  - corporation
+  - spa
+  - oyj
+# Deliberately NOT here, on the legal pack's reasoning: `holdings`, `group`, `capital`,
+# `partners`, `treasury`. Each is part of a name rather than its legal form, and in this domain
+# they are frequently the *only* thing distinguishing a parent from its financing vehicle.
+
+entity_types:
+  - id: Facility
+    label: Facility
+    description: A credit agreement — a loan, revolver, or guarantee line.
+    help: "Plays the role Matter does in the legal pack: the organising unit that other entities hang off. A bank-issued facility reference, so it is not ours to rewrite."
+    external_id: true
+    organising_unit: true
+    label_plural: Facilities
+  - id: Counterparty
+    label: Counterparty
+    description: A legal entity the institution has or may have exposure to.
+    help: Borrowers, guarantors, and group members are all Counterparties. The role is on the edge rather than the node, because the same company is a borrower on one facility and a guarantor on another.
+  - id: Obligor
+    label: Obligor
+    description: A person or entity responsible for repayment.
+    help: Separate from Counterparty because responsibility and exposure are different relations. A parent can be an Obligor on a facility drawn by a subsidiary.
+  - id: Instrument
+    label: Instrument
+    description: A tradable or held financial instrument.
+  - id: Document
+    label: Document
+    description: A credit agreement, covenant certificate, memo, or correspondence item.
+    help: Documents are immutable in S3. What you see here is derived metadata plus extracted assertions.
+    external_id: true
+  - id: Covenant
+    label: Covenant
+    description: A financial or informational undertaking within a facility.
+    help: Governing, because a breach that nobody surfaced is the failure this domain exists to prevent.
+  - id: Regulation
+    label: Regulation
+    description: A rule or limit an exposure is assessed against.
+    help: Large-exposure limits, related-party lending rules, capital requirements. The analogue of Authority in the legal pack.
+  - id: Jurisdiction
+    label: Jurisdiction
+    description: A regulatory or governing-law territory.
+  - id: ReportingDate
+    label: Reporting date
+    description: A date-bound reporting or testing obligation.
+    help: Covenant test dates and regulatory reporting deadlines. Governing, because a missed one is a breach.
+
+  # Structural, not financial. Declared because the vocabulary is closed and a catalog scanner is
+  # held to it exactly as an extractor is. `layer: catalog` lets the graph be read as facts or as
+  # schema rather than as one tangle.
+  - id: Source
+    label: Source
+    description: A system of record that was catalogued, such as an AWS Glue database.
+    help: Not a financial entity. It is here so a schema declaration has something to hang off.
+    layer: catalog
+    external_id: true
+  - id: Table
+    label: Table
+    description: A table in a catalogued source.
+    help: Schema only. No rows enter the graph — they stay in the warehouse and are queried in place.
+    layer: catalog
+    external_id: true
+  - id: Column
+    label: Column
+    description: A column in a catalogued table.
+    help: Its name, type and description are citable as facts declared by a system of record.
+    layer: catalog
+    external_id: true
+
+# ── Closed vocabulary. Write-time validation. No LLM may invent these. ────────
+governing_predicates:
+  - id: LENDS_TO
+    label: lends to
+    domain: [Facility]
+    range: [Counterparty]
+    description: This facility extends credit to this counterparty.
+    help: "Half of every concentration check. Recorded from the facility rather than between two parties, for the reason ADVERSE_TO is. \"This exposure of ours is to them\" is the claim a limit check needs, and \"these two are connected\" does not say which way the money went."
+  - id: GUARANTEES
+    label: guarantees
+    domain: [Counterparty, Obligor]
+    range: [Facility]
+    description: Stands behind this facility if the borrower does not pay.
+    help: A guarantee moves real exposure without moving a drawdown, which is how a group limit is exceeded while every individual line looks compliant.
+  - id: CONTROLS
+    label: controls
+    domain: [Counterparty]
+    range: [Counterparty]
+    description: Holds a controlling or substantial interest in the other counterparty.
+    help: The fact in the middle of a group exposure. Without it, two loans to two names are two unrelated records and no rule can add them up. The exact analogue of AFFILIATE_OF in the legal pack.
+    # Control carries through a chain of holding companies, and a structure deep enough to obscure
+    # a group limit is frequently one built to. Bounded, so a rule follows an ownership ladder
+    # rather than assuming it reaches everywhere.
+    transitive: true
+  - id: RELATED_PARTY_OF
+    label: related party of
+    domain: [Counterparty]
+    range: [Counterparty]
+    description: Connected by ownership, directorship, or family such that dealings need disclosure.
+    help: Deliberately symmetric and deliberately NOT transitive. Relatedness holds both ways, but A related to B and B related to C leaves A and C unconnected — treating it as transitive would eventually relate every counterparty to every other and make the disclosure rule fire on everything.
+    # Counterparty on both ends, because `_validate_symmetric` is right to refuse anything else:
+    # this first read `[Counterparty, Obligor] -> [Counterparty]`, and `canonical_pair` byte-sorts a
+    # symmetric predicate's endpoints, so the orientation would have been decided by whichever id
+    # sorted first. An Obligor who is a related party is a Counterparty for this purpose, and saying
+    # so in one kind is what keeps the edge readable from either end.
+    symmetric: true
+  - id: SUBJECT_TO_COVENANT
+    label: subject to covenant
+    domain: [Facility]
+    range: [Covenant]
+    description: This facility carries this undertaking.
+  - id: BREACHED
+    label: breached
+    domain: [Counterparty, Obligor]
+    range: [Covenant]
+    description: Failed to meet this undertaking.
+    help: A reviewed judgement, never a parsed one. Whether a ratio test was missed depends on definitions inside the agreement, so this always needs a human.
+  - id: ASSESSED_AGAINST
+    label: assessed against
+    domain: [Facility, Counterparty]
+    range: [Regulation]
+    description: Measured for compliance against this rule or limit.
+  - id: SUPERSEDES
+    label: supersedes
+    domain: [Document, Covenant]
+    range: [Document, Covenant]
+    description: Replaces the earlier instrument.
+  - id: GOVERNED_BY
+    label: governed by
+    domain: [Facility, Document]
+    range: [Jurisdiction]
+    description: Subject to this territory's law or regulator.
+  - id: RELATES_TO_FACILITY
+    label: relates to facility
+    domain: [Document, Counterparty, ReportingDate]
+    range: [Facility]
+    description: Belongs to this facility.
+  - id: HOLDS
+    label: holds
+    domain: [Counterparty]
+    range: [Instrument]
+    description: Has a position in this instrument.
+  - id: DUE_ON
+    label: due on
+    domain: [Covenant, Facility]
+    range: [ReportingDate]
+    description: Must be tested or reported by this date.
+
+  # ── Conclusions. Only a rule writes these; no extractor may propose one. ────
+  #
+  # Governing by the same test as everything else: a missed group exposure exposes rather than
+  # embarrasses. Declaring them also means a rule whose `then` names an undeclared predicate
+  # fails at pack load, so a typo cannot mint a predicate nothing queries.
+  - id: GROUP_EXPOSURE
+    label: group exposure
+    domain: [Facility]
+    range: [Counterparty]
+    description: Exposure reaches this counterparty through a controlled group rather than directly.
+    help: Inferred, never extracted. It carries the premises that produced it, so "why do you believe this" is answered by the facility, the control chain, and the guarantee it rests on. Read as a figure to aggregate, not a verdict on whether a limit is breached.
+    # The counterparty end, on the legal pack's reasoning about POTENTIAL_CONFLICT: the finding is
+    # about the name the exposure reaches, and blacking out the facility would withhold the
+    # institution's own book from the people who run it.
+    blocks: object
+    # Told, not withheld. Whether a group exposure breaches a limit depends on amounts and netting
+    # this pack does not model, so it is a credit officer's judgement — and they cannot make it from
+    # evidence they were never shown. The finding still appears in the trace, still names its
+    # premises, and still sorts first.
+    effect: notify
+  - id: UNDISCLOSED_RELATED_LENDING
+    label: undisclosed related-party lending
+    domain: [Facility]
+    range: [Counterparty]
+    description: This facility lends to a party related to an obligor on it.
+    help: Inferred from a lending record plus a relatedness record. The transaction may be perfectly proper — related-party lending is regulated rather than forbidden — which is exactly why this reports rather than refuses.
+    blocks: object
+    # A disclosure finding, not a prohibition. Suppressing the facility would hide the very
+    # transaction that needs disclosing, which is the same argument RELIES_ON_STALE_AUTHORITY makes
+    # in the legal pack.
+    effect: notify
+
+# ── Open, with exact-name grounding. No LLM adjudication. ─────────────────────
+descriptive_predicates:
+  - id: IN_SECTOR
+    label: in sector
+    description: Industry classification.
+  - id: HAS_PRODUCT_TYPE
+    label: has product type
+    description: Product category, such as term loan or revolving credit.
+  - id: HAS_RISK_RATING
+    label: has risk rating
+    description: Internal or external credit grade.
+  - id: MENTIONS
+    label: mentions
+    description: Named in the text without a stronger relationship being established.
+    help: The safe default when an extractor sees two entities together but cannot justify a governing predicate.
+
+# Rules materialise INFERRED edges. Each carries premises, so any conclusion
+# unwinds into a proof tree.
+rules:
+  - id: group_exposure_via_control
+    version: v1
+    description: Aggregate exposure that reaches a counterparty through a controlled group.
+    help: The concentration nobody sees, because no single agreement contains it. The bank lends to one company and a second document records that a different name controls it. Each fact is unremarkable alone. The control chain is followed up to three links, so an intermediate holding company does not hide the group.
+    when:
+      - "(f:Facility)-[:LENDS_TO]->(b:Counterparty)"
+      # A path, not a plain edge. CONTROLS is transitive, and that declaration is inert unless a
+      # rule asks to walk it — the legal pack shipped exactly this bug on AFFILIATE_OF.
+      - "(p:Counterparty)-[:CONTROLS*1..3]->(b:Counterparty)"
+    then: "(f)-[:GROUP_EXPOSURE]->(p)"
+    min_premise_class: EXTRACTED_MODEL
+  - id: related_party_lending
+    version: v1
+    description: Flag lending to a party related to one of the facility's own obligors.
+    help: Fires only on facts a person signed off, or a system of record declared. A disclosure flag resting on an unreviewed model guess would be worse than none, because somebody would rely on it.
+    when:
+      - "(f:Facility)-[:LENDS_TO]->(b:Counterparty)"
+      # `g` is a Counterparty rather than an Obligor because RELATED_PARTY_OF is symmetric, and a
+      # symmetric predicate must have one kind on both ends. GUARANTEES already accepts either, so
+      # a guarantor named as a Counterparty still binds here.
+      - "(g:Counterparty)-[:GUARANTEES]->(f:Facility)"
+      - "(g:Counterparty)-[:RELATED_PARTY_OF]->(b:Counterparty)"
+    then: "(f)-[:UNDISCLOSED_RELATED_LENDING]->(b)"
+    min_premise_class: EXTRACTED_MODEL

@@ -419,9 +419,9 @@ class TestTheShippedPacksDeclareUsableEndpoints:
     def test_every_conclusion_a_rule_draws_is_declared(self):
         """A pack whose rule concludes a predicate it cannot legally write would fire and be
         refused on every match -- a conflict check that silently draws nothing."""
-        from src.ontology.loader import load_ontology
+        from src.ontology.loader import available_domains, load_ontology
 
-        for domain in ("legal", "healthcare"):
+        for domain in available_domains():
             onto = load_ontology(domain)
             for predicate in onto.rule_conclusions:
                 kinds = onto.endpoint_kinds(predicate)

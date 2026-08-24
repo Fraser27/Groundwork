@@ -23,7 +23,9 @@ from src.graph.assertions import (
     build_assertion,
 )
 from src.graph.scope import AuthContext
-from src.ontology.loader import load_ontology
+from src.ontology.loader import available_domains, load_ontology
+
+ALL_PACKS = available_domains()
 from src.query.blocks import BlockCheckUnavailable, blocks_for
 from src.query.graph_reader import GraphReader
 from src.query.planner import Planner
@@ -347,7 +349,7 @@ class TestThePackDecidesWhatBlocks:
     def test_every_blocking_predicate_is_governing(self):
         """A descriptive predicate is open, so a veto resting on one could be minted by any
         extractor inventing a tag."""
-        for domain in ("legal", "healthcare"):
+        for domain in ALL_PACKS:
             onto = load_ontology(domain)
             assert onto.blocking_predicates <= onto.governing_predicates
 

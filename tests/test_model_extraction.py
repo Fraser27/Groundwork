@@ -36,7 +36,9 @@ from src.graph.assertions import (
     ReviewState,
     build_assertion,
 )
-from src.ontology.loader import load_ontology
+from src.ontology.loader import available_domains, load_ontology
+
+ALL_PACKS = available_domains()
 
 TENANT = "firm-acme"
 ONTOLOGY = load_ontology("legal")
@@ -200,7 +202,7 @@ class TestVerifiedPresence:
         from `descriptive_predicates` rather than a hardcoded set of names."""
         from src.ontology.loader import load_ontology
 
-        for domain in ("legal", "healthcare"):
+        for domain in ALL_PACKS:
             ont = load_ontology(domain)
             assert "MENTIONS" in ont.descriptive_predicates, domain
 
@@ -747,7 +749,7 @@ class TestACatalogKindMustBeExternal:
     """A catalogued id is always the issuing system's name, so the two flags have to agree."""
 
     def test_the_shipped_packs_agree(self):
-        for domain in ("legal", "healthcare"):
+        for domain in ALL_PACKS:
             onto = load_ontology(domain)
             for e in onto.entities.values():
                 if e.layer == "catalog":

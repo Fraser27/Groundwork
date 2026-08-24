@@ -15,13 +15,22 @@ from src.graph.assertions import (
     SourceLocator,
     build_assertion,
 )
-from src.ontology.loader import load_ontology
+from src.ontology.loader import available_domains, load_ontology
 
 LOC = SourceLocator(document_id="doc-1", filename="a.pdf", page=1, quote="Acme Corporation")
 
+#: Every pack on disk, discovered rather than listed. A pack added to the directory and to no test
+#: is a pack nobody checks, which is how the abstraction rots without anything going red.
+ALL_PACKS = available_domains()
+
 
 class TestPacksLoad:
-    @pytest.mark.parametrize("domain", ["legal", "healthcare"])
+    def test_more_than_one_pack_exists(self):
+        """The parametrised cases below pass vacuously if the glob finds nothing, and a single pack
+        cannot demonstrate that anything is domain-agnostic."""
+        assert len(ALL_PACKS) >= 2, ALL_PACKS
+
+    @pytest.mark.parametrize("domain", ALL_PACKS)
     def test_pack_loads(self, domain):
         o = load_ontology(domain)
         assert o.domain == domain
@@ -110,7 +119,7 @@ class TestSymmetricNeedsEqualEnds:
     """
 
     def test_the_shipped_packs_are_coherent(self):
-        for domain in ("legal", "healthcare"):
+        for domain in ALL_PACKS:
             onto = load_ontology(domain)
             for pdef in onto.predicates.values():
                 if pdef.symmetric:

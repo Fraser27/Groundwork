@@ -27,7 +27,9 @@ from src.graph.assertions import (
     build_assertion,
 )
 from src.graph.scope import AuthContext
-from src.ontology.loader import load_ontology
+from src.ontology.loader import available_domains, load_ontology
+
+ALL_PACKS = available_domains()
 from src.ontology.patterns import MAX_PATH_HOPS, PatternError, parse_edge, parse_rule
 from src.reasoning.engine import Reasoner, accepts
 
@@ -760,7 +762,7 @@ class TestPatternParsing:
     def test_every_shipped_rule_parses(self):
         """A rule nobody can parse would silently never fire, and a conflict check that never
         fires looks exactly like a clean conflict check."""
-        for domain in ("legal", "healthcare"):
+        for domain in ALL_PACKS:
             for rule in load_ontology(domain).rules:
                 parsed = parse_rule(rule)
                 assert parsed.join_variables, f"{parsed.rule_id} has no join"
@@ -1077,7 +1079,7 @@ class TestPackValidationHappensAtLoad:
         load_ontology.cache_clear()
 
     def test_the_shipped_packs_still_load(self):
-        for domain in ("legal", "healthcare"):
+        for domain in ALL_PACKS:
             assert load_ontology(domain).rules
 
     def test_walking_a_predicate_the_pack_never_declared_transitive_fails(
