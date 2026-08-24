@@ -874,6 +874,66 @@ export interface ComposedResult {
   min_confidence?: number
 }
 
+// ── Retrieval agent ──────────────────────────────────────────────────────────
+
+/** How to render one tool result. From the tool's name server-side, never from the payload. */
+export type ResultKind =
+  | 'composed'
+  | 'resolution'
+  | 'assertions'
+  | 'provenance'
+  | 'graph'
+  | 'metrics'
+  | 'ontology'
+  | 'json'
+
+/**
+ * One event from a retrieval run.
+ *
+ * `seq` is monotonic across the whole run. Two events in the same millisecond cannot be
+ * ordered by `at`, and a transcript read from a POST body has no delivery order to rely on.
+ */
+export interface RetrievalEvent {
+  kind: 'run_started' | 'tool_call' | 'tool_result' | 'text' | 'run_finished' | 'run_failed'
+  run_id: string
+  tenant_id: string
+  turn: number
+  seq: number
+  at: string
+
+  question?: string
+  model_id?: string
+  max_turns?: number
+
+  tool?: string
+  arguments?: Record<string, unknown>
+  /** Which cap stopped this call, when one did. The attempt stays in the transcript. */
+  cancelled?: string
+
+  result_kind?: ResultKind
+  result?: unknown
+  is_error?: boolean
+  error?: string
+
+  text?: string
+  answer?: string
+  stop_reason?: string
+  turns?: number
+  was_capped?: boolean
+}
+
+/** A whole run, as the POST route returns it. */
+export interface RetrievalRun {
+  run_id: string
+  events: RetrievalEvent[]
+  answer: string
+  stop_reason: string
+  turns: number
+  was_capped: boolean
+  max_turns: number
+  note: string
+}
+
 // ── Graph ────────────────────────────────────────────────────────────────────
 
 /** Exactly what `_node()` sends. Nodes are derived from entity ids, so there is nothing
@@ -1477,6 +1537,55 @@ export const api = {
       }
     } catch {
       onError?.()
+    }
+
+    return () => {
+      closed = true
+      socket?.close()
+    }
+  },
+
+  /**
+   * Run the agent, receiving each turn as it happens.
+   *
+   * Unlike `subscribeIngestEvents` this socket *drives* the work: the question goes as the
+   * first frame and the run happens inside the handler, so closing the socket stops the run.
+   * There is no poll behind it, so a failure is reported rather than silently degraded.
+   */
+  runRetrieval: (
+    tenant: string,
+    question: string,
+    onEvent: (event: RetrievalEvent) => void,
+    onError?: (detail: string) => void,
+  ): (() => void) => {
+    const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    const token = isAuthEnabled() ? getAccessToken() : ''
+    const url =
+      `${scheme}://${window.location.host}${BASE}/tenants/${tenant}/retrieval/events` +
+      `?token=${encodeURIComponent(token || '')}`
+
+    let socket: WebSocket | null = null
+    let closed = false
+    let sawEvent = false
+    try {
+      socket = new WebSocket(url)
+      socket.onopen = () => socket?.send(JSON.stringify({ question }))
+      socket.onmessage = (e) => {
+        try {
+          sawEvent = true
+          onEvent(JSON.parse(e.data))
+        } catch {
+          // A malformed frame is not worth tearing the connection down for.
+        }
+      }
+      socket.onerror = () => onError?.('the connection to the agent failed')
+      socket.onclose = (e) => {
+        // A close before any event means the server refused: a bad token, or no MCP endpoint.
+        // Its reason is the only explanation the user will get, so it is passed through.
+        if (!closed && !sawEvent) onError?.(e.reason || 'the agent refused the connection')
+      }
+    } catch {
+      onError?.('could not open a connection to the agent')
     }
 
     return () => {

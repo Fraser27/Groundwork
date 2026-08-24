@@ -114,6 +114,15 @@ export const NEPTUNE_PORT = 8182;
  */
 export const APP_PORT = 8000;
 
+/**
+ * Where the MCP sidecar listens, on the task's loopback only.
+ *
+ * Not published by the load balancer: the tools are reachable to third parties through the
+ * AgentCore runtime `McpStack` deploys, which verifies a Cognito token first. This port exists
+ * so the Retrieval agent in the API container can call the tools without sharing its event loop.
+ */
+export const MCP_PORT = 8001;
+
 export function tagStack(stack: cdk.Stack, component: string): void {
   cdk.Tags.of(stack).add('Project', PROJECT);
   cdk.Tags.of(stack).add('Component', component);

@@ -23,6 +23,7 @@ import TableDetail from './pages/TableDetail'
 import Metrics from './pages/Metrics'
 import GraphExplorer from './pages/GraphExplorer'
 import QueryBuilder from './pages/QueryBuilder'
+import Retrieval from './pages/Retrieval'
 import Provenance from './pages/Provenance'
 import Admin from './pages/Admin'
 import Access from './pages/Access'
@@ -115,6 +116,7 @@ function App() {
         <nav>
           <NavItem to="/" end icon={icons.dashboard} label="Dashboard" collapsed={collapsed} />
           <NavItem to="/query" icon={icons.query} label="Ask" collapsed={collapsed} />
+          <NavItem to="/retrieval" icon={icons.retrieval} label="Retrieval" collapsed={collapsed} />
           <NavItem
             to="/review"
             icon={icons.review}
@@ -188,6 +190,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/query" element={<QueryBuilder />} />
+          <Route path="/retrieval" element={<Retrieval />} />
           <Route path="/review" element={<ReviewQueue />} />
           <Route path="/matters" element={<Matters />} />
           <Route path="/documents" element={<Documents />} />
@@ -306,6 +309,12 @@ const icons = {
     <>
       <circle cx="8" cy="12" r="5" />
       <circle cx="16" cy="12" r="5" />
+    </>,
+  ),
+  retrieval: svg(
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
     </>,
   ),
   platform: svg(

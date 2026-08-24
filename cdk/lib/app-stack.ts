@@ -18,6 +18,7 @@ import * as path from 'path';
 
 import {
   APP_PORT,
+  MCP_PORT,
   LexGraphConfig,
   MAX_CONCURRENT_INGESTS,
   NEPTUNE_PORT,
@@ -133,6 +134,32 @@ export class AppStack extends cdk.Stack {
         retries: 3,
         startPeriod: cdk.Duration.seconds(60),
       },
+    });
+
+    // The MCP tools, as a second process on the same task.
+    //
+    // A separate process rather than the API's own worker, because the tool bodies are
+    // `async def` with no `await` inside: their graph and Athena calls block the event loop.
+    // The Retrieval agent runs in the API container and calls these over the loopback, so
+    // sharing one loop would mean the agent awaiting a call that cannot be served until it
+    // yields. Same image, same task role, different entrypoint.
+    //
+    // Not the AgentCore runtime that `McpStack` deploys: `mcp` already depends on `app` for
+    // the image and the role, so pointing `app` at `mcp` would be a CloudFormation cycle.
+    taskDefinition.addContainer('mcp', {
+      image: ecs.ContainerImage.fromDockerImageAsset(this.image),
+      portMappings: [{ containerPort: MCP_PORT }],
+      environment: {
+        ...this.containerEnvironment,
+        APP_MODULE: 'src.mcp.server:app',
+        PORT: String(MCP_PORT),
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: `${PROJECT}-mcp`,
+        logRetention: logs.RetentionDays.ONE_MONTH,
+      }),
+      // No health check: the MCP protocol has no unauthenticated GET, and a failing probe
+      // would restart a task whose API half is serving fine. The agent reports its own 503.
     });
 
     const service = new ecs.FargateService(this, 'Service', {
@@ -272,6 +299,8 @@ export class AppStack extends cdk.Stack {
       POLICY_STORE_ID: props.policyStoreId,
       ONTOLOGY_PACK: props.config.defaultOntology,
       AUTH_HOME_TENANT: props.config.homeTenant,
+      // The loopback sidecar, not the AgentCore runtime. See the `mcp` container below.
+      MCP_URL: `http://127.0.0.1:${MCP_PORT}/mcp`,
       AWS_DEFAULT_REGION: this.region,
       PAGE_BATCH_SIZE: String(PAGE_BATCH_SIZE),
       PAGE_CONCURRENCY: String(PAGE_CONCURRENCY),

@@ -61,6 +61,8 @@ services:
     environment:
       ENVIRONMENT: local
       APP_MODULE: src.api.app:app
+      # The `mcp` service below, so the Retrieval agent has tools to call locally.
+      MCP_URL: http://mcp:8000/mcp
       GRAPH_URI: bolt://neo4j:7687
       GRAPH_USER: neo4j
       GRAPH_PASSWORD: ${GRAPH_PASSWORD:-lexgraph-dev}

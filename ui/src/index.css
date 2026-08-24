@@ -2375,3 +2375,85 @@ code, pre { font-family: var(--mono); }
   .merge-direction { grid-template-columns: 1fr; }
   .merge-arrow { flex-direction: row; padding-top: 0; }
 }
+
+/* Retrieval. The transcript is the feature, so a turn is a row that opens rather than a
+   diagnostic tucked behind a toggle. */
+.retrieval-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 16px;
+  align-items: start;
+}
+.retrieval-transcript { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.retrieval-rail { position: sticky; top: 16px; }
+
+.retrieval-turn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+/* A failed call is bordered rather than tinted: it is information the model acted on, not an
+   error state for the page. */
+.retrieval-turn-error { border-left: 3px solid var(--amber, var(--border)); }
+
+.retrieval-turn-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.retrieval-turn-head:hover { background: var(--bg-alt); }
+
+.retrieval-turn-index {
+  flex-shrink: 0;
+  width: 20px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.retrieval-tool {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+}
+/* The arguments are the interesting part and also the long part, so they take the slack and
+   truncate rather than wrapping a row to three lines. */
+.retrieval-args {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.retrieval-turn-state {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.retrieval-turn-body {
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 1100px) {
+  .retrieval-layout { grid-template-columns: 1fr; }
+  .retrieval-rail { position: static; }
+}
