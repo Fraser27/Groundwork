@@ -27,6 +27,7 @@ import Provenance from './pages/Provenance'
 import Admin from './pages/Admin'
 import Access from './pages/Access'
 import Glossary from './pages/Glossary'
+import Platform from './pages/Platform'
 import Login from './pages/Login'
 
 function App() {
@@ -34,6 +35,7 @@ function App() {
   const unit = useUnitLabel()
   const [graphStatus, setGraphStatus] = useState<'connected' | 'disconnected'>('disconnected')
   const [pendingCount, setPendingCount] = useState<number | null>(null)
+  const [isHomeTenant, setIsHomeTenant] = useState(false)
   // The code grant needs a round trip to Cognito's token endpoint, so this cannot resolve
   // in a state initialiser the way reading tokens from the URL fragment could.
   //
@@ -68,7 +70,12 @@ function App() {
     if (!authed) return
     api
       .health()
-      .then((h) => setGraphStatus(h.graph === 'connected' ? 'connected' : 'disconnected'))
+      .then((h) => {
+        setGraphStatus(h.graph === 'connected' ? 'connected' : 'disconnected')
+        // Only the operator tenant gets the platform screen. The routes enforce this anyway,
+        // so this hides a nav item rather than granting anything.
+        setIsHomeTenant(!!h.home_tenant && h.home_tenant === tenant)
+      })
       .catch(() => setGraphStatus('disconnected'))
     // The pending badge is the one number worth carrying in the chrome: it is a
     // queue of claims nobody has signed off yet.
@@ -136,6 +143,14 @@ function App() {
               <NavItem to="/glossary" icon={icons.glossary} label="Glossary" collapsed={collapsed} />
               <NavItem to="/access" icon={icons.access} label="Access" collapsed={collapsed} />
               <NavItem to="/admin" icon={icons.admin} label="Admin" collapsed={collapsed} />
+              {isHomeTenant && (
+                <NavItem
+                  to="/platform"
+                  icon={icons.platform}
+                  label="Platform"
+                  collapsed={collapsed}
+                />
+              )}
             </>
           )}
         </nav>
@@ -197,6 +212,14 @@ function App() {
             element={
               <AdminOnly>
                 <Admin />
+              </AdminOnly>
+            }
+          />
+          <Route
+            path="/platform"
+            element={
+              <AdminOnly>
+                <Platform />
               </AdminOnly>
             }
           />
@@ -283,6 +306,12 @@ const icons = {
     <>
       <circle cx="8" cy="12" r="5" />
       <circle cx="16" cy="12" r="5" />
+    </>,
+  ),
+  platform: svg(
+    <>
+      <rect x="3" y="4" width="18" height="6" rx="1.5" />
+      <rect x="3" y="14" width="18" height="6" rx="1.5" />
     </>,
   ),
   graph: svg(

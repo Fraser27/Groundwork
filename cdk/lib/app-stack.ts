@@ -271,6 +271,7 @@ export class AppStack extends cdk.Stack {
       COGNITO_ISSUER_URL: props.issuerUrl,
       POLICY_STORE_ID: props.policyStoreId,
       ONTOLOGY_PACK: props.config.defaultOntology,
+      AUTH_HOME_TENANT: props.config.homeTenant,
       AWS_DEFAULT_REGION: this.region,
       PAGE_BATCH_SIZE: String(PAGE_BATCH_SIZE),
       PAGE_CONCURRENCY: String(PAGE_CONCURRENCY),
@@ -450,20 +451,27 @@ export class AppStack extends cdk.Stack {
     );
 
     // Admins invite users from the app rather than the Cognito console, so the task needs
-    // the admin surface — scoped to this one pool. Notably absent:
-    // AdminSetUserPassword and AdminDeleteUser. Cognito mints and mails the temporary
-    // password itself, so the API never handles a credential, and nothing in the product
-    // deletes a user — an account is disabled, which keeps the audit trail intact.
+    // the admin surface — scoped to this one pool. AdminSetUserPassword stays absent:
+    // Cognito mints and mails the temporary password itself, so the API never handles a
+    // credential.
+    //
+    // Deletion is present because the product does delete users. `user_admin.delete_user`
+    // removes one, and deleting a tenant removes all of them with their ownership groups.
+    // An account is not what preserves the audit trail — `graph_audit` and `query_audit`
+    // record what somebody did and outlive the identity that did it.
     role.addToPolicy(
       new iam.PolicyStatement({
         actions: [
           'cognito-idp:AdminGetUser',
           'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminDeleteUser',
           'cognito-idp:AdminAddUserToGroup',
+          'cognito-idp:AdminRemoveUserFromGroup',
           'cognito-idp:ListUsers',
           'cognito-idp:ListUsersInGroup',
           'cognito-idp:CreateGroup',
           'cognito-idp:GetGroup',
+          'cognito-idp:DeleteGroup',
         ],
         resources: [
           `arn:${cdk.Aws.PARTITION}:cognito-idp:${this.region}:${this.account}:userpool/${props.userPoolId}`,

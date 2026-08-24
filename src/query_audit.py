@@ -232,3 +232,27 @@ class QueryAudit:
             Limit=limit,
         )
         return [_to_event(i) for i in got.get("Items", [])]
+
+    def drop_tenant(self, tenant_id: str) -> int:
+        """Delete this tenant's question log. Only ever as part of deleting the tenant.
+
+        Same reasoning as `GraphAudit.drop_tenant`: append-only protects the record while there
+        is a firm it belongs to. Pages, because `questions` is capped for display and a capped
+        delete would leave the oldest rows behind.
+        """
+        pk = asked_pk(tenant_id)
+        deleted = 0
+        start: dict[str, Any] | None = None
+        while True:
+            page = self.table.query(
+                KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+                ExpressionAttributeValues={":pk": pk, ":prefix": ASK_PREFIX},
+                **({"ExclusiveStartKey": start} if start else {}),
+            )
+            for item in page.get("Items", []):
+                self.table.delete_item(Key={"PK": pk, "SK": item["SK"]})
+                deleted += 1
+            start = page.get("LastEvaluatedKey")
+            if not start:
+                logger.info("dropped %d query audit rows for %s", deleted, tenant_id)
+                return deleted

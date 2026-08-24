@@ -143,6 +143,17 @@ class AuthConfig:
     production deployment that honoured this would accept unauthenticated requests
     as a real tenant. See `LexGraphConfig.validate`."""
 
+    home_tenant: str = ""
+    """The one tenant whose platform-admins may create and delete other tenants.
+
+    Every other admin route takes its tenant from the caller's own token, so a firm's admin has
+    no parameter to tamper with. The platform routes are the deliberate exception -- the tenant
+    is an argument there -- so something has to say who may pass it, and "any platform-admin"
+    would let one customer delete another.
+
+    Empty closes those routes. Closed by default: an unset operator tenant is a
+    misconfiguration, and the safe reading of it is that nobody qualifies."""
+
 
 @dataclass
 class ModelConfig:
@@ -211,6 +222,19 @@ class LexGraphConfig:
                 "LLM's opinion indistinguishable from a parsed fact."
             )
 
+        # Checked at startup rather than at the route, because the failure is silent: a typo
+        # here matches no caller's tenant, so the platform routes 403 for everyone and look
+        # like a permissions problem rather than a misconfiguration.
+        if self.auth.home_tenant:
+            from src.graph.scope import is_valid_tenant_id
+
+            if not is_valid_tenant_id(self.auth.home_tenant):
+                raise ValueError(
+                    f"AUTH_HOME_TENANT {self.auth.home_tenant!r} is not a valid tenant id, so "
+                    "it can never equal a caller's tenant and the platform routes would "
+                    "refuse everyone."
+                )
+
         if not is_local and not self.auth.issuer_url:
             raise ValueError(
                 "COGNITO_ISSUER_URL is required outside local development, tenant_id "
@@ -271,6 +295,7 @@ def load_config() -> LexGraphConfig:
             policy_store_id=_env("POLICY_STORE_ID"),
             region=_env("COGNITO_REGION", region),
             dev_bypass_tenant=_env("AUTH_DEV_BYPASS_TENANT"),
+            home_tenant=_env("AUTH_HOME_TENANT"),
         ),
         models=ModelConfig(
             extraction_model=_env("EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),

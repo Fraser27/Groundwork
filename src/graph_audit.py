@@ -76,6 +76,7 @@ def _now() -> str:
 class TableLike(Protocol):
     def put_item(self, **kwargs: Any) -> dict[str, Any]: ...
     def query(self, **kwargs: Any) -> dict[str, Any]: ...
+    def delete_item(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -224,3 +225,31 @@ class GraphAudit:
             Limit=limit,
         )
         return [_to_event(i) for i in got.get("Items", [])]
+
+    def drop_tenant(self, tenant_id: str) -> int:
+        """Delete this tenant's whole log. Only ever as part of deleting the tenant.
+
+        Every other operation here is append-only, and `append`'s condition exists to stop a
+        write rewriting history. This is not an exception to that: it removes the log because
+        the firm it describes is being removed, so there is nobody left with standing to read
+        it. Nothing partial -- a log missing the middle of its history would be worse than none.
+
+        Pages, unlike `events`, which is capped for display. A capped delete would silently
+        leave the oldest rows behind.
+        """
+        pk = graph_pk(tenant_id)
+        deleted = 0
+        start: dict[str, Any] | None = None
+        while True:
+            page = self.table.query(
+                KeyConditionExpression="PK = :pk AND begins_with(SK, :prefix)",
+                ExpressionAttributeValues={":pk": pk, ":prefix": EVENT_PREFIX},
+                **({"ExclusiveStartKey": start} if start else {}),
+            )
+            for item in page.get("Items", []):
+                self.table.delete_item(Key={"PK": pk, "SK": item["SK"]})
+                deleted += 1
+            start = page.get("LastEvaluatedKey")
+            if not start:
+                logger.info("dropped %d graph audit rows for %s", deleted, tenant_id)
+                return deleted

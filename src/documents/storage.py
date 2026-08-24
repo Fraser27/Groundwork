@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -39,6 +39,7 @@ from src.documents.keys import (
     parse_raw_key,
     raw_key,
     safe_filename,
+    tenant_prefixes,
 )
 from src.documents.models import DocumentMeta, document_id_for, sha256_hex
 from src.graph.scope import AuthContext, ScopeViolation
@@ -60,6 +61,12 @@ DEFAULT_UPLOAD_EXPIRY_SECONDS = 1800
 MAX_UPLOAD_EXPIRY_SECONDS = 3600
 
 
+def _chunks(items: list[Any], size: int) -> Iterator[list[Any]]:
+    """`DeleteObjects` takes at most 1000 keys per call."""
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
 class S3Like(Protocol):
     """The slice of the boto3 S3 client this module uses."""
 
@@ -68,9 +75,11 @@ class S3Like(Protocol):
     def get_object(self, **kwargs: Any) -> dict[str, Any]: ...
     def copy_object(self, **kwargs: Any) -> dict[str, Any]: ...
     def delete_object(self, **kwargs: Any) -> dict[str, Any]: ...
+    def delete_objects(self, **kwargs: Any) -> dict[str, Any]: ...
     def generate_presigned_url(self, ClientMethod: str, **kwargs: Any) -> str: ...
     def generate_presigned_post(self, Bucket: str, Key: str, **kwargs: Any) -> dict[str, Any]: ...
     def list_objects_v2(self, **kwargs: Any) -> dict[str, Any]: ...
+    def list_object_versions(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 class DocumentIndex(Protocol):
@@ -507,6 +516,49 @@ class DocumentStorage:
             drop(document_id)
         logger.info("deleted %s (%s)", document_id, doc.key)
         return True
+
+    def drop_tenant(self, tenant_id: str) -> int:
+        """Erase every byte one tenant ever uploaded. Only ever as part of deleting the tenant.
+
+        This is the privileged act `delete_document` refers to. It lists **versions**, not
+        objects: the bucket is versioned, so `delete_object` writes a delete marker and leaves
+        the bytes retrievable. Sweeping objects alone would report a clean slate while every
+        document remained readable by version id -- and the id is meant to be reusable, so the
+        next tenant would inherit them.
+
+        Nothing here is recoverable afterwards, which is why the caller runs it last. Errors
+        propagate rather than being swallowed: a partial sweep must not report success.
+        """
+        deleted = 0
+        for prefix in tenant_prefixes(tenant_id):
+            key_marker: str | None = None
+            version_marker: str | None = None
+            while True:
+                page = self.s3.list_object_versions(
+                    Bucket=self.bucket,
+                    Prefix=prefix,
+                    **({"KeyMarker": key_marker} if key_marker else {}),
+                    **({"VersionIdMarker": version_marker} if version_marker else {}),
+                )
+                # Delete markers are themselves versions, and leaving them behind would leave a
+                # key that lists as present and reads as absent.
+                found = [
+                    {"Key": v["Key"], "VersionId": v["VersionId"]}
+                    for v in (*page.get("Versions", []), *page.get("DeleteMarkers", []))
+                ]
+                for batch in _chunks(found, 1000):
+                    self.s3.delete_objects(
+                        Bucket=self.bucket, Delete={"Objects": batch, "Quiet": True}
+                    )
+                    deleted += len(batch)
+                if not page.get("IsTruncated"):
+                    break
+                key_marker = page.get("NextKeyMarker")
+                version_marker = page.get("NextVersionIdMarker")
+                if not key_marker and not version_marker:
+                    break
+        logger.info("erased %d object versions for tenant %s", deleted, tenant_id)
+        return deleted
 
     def _head(self, key: str) -> dict[str, Any] | None:
         try:

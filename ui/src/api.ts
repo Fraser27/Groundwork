@@ -254,6 +254,30 @@ export interface Tenant {
   name: string
   ontology_domain: string
   created_at?: string | null
+  created_by?: string | null
+  /** Set when the tenant was deleted. The record survives so a reused id reads as reused. */
+  deleted_at?: string | null
+  deleted_by?: string | null
+  is_live?: boolean
+}
+
+/** What a tenant delete removed, and what it could not. `complete` false means run it again. */
+export interface TenantDeleteReport {
+  tenant_id: string
+  complete: boolean
+  users_deleted: number
+  groups_deleted: number
+  assertions_dropped: number
+  vectors_dropped: number
+  jobs_dropped: number
+  grants_dropped: number
+  graph_audit_dropped: number
+  query_audit_dropped: number
+  documents_erased: number
+  settings_deleted: boolean
+  tombstoned: boolean
+  errors: string[]
+  note: string
 }
 
 /**
@@ -1225,11 +1249,40 @@ const q = (params: Record<string, string | number | boolean | undefined>) => {
 }
 
 export const api = {
-  health: () => request<{ status: string; graph: string; version?: string }>('/health'),
+  health: () =>
+    request<{
+      status: string
+      graph: string
+      version?: string
+      /** The operator tenant, so the UI knows whether to offer the platform screen. */
+      home_tenant?: string
+    }>('/health'),
 
-  listTenants: () => request<Tenant[]>('/tenants'),
-  createTenant: (t: { tenant_id: string; name: string; ontology_domain: string }) =>
-    request<Tenant>('/tenants', { method: 'POST', body: JSON.stringify(t) }),
+  /**
+   * Platform routes. `/platform`, not `/tenants/{tenant}`, because the tenant is an argument
+   * here rather than the caller's own — see `routes_tenants.py`. Only an admin of the operator
+   * tenant may call them; everyone else gets a 403.
+   */
+  listTenants: async (): Promise<{ tenants: Tenant[]; home_tenant: string }> =>
+    request<{ tenants: Tenant[]; home_tenant: string }>('/platform/tenants'),
+  createTenant: (t: {
+    tenant_id: string
+    admin_email: string
+    name?: string
+    ontology_domain?: string
+  }) => request<Record<string, unknown>>('/platform/tenants', {
+    method: 'POST',
+    body: JSON.stringify(t),
+  }),
+  deleteTenant: (tenantId: string) =>
+    request<TenantDeleteReport>(`/platform/tenants/${tenantId}/delete`, {
+      method: 'POST',
+      body: JSON.stringify({
+        confirm_tenant_id: tenantId,
+        confirm_document_loss: true,
+        confirm_audit_loss: true,
+      }),
+    }),
 
   // Withheld matters arrive alongside the readable ones rather than as a count, so the
   // page can name them. Normalised because the endpoint previously returned a bare

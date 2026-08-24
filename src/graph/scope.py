@@ -64,6 +64,16 @@ from src.graph.assertions import (
 #: rather than escaped. Rejecting odd input beats sanitising it.
 _TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
+
+def is_valid_tenant_id(tenant_id: str) -> bool:
+    """Whether a string may be a tenant id, by the same rule `AuthContext` enforces.
+
+    Exposed so a caller minting an id -- creating a tenant, validating configuration -- checks
+    it against this rule rather than a second copy of the pattern. One definition, because a
+    divergence would let an id exist that no scoped read can ever match.
+    """
+    return bool(_TENANT_ID_RE.match(tenant_id))
+
 #: Default trust floor for retrieval. Deliberately conservative: below this,
 #: assertions are visible in the review queue but do not shape answers.
 DEFAULT_MIN_CONFIDENCE = 0.8

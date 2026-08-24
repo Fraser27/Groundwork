@@ -122,6 +122,10 @@ class Services:
     """Which tenant a subject belongs to. The same instance `Authenticator` reads through,
     so a binding written by the admin API is visible to the next request."""
 
+    tenant_registry: Any | None = None
+    """Which tenants exist. Separate from `tenant_directory`, which answers who belongs to one:
+    a tenant with no users still exists, and is exactly the state a new one is in."""
+
     user_admin: UserAdmin | None = None
     """Creating and listing users. None without a user pool, which makes the admin routes
     answer 503 rather than pretending to work."""
@@ -463,6 +467,15 @@ def _build_tenant_directory(
     return TenantDirectory(cfg.tables.tenants)
 
 
+def _build_tenant_registry(cfg: LexGraphConfig) -> Any:
+    """Which tenants exist. In-memory without a table, so local development still lists them."""
+    from src.tenant_registry import InMemoryTenantRegistry, TenantRegistry
+
+    if not cfg.tables.tenants:
+        return InMemoryTenantRegistry()
+    return TenantRegistry(cfg.tables.tenants)
+
+
 def _build_job_store(cfg: LexGraphConfig) -> InMemoryJobStore | DynamoJobStore:
     """DynamoDB when a table is configured, in-memory otherwise.
 
@@ -632,6 +645,7 @@ def build_services(config: LexGraphConfig | None = None) -> Services:
         job_store=_build_job_store(cfg),
         ingest_limiter=IngestLimiter(cfg.documents.max_concurrent_ingests),
         tenant_directory=tenants,
+        tenant_registry=_build_tenant_registry(cfg),
         governance_store=governance_store,
         graph_audit=graph_audit,
         query_audit=query_audit,
@@ -716,6 +730,33 @@ def require_admin(principal: tuple[AuthContext, Grants]) -> None:
     _, grants = principal
     if not grants.is_platform_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "requires platform-admin")
+
+
+def require_home_admin(services: Services, principal: tuple[AuthContext, Grants]) -> AuthContext:
+    """Gate the routes where the tenant is an argument rather than the caller's own.
+
+    Every other admin route reads the tenant from the token, so there is nothing to tamper
+    with. Creating and deleting tenants cannot work that way -- the tenant being created does
+    not exist yet, and the one being deleted is not the caller's -- so authority has to come
+    from somewhere else. Being a platform-admin is not enough: that is a role within a firm,
+    and one firm's admin must not reach another's data.
+
+    The message names neither the caller's tenant nor the configured one. A refused caller
+    learning which tenant *would* qualify is a probe answered.
+    """
+    ctx, grants = principal
+    home = services.config.auth.home_tenant
+    if not home:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "no operator tenant is configured (AUTH_HOME_TENANT unset), so creating and "
+            "deleting tenants is closed",
+        )
+    if not grants.is_platform_admin or ctx.tenant_id != home:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "requires platform-admin of the operator tenant"
+        )
+    return ctx
 
 
 def scope_violation_to_http(e: ScopeViolation) -> HTTPException | ScopeViolation:

@@ -29,6 +29,7 @@ why *is* the compliance artifact; a mutable grants table would destroy it.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -166,6 +167,12 @@ class AccessStore(Protocol):
     def events_for_matter(self, tenant_id: str, matter_id: str) -> list[AccessEvent]: ...
     def events_for_user(self, tenant_id: str, user_id: str) -> list[AccessEvent]: ...
 
+    def drop_tenant(
+        self, tenant_id: str, *, user_ids: Sequence[str] = (), matter_ids: Sequence[str] = ()
+    ) -> int: ...
+    """On the Protocol so a store that cannot forget a tenant fails to typecheck rather than
+    leaving grants behind for whoever reuses the id."""
+
 
 @dataclass
 class InMemoryAccessStore:
@@ -222,6 +229,22 @@ class InMemoryAccessStore:
             for e in self._events
             if e.tenant_id == tenant_id and e.subject_user == user_id
         ]
+
+    def drop_tenant(
+        self, tenant_id: str, *, user_ids: Sequence[str] = (), matter_ids: Sequence[str] = ()
+    ) -> int:
+        """Forget every grant, screen and event for one tenant.
+
+        The id arguments are ignored here and required by the real store, where the partition
+        key admits no "everything under this tenant" query. Filtering on `tenant_id` alone is
+        what this implementation is *for*: it is the reference the Dynamo one is checked
+        against, so it must remove everything that store would be asked to remove.
+        """
+        before = len(self._assignments) + len(self._screens) + len(self._events)
+        self._assignments = {k: v for k, v in self._assignments.items() if k[0] != tenant_id}
+        self._screens = {k: v for k, v in self._screens.items() if k[0] != tenant_id}
+        self._events = [e for e in self._events if e.tenant_id != tenant_id]
+        return before - (len(self._assignments) + len(self._screens) + len(self._events))
 
 
 @dataclass(frozen=True)

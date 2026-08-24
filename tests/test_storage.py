@@ -43,6 +43,8 @@ class FakeS3:
         self.deletes: list[dict[str, Any]] = []
         self.presigns: list[dict[str, Any]] = []
         self.lists: list[dict[str, Any]] = []
+        self.version_lists: list[dict[str, Any]] = []
+        self.bulk_deletes: list[dict[str, Any]] = []
 
     def put_object(self, **kwargs: Any) -> dict[str, Any]:
         self.puts.append(kwargs)
@@ -70,6 +72,24 @@ class FakeS3:
         prefix = kwargs.get("Prefix", "")
         keys = sorted(k for k in self.existing if k.startswith(prefix))
         return {"Contents": [{"Key": k, "Size": len(PDF)} for k in keys]}
+
+    def list_object_versions(self, **kwargs: Any) -> dict[str, Any]:
+        """One version per key, plus a delete marker, so a sweep that ignores markers is caught."""
+        self.version_lists.append(kwargs)
+        prefix = kwargs.get("Prefix", "")
+        keys = sorted(k for k in self.existing if k.startswith(prefix))
+        return {
+            "Versions": [{"Key": k, "VersionId": "v1"} for k in keys],
+            "DeleteMarkers": [{"Key": k, "VersionId": "dm1"} for k in keys],
+            "IsTruncated": False,
+        }
+
+    def delete_objects(self, **kwargs: Any) -> dict[str, Any]:
+        objects = kwargs["Delete"]["Objects"]
+        self.bulk_deletes.append(kwargs)
+        for o in objects:
+            self.existing.discard(o["Key"])
+        return {"Deleted": objects}
 
 
 @pytest.fixture
@@ -304,6 +324,48 @@ class TestExistsAndDelete:
         with pytest.raises(DocumentNotFound):
             storage.presign_download(doc.document_id, ctx=ctx)
         assert s3.presigns == []
+
+
+class TestDroppingATenantErasesEveryVersion:
+    """The bucket is versioned, so `delete_object` writes a marker and the bytes stay
+    retrievable by version id. A sweep that only deleted objects would report a clean slate
+    while every document remained readable -- and the id is meant to be reusable.
+    """
+
+    def test_every_version_and_marker_goes(self, storage: DocumentStorage, ctx, s3):
+        storage.put_document(ctx, filename="a.pdf", body=PDF)
+        storage.put_document(ctx, filename="b.pdf", body=b"%PDF-1.4 other")
+
+        erased = storage.drop_tenant(ctx.tenant_id)
+
+        sent = [o for call in s3.bulk_deletes for o in call["Delete"]["Objects"]]
+        assert erased == len(sent)
+        assert {o["VersionId"] for o in sent} == {"v1", "dm1"}
+        assert erased >= 4  # two documents, each a version and a marker
+
+    def test_only_this_tenants_prefixes_are_read(self, storage: DocumentStorage, ctx, s3):
+        storage.put_document(ctx, filename="a.pdf", body=PDF)
+        storage.drop_tenant(ctx.tenant_id)
+
+        prefixes = {call["Prefix"] for call in s3.version_lists}
+        assert prefixes == {f"raw/{ctx.tenant_id}/", f"processed/{ctx.tenant_id}/"}
+
+    def test_another_tenants_bytes_are_not_touched(self, storage: DocumentStorage, ctx, s3):
+        """The prefix carries a trailing slash for this reason: `raw/demo` would also match
+        `raw/demo-clinic/`."""
+        from src.graph.scope import AuthContext
+
+        other = AuthContext(user_id="them", tenant_id=f"{ctx.tenant_id}-clinic")
+        mine = storage.put_document(ctx, filename="a.pdf", body=PDF)
+        theirs = storage.put_document(other, filename="b.pdf", body=b"%PDF-1.4 theirs")
+
+        storage.drop_tenant(ctx.tenant_id)
+
+        assert theirs.key in s3.existing
+        assert mine.key not in s3.existing
+
+    def test_a_tenant_with_nothing_stored_is_not_an_error(self, storage: DocumentStorage):
+        assert storage.drop_tenant("empty-firm") == 0
 
 
 class TestConfigWiring:

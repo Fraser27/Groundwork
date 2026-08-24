@@ -38,6 +38,14 @@ export interface LexGraphConfig {
   readonly appMemoryMiB: number;
   readonly defaultOntology: string;
   /**
+   * The one tenant whose platform-admins may create and delete other tenants.
+   *
+   * Not "any platform-admin": that is a role within a firm, so it would let one customer
+   * delete another. Empty closes those routes entirely, which is the safe reading of an
+   * operator tenant nobody configured.
+   */
+  readonly homeTenant: string;
+  /**
    * Availability Zone *names* for the VPC, e.g. `['us-east-1a','us-east-1b']`.
    *
    * Left unset by default because AZ names are shuffled per account: the
@@ -72,6 +80,7 @@ export function readConfig(scope: Construct): LexGraphConfig {
     appCpu: ctx('appCpu', 512),
     appMemoryMiB: ctx('appMemoryMiB', 1024),
     defaultOntology: ctx('defaultOntology', 'legal'),
+    homeTenant: ctx('homeTenant', 'demo-firm'),
     availabilityZones: azs,
   };
 }

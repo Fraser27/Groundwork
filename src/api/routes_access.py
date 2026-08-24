@@ -366,7 +366,11 @@ async def list_users(
 
     try:
         entries = (
-            admin.list_my_users(ctx.user_id)
+            # Filtered on the tenant as well as the group. An ownership group tracks who
+            # *invited* someone, not where they landed, and those stopped being the same thing
+            # when creating a tenant made the operator the inviter of another firm's admin --
+            # so without this an operator's own screen lists a customer's people.
+            [e for e in admin.list_my_users(ctx.user_id) if e.tenant_id == ctx.tenant_id]
             if scope == "mine"
             else admin.list_tenant_users(ctx.tenant_id)
         )

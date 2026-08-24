@@ -30,6 +30,7 @@ from src.api import (
     routes_metrics,
     routes_query,
     routes_review,
+    routes_tenants,
 )
 from src.api.deps import Services, build_services, get_services, set_services
 from src.auth import AuthError
@@ -173,6 +174,10 @@ def create_app(config: LexGraphConfig | None = None) -> FastAPI:
             "vector": "enabled" if svc.config.vector.enabled else "disabled",
             "ontology": svc.ontology.domain,
             "dev_auth_bypass": svc.authenticator.dev_mode,
+            # So the UI knows whether to offer the platform screen. Not a secret: the routes
+            # enforce the guard server-side regardless, and hiding a nav entry nobody can use
+            # is a courtesy rather than a control.
+            "home_tenant": svc.config.auth.home_tenant,
         }
 
     @app.get("/api/health", tags=["ops"])
@@ -188,6 +193,7 @@ def create_app(config: LexGraphConfig | None = None) -> FastAPI:
         routes_documents,
         routes_metrics,
         routes_query,
+        routes_tenants,
     ):
         app.include_router(module.router, prefix="/api")
 

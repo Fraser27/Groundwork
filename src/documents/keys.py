@@ -42,6 +42,16 @@ def safe_filename(filename: str) -> str:
     return cleaned[:_MAX_FILENAME_CHARS] or "document"
 
 
+def tenant_prefixes(tenant_id: str) -> tuple[str, ...]:
+    """Every key prefix one tenant's bytes can live under.
+
+    Built from the same constants the writers use, so a third prefix added later cannot be
+    missed by a sweep that hardcoded two. The trailing slash matters: without it `raw/demo`
+    would also match `raw/demo-clinic/`.
+    """
+    return (f"{RAW_PREFIX}{tenant_id}/", f"{PROCESSED_PREFIX}{tenant_id}/")
+
+
 def document_key(tenant_id: str, content_sha256: str, filename: str) -> str:
     """Content-addressed key under a tenant prefix.
 

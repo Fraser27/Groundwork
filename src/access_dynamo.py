@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
 from src.access import AccessEvent, MatterAssignment, MatterScreen
@@ -43,6 +43,7 @@ class TableLike(Protocol):
 
     def put_item(self, **kwargs: Any) -> dict[str, Any]: ...
     def query(self, **kwargs: Any) -> dict[str, Any]: ...
+    def delete_item(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 def user_pk(tenant_id: str, user_id: str) -> str:
@@ -241,6 +242,34 @@ class DynamoAccessStore:
                 ":prefix": prefix,
             },
         )
+
+    def drop_tenant(
+        self, tenant_id: str, *, user_ids: Sequence[str], matter_ids: Sequence[str] = ()
+    ) -> int:
+        """Delete every assignment, screen and access event for one tenant.
+
+        The ids are passed in rather than discovered, because the partition key is
+        `TENANT#{t}#USER#{u}` and DynamoDB cannot query a partial partition key -- there is no
+        "every user under this tenant" read, and the alternative is the `scan` this module's
+        `TableLike` deliberately omits.
+
+        `matter_ids` widens the sweep through GSI1: a screen can name a user who was never in
+        the directory (someone screened before they were invited, or after they left), and a
+        grant nobody deleted is a grant that survives into a reused tenant id.
+        """
+        keys: set[tuple[str, str]] = set()
+        for user_id in user_ids:
+            for prefix in (ASSIGN, SCREEN, EVENT):
+                for item in self._by_user(tenant_id, user_id, prefix):
+                    keys.add((str(item["PK"]), str(item["SK"])))
+        for matter_id in matter_ids:
+            for prefix in (ASSIGN, SCREEN, EVENT):
+                for item in self._by_matter(tenant_id, matter_id, prefix):
+                    keys.add((str(item["PK"]), str(item["SK"])))
+
+        for pk, sk in sorted(keys):
+            self.table.delete_item(Key={"PK": pk, "SK": sk})
+        return len(keys)
 
     def _query(self, **kwargs: Any) -> list[dict[str, Any]]:
         """Every page. A truncated read of a denylist is a privilege breach."""

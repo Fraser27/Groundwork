@@ -47,6 +47,7 @@ class CognitoLike(Protocol):
     def list_users_in_group(self, **kwargs: Any) -> dict[str, Any]: ...
     def list_users(self, **kwargs: Any) -> dict[str, Any]: ...
     def create_group(self, **kwargs: Any) -> dict[str, Any]: ...
+    def delete_group(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 class UserAdminError(RuntimeError):
@@ -270,6 +271,26 @@ class UserAdmin:
         if directory is not None and sub:
             directory.forget_user(sub)
         logger.info("deleted user %s from tenant %s", email, tenant_id)
+
+    def delete_owner_group(self, admin_sub: str) -> bool:
+        """Remove an admin's ownership group. False when there was none.
+
+        A group outlives the users in it, so deleting a tenant's people leaves an empty
+        `owner-{sub}` behind. Harmless to authorization -- membership is what grants anything --
+        but the pool accumulates one per departed admin, and `list_my_users` reads these by
+        name, so a group belonging to a deleted admin is a name that resolves to nothing.
+
+        Absent is not an error: an admin who never invited anyone has no group.
+        """
+        try:
+            self.client.delete_group(
+                UserPoolId=self.user_pool_id, GroupName=owner_group(admin_sub)
+            )
+        except Exception as e:
+            if "ResourceNotFoundException" in type(e).__name__ or "not found" in str(e).lower():
+                return False
+            raise UserAdminError(f"could not delete ownership group: {e}") from e
+        return True
 
     def list_my_users(self, admin_sub: str, *, limit: int = MAX_PAGE) -> list[DirectoryEntry]:
         """Users this admin created. Empty when they have created none."""
