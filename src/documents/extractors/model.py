@@ -146,6 +146,7 @@ def build_prompt(
     allowed_predicates: Sequence[str],
     entity_kinds: Sequence[str],
     predicate_shapes: Mapping[str, tuple[Sequence[str], Sequence[str]]] | None = None,
+    unit_slug: str = "matter",
 ) -> str:
     """The user turn: one passage, the closed vocabulary, and nothing else.
 
@@ -185,7 +186,7 @@ def build_prompt(
                 for p in allowed_predicates
             ],
             "entity_kinds": list(entity_kinds),
-            "this_matter": matter_entity_id(chunk),
+            "this_matter": f"{unit_slug}:{chunk.matter_id}" if chunk.matter_id else None,
         },
         indent=2,
     )
@@ -248,13 +249,22 @@ def document_entity_id(chunk: Chunk) -> str:
     return f"document:{chunk.document_id}"
 
 
-def matter_entity_id(chunk: Chunk) -> str | None:
-    """Graph node id for the chunk's matter, or None when the document is unfiled.
+def matter_entity_id(chunk: Chunk, ontology: Ontology | None = None) -> str | None:
+    """Graph node id for the chunk's organising unit, or None when the document is unfiled.
 
-    `Chunk.matter_id` is a filing reference (`NTL`), not an entity id. `Matter` declares
-    `external_id`, so the local part keeps its case and only the prefix is added.
+    `Chunk.matter_id` is a filing reference (`NTL`), not an entity id, and the kind it belongs to
+    is whatever the pack calls its organising unit. Hardcoding `matter:` minted an id of a kind
+    only the legal pack declares, so under healthcare `entity_kind_of` returned None and every
+    claim about the encounter was dropped -- the same silent drop that starved the conflict rules,
+    one pack over.
+
+    The scoping key stays `matter_id`; this is the *prefix* the pack declares for it. Falls back to
+    `matter:` when no pack is supplied or none declares a unit, which is the legal default.
     """
-    return f"matter:{chunk.matter_id}" if chunk.matter_id else None
+    if not chunk.matter_id:
+        return None
+    unit = ontology.organising_unit if ontology is not None else None
+    return f"{unit.slug if unit is not None else 'matter'}:{chunk.matter_id}"
 
 
 def locate_quote(chunk: Chunk, quote: str) -> tuple[int, int] | None:
@@ -359,6 +369,9 @@ class ModelExtractor:
                 for p in self.ontology.extractable_predicates
                 if (pdef := self.ontology.predicates.get(p)) is not None and pdef.domain
             },
+            unit_slug=(
+                unit.slug if (unit := self.ontology.organising_unit) is not None else "matter"
+            ),
         )
         try:
             raw = self.invoke(prompt)

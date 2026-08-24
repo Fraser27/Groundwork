@@ -404,6 +404,23 @@ class TestPrompt:
         sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
         assert sent["this_matter"] is None
 
+    @pytest.mark.parametrize(
+        ("domain", "expected"),
+        [("legal", "matter:U-1"), ("healthcare", "encounter:U-1"), ("fintech", "facility:U-1")],
+    )
+    def test_the_offered_unit_takes_the_prefix_its_own_pack_declares(self, domain, expected):
+        """`matter:` is the legal pack's kind. Hardcoding it minted an id of a kind no other pack
+        declares, so `entity_kind_of` returned None and `validate` dropped every claim about the
+        encounter or the facility -- the same silent drop that starved the conflict rules, one pack
+        over. The scoping key stays `matter_id`; the prefix follows the pack."""
+        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
+        onto = load_ontology(domain)
+        ModelExtractor(onto, bedrock=bedrock).extract(chunk(matter_id="U-1"))
+        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        assert sent["this_matter"] == expected
+        # And the id it offers is one that pack will actually accept at the boundary.
+        assert onto.entity_kind_of(expected) is not None
+
     def test_temperature_is_omitted_by_default(self):
         """The newest Claude models reject the parameter, and a ValidationException on
         every chunk is a worse outcome than unpinned decoding."""
