@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
-import { getTenantId } from './auth'
+import { getTenantId, isAuthenticated } from './auth'
 
 /**
  * What this tenant's ontology pack calls the unit work is organised by.
@@ -54,6 +54,11 @@ export function useUnitLabel(): UnitLabel {
   })
 
   useEffect(() => {
+    // Never before there is a token. This hook renders in the app chrome, which mounts before the
+    // auth guard decides anything, so an unconditional fetch here 401s -- and `request()` treats a
+    // 401 as "session over", clears localStorage and redirects to `/`. That threw away the
+    // `?code=` of an in-progress Cognito callback, so signing in could never complete.
+    if (!isAuthenticated()) return
     let live = true
     load(tenant).then((label) => {
       if (live) setLoaded({ tenant, label })

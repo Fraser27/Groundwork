@@ -6,7 +6,7 @@
  * only for routing, never for authorisation.
  */
 
-import { getAccessToken, isAuthEnabled } from './auth'
+import { getAccessToken, hasPendingAuthCode, isAuthEnabled } from './auth'
 
 const BASE = '/api'
 
@@ -21,7 +21,11 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { headers, ...opts })
 
   if (res.status === 401) {
-    if (isAuthEnabled()) {
+    // A 401 while a code is being exchanged is not an expired session, it is a request that ran
+    // too early. Clearing storage and redirecting to `/` would drop the `?code=` this page load
+    // exists to redeem and the PKCE verifier that redeems it, so the sign-in could never finish
+    // and the next attempt would land here again. Report it and let the caller degrade.
+    if (isAuthEnabled() && !hasPendingAuthCode()) {
       localStorage.clear()
       window.location.href = '/'
     }
