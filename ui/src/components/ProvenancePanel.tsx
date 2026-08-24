@@ -429,7 +429,7 @@ export default function ProvenancePanel({
                     </dt>
                     <dd>
                       <code>
-                        {offsets.start}&ndash;{offsets.end}
+                        {offsets.start} to {offsets.end}
                       </code>
                     </dd>
                   </div>

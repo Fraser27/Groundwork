@@ -206,8 +206,8 @@ export default function MergeDialog({
                       {preview.affected.length === 1 ? '' : 's'} restated.
                     </strong>{' '}
                     Each is closed and rewritten to name <code>{winner}</code>. The assertion id
-                    changes, because an id hashes its endpoints — so this is a supersession with its
-                    own audit event rather than an edit.
+                    changes, because an id hashes its endpoints, so this is a supersession with
+                    its own audit event rather than an edit.
                   </li>
                   <li>
                     <strong>
