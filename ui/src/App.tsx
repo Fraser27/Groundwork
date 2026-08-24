@@ -16,6 +16,7 @@ import Dashboard from './pages/Dashboard'
 import Matters from './pages/Matters'
 import Documents from './pages/Documents'
 import ReviewQueue from './pages/ReviewQueue'
+import Entities from './pages/Entities'
 import Tables from './pages/Tables'
 import TableDetail from './pages/TableDetail'
 import Metrics from './pages/Metrics'
@@ -115,6 +116,7 @@ function App() {
           <div className="nav-section-rule" />
           <NavItem to="/matters" icon={icons.matters} label="Matters" collapsed={collapsed} />
           <NavItem to="/documents" icon={icons.documents} label="Documents" collapsed={collapsed} />
+          <NavItem to="/entities" icon={icons.entities} label="Entities" collapsed={collapsed} />
           <NavItem to="/graph" icon={icons.graph} label="Graph" collapsed={collapsed} />
           <NavItem to="/provenance" icon={icons.provenance} label="Audit" collapsed={collapsed} />
 
@@ -171,6 +173,7 @@ function App() {
           <Route path="/matters" element={<Matters />} />
           <Route path="/documents" element={<Documents />} />
           <Route path="/documents/:id" element={<Documents />} />
+          <Route path="/entities" element={<Entities />} />
           <Route path="/graph" element={<GraphExplorer />} />
           <Route path="/provenance" element={<Provenance />} />
           <Route path="/tables" element={<Tables />} />
@@ -270,6 +273,12 @@ const icons = {
     <>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <path d="M14 2v6h6M8 13h8M8 17h5" />
+    </>,
+  ),
+  entities: svg(
+    <>
+      <circle cx="8" cy="12" r="5" />
+      <circle cx="16" cy="12" r="5" />
     </>,
   ),
   graph: svg(

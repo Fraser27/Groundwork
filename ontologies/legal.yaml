@@ -296,10 +296,13 @@ rules:
   - id: conflict_via_affiliate
     version: v1
     description: Flag a potential conflict where the firm opposes an affiliate of a party it represents.
-    help: The conflict nobody sees, because no single document contains it. The firm acts for Northwind and opposes Calder in an unrelated matter; a third document records that the two are in one group. Each fact is unremarkable alone.
+    help: The conflict nobody sees, because no single document contains it. The firm acts for Northwind and opposes Calder in an unrelated matter; a third document records that the two are in one group. Each fact is unremarkable alone. The affiliation is followed as a chain of up to three links, so an intermediate holding company does not hide the conflict.
     when:
       - "(c:Counsel)-[:REPRESENTS]->(q:Party)"
-      - "(q:Party)-[:AFFILIATE_OF]->(p:Party)"
+      # Written as a path, not a plain edge. `AFFILIATE_OF` is transitive, but that declaration is
+      # inert unless a rule asks to walk it -- and a one-hop premise silently missed exactly the
+      # multi-hop ownership structures this rule exists to catch.
+      - "(q:Party)-[:AFFILIATE_OF*1..3]->(p:Party)"
       - "(m:Matter)-[:ADVERSE_TO]->(p:Party)"
     then: "(m)-[:POTENTIAL_CONFLICT]->(q)"
     min_premise_class: EXTRACTED_MODEL

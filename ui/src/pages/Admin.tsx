@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   api,
   type Ontology,
   type ResetScope,
+  type RetrievalGovernance,
   type Source,
   type TenantSettings,
   type TenantUser,
@@ -30,6 +31,8 @@ const RESET_OPTIONS: { key: keyof ResetScope; label: string; rebuild: string }[]
 export default function Admin() {
   const tenant = getTenantId()
   const [settings, setSettings] = useState<TenantSettings | null>(null)
+  const [retrieval, setRetrieval] = useState<RetrievalGovernance | null>(null)
+  const [fieldHelp, setFieldHelp] = useState<Record<string, string>>({})
   const [ontology, setOntology] = useState<Ontology | null>(null)
   const [sources, setSources] = useState<Source[]>([])
   const [loading, setLoading] = useState(true)
@@ -165,6 +168,15 @@ export default function Admin() {
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
     loadUsers()
+    // Separate from the load above so an older API without this route leaves the rest of the
+    // page working rather than blanking it.
+    api
+      .getGovernance(tenant)
+      .then((r) => {
+        setRetrieval(r.settings)
+        setFieldHelp(r.help ?? {})
+      })
+      .catch(() => setRetrieval(null))
   }, [tenant, reloadKey])
 
   const patch = async (key: string, body: Partial<TenantSettings>, message: string) => {
@@ -178,6 +190,29 @@ export default function Admin() {
     } catch (e) {
       // These are governance policies. A toggle that did not persist must snap back.
       setSettings(before)
+      showToast(
+        `Could not save that setting: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
+        'error',
+      )
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const patchRetrieval = async (
+    key: string,
+    body: Partial<RetrievalGovernance>,
+    message: string,
+  ) => {
+    setSaving(key)
+    const before = retrieval
+    setRetrieval((r) => (r ? { ...r, ...body } : r))
+    try {
+      const r = await api.updateGovernance(tenant, body)
+      setRetrieval(r.settings)
+      showToast(message)
+    } catch (e) {
+      setRetrieval(before)
       showToast(
         `Could not save that setting: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
         'error',
@@ -593,6 +628,16 @@ export default function Admin() {
           </div>
         </div>
 
+        {retrieval && (
+          <RetrievalReach
+            retrieval={retrieval}
+            setRetrieval={setRetrieval}
+            patchRetrieval={patchRetrieval}
+            saving={saving}
+            help={fieldHelp}
+          />
+        )}
+
         <div className="card" style={{ borderColor: settings.block_ungoverned_queries ? 'var(--red)' : undefined }}>
           <div className="card-header">
             <h3>
@@ -980,6 +1025,133 @@ export default function Admin() {
 
       <Toast toast={toast} />
     </>
+  )
+}
+
+/** How far a question's retrieval reaches: how many passages, and how far out from each.
+ *
+ * Governance rather than tuning. Every entity the traversal touches becomes a seed for the
+ * conflict and ethical-wall check, so depth sets how much of the graph a conflict check can see.
+ * Help text comes from the API, not from here, so a tooltip cannot drift from its control.
+ */
+function RetrievalReach({
+  retrieval,
+  setRetrieval,
+  patchRetrieval,
+  saving,
+  help,
+}: {
+  retrieval: RetrievalGovernance
+  setRetrieval: Dispatch<SetStateAction<RetrievalGovernance | null>>
+  patchRetrieval: (
+    key: string,
+    body: Partial<RetrievalGovernance>,
+    message: string,
+  ) => Promise<void>
+  saving: string | null
+  help: Record<string, string>
+}) {
+  const depth = retrieval.graph_expand_depth
+  const topK = retrieval.vector_top_k
+  // Held as text, not written straight into `retrieval`: mid-edit a cleared field parses as 0,
+  // and putting that in the shared value loses the number to revert to when the edit is abandoned.
+  const [topKDraft, setTopKDraft] = useState(String(topK))
+  // Resynced during render rather than in an effect, so a saved value lands in one pass instead
+  // of rendering the stale draft first.
+  const [lastTopK, setLastTopK] = useState(topK)
+  if (topK !== lastTopK) {
+    setLastTopK(topK)
+    setTopKDraft(String(topK))
+  }
+
+  const commitDepth = (raw: string) => {
+    const next = Number(raw)
+    if (next === depth) return
+    patchRetrieval('depth', { graph_expand_depth: next }, `Traversal depth set to ${next} hop(s)`)
+  }
+
+  // Below the API's floor of 1 the edit is discarded rather than clamped: silently saving 1 for
+  // someone who cleared the box and looked away is a governance change nobody asked for.
+  const commitTopK = () => {
+    const next = Math.round(Number(topKDraft))
+    if (!Number.isFinite(next) || next < 1 || !topKDraft.trim()) {
+      setTopKDraft(String(topK))
+      return
+    }
+    if (next === topK) {
+      setTopKDraft(String(topK))
+      return
+    }
+    patchRetrieval('topk', { vector_top_k: next }, `Retrieving ${next} passages per question`)
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <h3>Retrieval reach</h3>
+        <span className={`tag ${depth >= 4 ? 'tag-orange' : 'tag-blue'}`}>
+          {depth} hop{depth === 1 ? '' : 's'} &middot; {topK} passages
+        </span>
+      </div>
+
+      <div className="form-group">
+        <label>
+          Traversal depth
+          {help.graph_expand_depth && <FieldHelp text={help.graph_expand_depth} />}
+        </label>
+        <input
+          type="range"
+          min={1}
+          max={5}
+          step={1}
+          value={depth}
+          disabled={saving === 'depth'}
+          onChange={(e) =>
+            setRetrieval((r) => (r ? { ...r, graph_expand_depth: Number(e.target.value) } : r))
+          }
+          // On release, not on change: dragging patches governance once per pixel otherwise.
+          onMouseUp={(e) => commitDepth((e.target as HTMLInputElement).value)}
+          onKeyUp={(e) => commitDepth((e.target as HTMLInputElement).value)}
+          style={{ width: '100%' }}
+        />
+        <div className="dim" style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+          <span>1 — adjacent only</span>
+          <span>5 — widest</span>
+        </div>
+        <p className="hint">
+          <strong>{depth}</strong> — every entity the walk touches is also checked for a conflict or
+          an ethical wall, so this is what decides whether a conflict two parties away is found at
+          all. Each extra hop widens that reach and costs latency: at 1 a non-adjacent conflict is
+          missed, and on a well-connected firm 5 is slow.
+        </p>
+      </div>
+
+      <div className="form-group" style={{ marginBottom: 0 }}>
+        <label>
+          Passages retrieved
+          {help.vector_top_k && <FieldHelp text={help.vector_top_k} />}
+        </label>
+        <input
+          type="number"
+          min={1}
+          step={1}
+          value={topKDraft}
+          disabled={saving === 'topk'}
+          onChange={(e) => setTopKDraft(e.target.value)}
+          onBlur={commitTopK}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="input-mono"
+          style={{ maxWidth: 120 }}
+        />
+        <p className="hint">
+          The passages the traversal starts from. Raising it finds more starting points and
+          therefore more entities to check; lowering it narrows what any hop count can reach, so a
+          low figure here caps the reach above regardless of depth.
+        </p>
+      </div>
+    </div>
   )
 }
 

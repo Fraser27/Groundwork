@@ -203,6 +203,125 @@ class TestAConflictThroughAnAffiliateIsFound:
         assert len(a.premises) == 3
 
 
+def _two_hop_affiliate_facts():
+    """The same conflict with one more holding company in the way.
+
+    Northwind and Calder are still in one group, but the document trail records it in two steps:
+    Northwind is an affiliate of Meridian, Meridian of Calder. Nothing about the conflict changed;
+    only the number of links did.
+    """
+    return [
+        fact("counsel:thorne-vaux", "REPRESENTS", "party:northwind", matter=MBC),
+        fact("party:northwind", "AFFILIATE_OF", "party:meridian", matter=HAL),
+        fact("party:meridian", "AFFILIATE_OF", "party:calder", matter=HAL),
+        fact("matter:" + NTL, "ADVERSE_TO", "party:calder", matter=NTL),
+    ]
+
+
+class TestTheAffiliateChainIsFollowed:
+    """`AFFILIATE_OF` is declared transitive, and that declaration was inert.
+
+    The rule wrote its middle premise as a plain edge, so `max_hops` was 1, `is_path` was False,
+    and the walk in `_match` never ran. A two-hop group structure produced zero inferences while
+    every rule reported as evaluated — the shape of failure this codebase is organised against,
+    and worse here because a structure deep enough to hide a conflict is often one built to.
+    """
+
+    def test_the_rule_asks_to_walk_the_chain(self):
+        """Pinned on the pack, not the engine. The walk exists and is correct; the bug was a rule
+        that never asked for it, which no engine test could catch."""
+        rule = next(r for r in load_ontology("legal").rules if r.id == "conflict_via_affiliate")
+        affiliate = next(p for p in parse_rule(rule).premises if p.predicate == "AFFILIATE_OF")
+        assert affiliate.is_path
+        assert (affiliate.min_hops, affiliate.max_hops) == (1, MAX_PATH_HOPS)
+
+    def test_a_two_hop_group_structure_produces_the_conflict(self, ctx):
+        """The regression that was silent. One intermediate company was enough to hide it."""
+        report = Reasoner(load_ontology("legal")).run(ctx, _two_hop_affiliate_facts())
+
+        assert [i.rule_id for i in report.inferences] == ["conflict_via_affiliate"]
+        a = report.inferences[0].assertion
+        assert a.predicate == "POTENTIAL_CONFLICT"
+        assert a.subject_id == "matter:" + NTL
+        assert a.object_id == "party:northwind"
+
+    def test_the_adjacent_case_still_fires(self, ctx):
+        """`*1..3` includes 1. A path premise that stopped finding the direct affiliation would
+        trade one silent miss for another."""
+        report = Reasoner(load_ontology("legal")).run(ctx, _affiliate_conflict_facts())
+
+        assert [i.rule_id for i in report.inferences] == ["conflict_via_affiliate"]
+        assert report.inferences[0].assertion.object_id == "party:northwind"
+
+    def test_a_chain_past_the_hop_bound_is_not_followed(self, ctx):
+        """Four links, a bound of three. Out of reach rather than the walk quietly running as far
+        as the data goes, because a proof tree past three siblings is not defensible."""
+        facts = [
+            fact("counsel:thorne-vaux", "REPRESENTS", "party:l1", matter=MBC),
+            fact("party:l1", "AFFILIATE_OF", "party:l2", matter=HAL),
+            fact("party:l2", "AFFILIATE_OF", "party:l3", matter=HAL),
+            fact("party:l3", "AFFILIATE_OF", "party:l4", matter=HAL),
+            fact("party:l4", "AFFILIATE_OF", "party:l5", matter=HAL),
+            fact("matter:" + NTL, "ADVERSE_TO", "party:l5", matter=NTL),
+        ]
+        assert Reasoner(load_ontology("legal")).run(ctx, facts).count == 0
+
+    def test_every_link_of_the_chain_is_a_premise(self, ctx):
+        """The whole reason a path is allowed where negation is not: each step is a signed-off
+        assertion, so the proof tree stays whole and withdrawing any link withdraws the
+        conclusion."""
+        facts = _two_hop_affiliate_facts()
+        report = Reasoner(load_ontology("legal")).run(ctx, facts)
+
+        drawn = report.inferences[0].assertion
+        assert set(drawn.premises) == {f.assertion_id for f in facts}
+        assert len(drawn.premises) == 4
+
+    def test_the_chained_conclusion_is_capped_by_its_weakest_link(self, ctx):
+        """Invariant 3, over a walked chain. The weakest premise is a middle link here, which is
+        the one an extra hop could have laundered away."""
+        facts = _two_hop_affiliate_facts()
+        for f in facts:
+            if (f.subject_id, f.object_id) == ("party:meridian", "party:calder"):
+                weakest = f
+                f.confidence = 0.6
+        report = Reasoner(load_ontology("legal")).run(ctx, facts)
+
+        assert report.inferences[0].assertion.confidence <= weakest.confidence
+
+    def test_a_chained_conclusion_is_less_confident_than_an_adjacent_one(self, ctx):
+        """One step of doubt per edge crossed. A conflict reached through two holding companies
+        may well be more urgent, but urgency is not confidence."""
+        legal = load_ontology("legal")
+        chained = Reasoner(legal).run(ctx, _two_hop_affiliate_facts()).inferences[0]
+        adjacent = Reasoner(legal).run(ctx, _affiliate_conflict_facts()).inferences[0]
+
+        assert chained.assertion.confidence < adjacent.assertion.confidence
+
+    def test_an_unreviewed_link_breaks_the_chain(self, ctx):
+        """Each step is held to the same gate as an ordinary premise. A model's guess in the
+        middle of an ownership ladder must not carry a conflict across it."""
+        facts = _two_hop_affiliate_facts()
+        for f in facts:
+            if (f.subject_id, f.object_id) == ("party:northwind", "party:meridian"):
+                f.review_state = ReviewState.PENDING
+        assert Reasoner(load_ontology("legal")).run(ctx, facts).count == 0
+
+    def test_a_cycle_terminates_without_concluding_about_a_party_from_itself(self, ctx):
+        """Northwind and Calder each recorded as an affiliate of the other. `_match` tracks
+        visited nodes per path, so the walk cannot return to Northwind and hand the rule
+        `q == p` — a conflict between the firm's own client and itself."""
+        facts = [
+            fact("counsel:thorne-vaux", "REPRESENTS", "party:northwind", matter=MBC),
+            fact("party:northwind", "AFFILIATE_OF", "party:calder", matter=HAL),
+            fact("party:calder", "AFFILIATE_OF", "party:northwind", matter=HAL),
+            fact("matter:" + NTL, "ADVERSE_TO", "party:northwind", matter=NTL),
+        ]
+        report = Reasoner(load_ontology("legal")).run(ctx, facts)
+
+        assert [i.rule_id for i in report.inferences] == ["conflict_check"]
+
+
 class TestASpellingVariantNoLongerHidesAConflict:
     """The failure `CLAUDE.md` rule 5 describes, reproduced for entity names rather than
     predicates: two documents naming one company differently used to produce two nodes, and the

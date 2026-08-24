@@ -9,6 +9,18 @@ export function epiStyle(c: EpistemicClass): CSSProperties {
   return { '--epi-colour': EPISTEMIC[c].colour } as CSSProperties
 }
 
+/** `party:acme-corporation` -> `acme corporation`. An Entity node carries no label property, so
+ *  the slug inside the id is the only name there is. Mirrors `_entity_label` server-side. */
+export function entityLabel(id: string): string {
+  const slug = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id
+  return slug.replace(/[-_]/g, ' ')
+}
+
+/** The kind before the colon. Empty when the id carries none, rather than guessed. */
+export function entityKind(id: string): string {
+  return id.includes(':') ? id.slice(0, id.indexOf(':')) : ''
+}
+
 export function fmtBytes(n?: number | null): string {
   if (n == null) return '-'
   const units = ['B', 'KB', 'MB', 'GB']

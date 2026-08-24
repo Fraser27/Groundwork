@@ -1107,6 +1107,81 @@ export interface TenantSettings {
   available_domains: string[]
 }
 
+/**
+ * The two retrieval knobs the `/settings` projection does not carry.
+ *
+ * Read and written through `/governance` directly. Routing them through `updateSettings` would
+ * patch correctly and then blank the control, because that call re-reads `/settings` and a field
+ * absent from the projection comes back `undefined`.
+ */
+export interface RetrievalGovernance {
+  vector_top_k: number
+  graph_expand_depth: number
+}
+
+// ── Entity merge ─────────────────────────────────────────────────────────────
+
+/** Ids sharing a blocking key. Grouping is by name shape, so `party:acme-ltd` and
+ *  `party:acme-limited` land together and may still be two companies. */
+export interface DuplicateGroup {
+  key: string
+  entity_ids: string[]
+}
+
+/** What a merge did, or would do when `dry_run`. Mirrors src/documents/merge.py :: Merge. */
+export interface MergeResult {
+  losing_id: string
+  winning_id: string
+  /** Current assertions naming the losing id at either end. Each is restated about the winner. */
+  affected: string[]
+  /** Conclusions that fall because an affected premise closes, without naming the merged id
+   *  themselves. Often empty even when conclusions do fall: one naming the losing id directly is
+   *  restated as part of `affected` instead. */
+  cascaded: string[]
+  /** Ids of the replacement assertions. Empty for a dry run. */
+  rewritten: string[]
+  dry_run: boolean
+  note: string
+}
+
+// ── Reasoning ────────────────────────────────────────────────────────────────
+
+/** One conclusion a rule drew. Mirrors ReasonerReport.to_dict() in src/reasoning/engine.py. */
+export interface ReasonerInference {
+  assertion_id: string
+  rule_id: string
+  subject_id: string
+  predicate: string
+  object_id: string
+  confidence: number
+  premises: string[]
+  matter_id?: string | null
+}
+
+/**
+ * What a reasoning pass did. Mirrors src/reasoning/engine.py :: ReasonerReport.
+ *
+ * The three failure maps are separate because they mean different things, and a caller that
+ * merges them recreates the ambiguity the report exists to remove: `rules_skipped` could never
+ * fire, `rules_starved` ran and its join came up empty, `conclusions_refused` fired and an
+ * invariant rejected the conclusion. Zero inferences over 40 facts is not zero rules run.
+ */
+export interface ReasonerReport {
+  inferences: ReasonerInference[]
+  count: number
+  rules_evaluated: number
+  /** Rule id → why it could never fire, e.g. a conclusion outside the vocabulary. */
+  rules_skipped: Record<string, string>
+  /** Rule id → which premise emptied the join, e.g. "no ADVERSE_TO fact matches
+   *  (m:Matter)->(p:Party)". Shown verbatim: the premise is the actionable part. */
+  rules_starved: Record<string, string>
+  conclusions_refused: string[]
+  facts_considered: number
+  /** Added by the endpoint. Equal to `count` — conclusions are staged, never written live. */
+  staged?: number
+  note?: string
+}
+
 // ── Calls ────────────────────────────────────────────────────────────────────
 
 /**
@@ -1413,6 +1488,16 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  /**
+   * Fire the pack's rules over this tenant's live facts and report what happened.
+   *
+   * Conclusions are staged into the review queue, not written live. The report is worth as much
+   * as the conclusions: a conflict check whose premises matched nothing returns zero inferences
+   * and so does a clean one, and only `rules_starved` tells the two apart. Admin only.
+   */
+  runReasoner: (tenant: string) =>
+    request<ReasonerReport>(`/tenants/${tenant}/reason`, { method: 'POST' }),
+
   /** Withdraw everything derived from one document. Soft, audited, and needs a reason. */
   wipeDocument: (tenant: string, documentId: string, reason: string) =>
     request<WipeReport>(`/tenants/${tenant}/documents/${documentId}/wipe`, {
@@ -1560,6 +1645,18 @@ export const api = {
     return request<TenantSettings>(`/tenants/${tenant}/settings`)
   },
 
+  /** `help` is FIELD_HELP, shipped with the settings so a tooltip cannot drift from its control. */
+  getGovernance: (tenant: string) =>
+    request<{ settings: RetrievalGovernance; help: Record<string, string> }>(
+      `/tenants/${tenant}/governance`,
+    ),
+
+  updateGovernance: (tenant: string, patch: Partial<RetrievalGovernance>) =>
+    request<{ settings: RetrievalGovernance; warnings: string[] }>(
+      `/tenants/${tenant}/governance`,
+      { method: 'PATCH', body: JSON.stringify(patch) },
+    ),
+
   /**
    * Drop derived data. S3 and Glue are untouched, so everything except metrics is
    * rebuildable by `replay` and `scanSources`. `confirm_metric_loss` is required when
@@ -1635,4 +1732,23 @@ export const api = {
     request<{ events: AccessEvent[] } | AccessEvent[]>(
       `/tenants/${tenant}/access/audit${q(opts)}`,
     ).then((r) => (Array.isArray(r) ? r : r.events ?? [])),
+
+  /** Groups of entity ids that may name one thing. A group is a question, not a finding. */
+  entityDuplicates: (tenant: string) =>
+    request<{ groups: DuplicateGroup[]; count: number }>(`/tenants/${tenant}/entities/duplicates`),
+
+  /**
+   * Restate every claim about `losing_id` as a claim about `winning_id`.
+   *
+   * `dryRun` mirrors the server default of true. Committing is a separate, explicit call because a
+   * merge cascades: conclusions resting on the restated premises are withdrawn with them.
+   */
+  mergeEntities: (
+    tenant: string,
+    body: { losing_id: string; winning_id: string; reason: string; dry_run?: boolean },
+  ) =>
+    request<MergeResult>(`/tenants/${tenant}/entities/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ dry_run: true, ...body }),
+    }),
 }

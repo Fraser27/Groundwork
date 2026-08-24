@@ -184,6 +184,8 @@ export const HELP = {
     'Facts are never edited or deleted. A correction records a new fact and marks the old one superseded from that moment, so the audit trail stays intact.',
   retraction:
     'Withdrawing a fact. Anything inferred from it is withdrawn at the same time, so no conclusion outlives the reason it was drawn.',
+  reasonerStates:
+    'A rule that draws no conclusion has four possible reasons, and only one of them is good news. It ran, its premises matched, and nothing followed — that is a clean check. Its premises matched nothing, so it never checked anything and the missing relationship is named. It could not fire at all, so whatever it was meant to check is not being checked by anything. Or it did find a match and an invariant refused the conclusion. All four report zero, which is why they are drawn apart here rather than summed: “no conflict found” and “no conflict could be looked for” must never read the same.',
 
   // ── Maintenance ───────────────────────────────────────────────────────────
   //

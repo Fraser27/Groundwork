@@ -8,8 +8,15 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Assertion, type EpistemicClass, type Matter, type Ontology } from '../api'
-import { getTenantId } from '../auth'
+import {
+  api,
+  type Assertion,
+  type EpistemicClass,
+  type Matter,
+  type Ontology,
+  type ReasonerReport,
+} from '../api'
+import { getTenantId, isPlatformAdmin } from '../auth'
 import { EPISTEMIC, HELP } from '../epistemic'
 import { useProvenance } from '../useProvenance'
 import ConfidenceBar from '../components/ConfidenceBar'
@@ -17,6 +24,7 @@ import DocumentViewer from '../components/DocumentViewer'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel, { SourceSpan } from '../components/ProvenancePanel'
+import ReasonerReportPanel from '../components/ReasonerReportPanel'
 import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { epiStyle, fmtDateTime } from '../format'
 
@@ -47,6 +55,10 @@ export default function ReviewQueue() {
   const [ontology, setOntology] = useState<Ontology | null>(null)
   const [openingDoc, setOpeningDoc] = useState<Assertion | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  const [reasoning, setReasoning] = useState(false)
+  const [report, setReport] = useState<ReasonerReport | null>(null)
+  const [reportError, setReportError] = useState('')
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
@@ -234,6 +246,23 @@ export default function ReviewQueue() {
     setReloadKey((k) => k + 1)
   }
 
+  // The queue is reloaded whatever the outcome, because a pass that staged nothing is the
+  // interesting case and the report is the only place that says why.
+  const runReasoner = async () => {
+    setReasoning(true)
+    setReportError('')
+    try {
+      const r = await api.runReasoner(tenant)
+      setReport(r)
+      if (r.count > 0) setReloadKey((k) => k + 1)
+    } catch (e) {
+      setReport(null)
+      setReportError((e as Error).message.replace(/^\d+:\s*/, ''))
+    } finally {
+      setReasoning(false)
+    }
+  }
+
   if (loading) return <Spinner />
 
   return (
@@ -248,6 +277,17 @@ export default function ReviewQueue() {
               the page they are on, so you are checking the source rather than trusting a summary.
             </p>
           </div>
+          {isPlatformAdmin() && (
+            <div className="card-header-actions">
+              <button className="btn btn-ghost btn-sm" disabled={reasoning} onClick={runReasoner}>
+                {reasoning ? 'Running rules…' : 'Run rule checks'}
+              </button>
+              <FieldHelp
+                title="Run rule checks"
+                text="Fires this firm's rules — conflict checks, stale authority — over every signed-off fact and reports what each one did. Conclusions are staged into this queue, never published. It also reports which rules could not check anything, which is the only way to tell a clean conflict check from one that had nothing to look at."
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -257,6 +297,34 @@ export default function ReviewQueue() {
           detail={error}
           onRetry={retry}
         />
+      )}
+
+      {reportError && (
+        <ErrorState
+          title="The rule checks did not run"
+          detail={reportError}
+          onRetry={runReasoner}
+        />
+      )}
+
+      {report && (
+        <div className="card">
+          <div className="card-header">
+            <h3>
+              What the rule checks did
+              <FieldHelp text={HELP.reasonerStates} />
+            </h3>
+            <div className="card-header-actions">
+              <span className="card-note">
+                Nothing here is published. Conclusions are staged into this queue.
+              </span>
+              <button className="btn btn-ghost btn-sm" onClick={() => setReport(null)}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+          <ReasonerReportPanel report={report} rules={ontology?.rules ?? []} />
+        </div>
       )}
 
       <div className="toolbar">
@@ -349,6 +417,15 @@ export default function ReviewQueue() {
               <EmptyState title="Nothing to review">
                 Every model-extracted claim has been signed off. New ones appear here as documents
                 finish extracting.
+                {/* An empty queue is where a starved conflict check reads as a clean firm. The
+                    report is the only thing that separates the two, so it is offered here. */}
+                {isPlatformAdmin() && !report && (
+                  <p style={{ marginTop: 9 }}>
+                    An empty queue is not by itself evidence that no conflict exists — a conflict
+                    check with no adversity facts to join stages nothing, exactly as a clean one
+                    does. <strong>Run rule checks</strong> above reports which of the two this is.
+                  </p>
+                )}
               </EmptyState>
             </div>
           )}

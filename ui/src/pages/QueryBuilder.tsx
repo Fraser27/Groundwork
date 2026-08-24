@@ -36,7 +36,7 @@ import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
 import QueryTrace from '../components/QueryTrace'
 import { ErrorState, Spinner, TierBadge } from '../components/Shared'
-import { epiStyle } from '../format'
+import { entityLabel, epiStyle } from '../format'
 
 /** Tier 2 explains a fact by the terms it matched; tier 3 walked to it, so distance is the
  *  explanation -- ten edges read alike otherwise, quoting indistinguishable from inferring. */
@@ -50,12 +50,6 @@ function whyIncluded(h: QueryHit): string {
     parts.push(h.source.filename + (h.source.page != null ? `, page ${h.source.page}` : ''))
   }
   return parts.join(' · ')
-}
-
-/** Entity ids are `kind:slug`. The slug is what a reader recognises; the kind is noise here. */
-function entityLabel(id: string): string {
-  const slug = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id
-  return slug.replace(/[-_]/g, ' ')
 }
 
 /** The tier is what each example is meant to demonstrate, not a promise about the answer. */
