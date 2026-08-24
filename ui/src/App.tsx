@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
 import { api } from './api'
+import { useUnitLabel } from './useUnitLabel'
 import {
   isAuthEnabled,
   isAuthenticated,
@@ -30,6 +31,7 @@ import Login from './pages/Login'
 
 function App() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [graphStatus, setGraphStatus] = useState<'connected' | 'disconnected'>('disconnected')
   const [pendingCount, setPendingCount] = useState<number | null>(null)
   // The code grant needs a round trip to Cognito's token endpoint, so this cannot resolve
@@ -80,6 +82,8 @@ function App() {
   if (isAuthEnabled() && !authed) return <Login />
 
   const admin = isPlatformAdmin()
+  // The route stays `/matters`: it is the scoping key's name, and a URL is not user-facing copy.
+  const unitPlural = unit.plural
 
   return (
     <div className={`app-layout${collapsed ? ' sidebar-collapsed' : ''}`}>
@@ -114,7 +118,7 @@ function App() {
 
           <div className="nav-section">Knowledge</div>
           <div className="nav-section-rule" />
-          <NavItem to="/matters" icon={icons.matters} label="Matters" collapsed={collapsed} />
+          <NavItem to="/matters" icon={icons.matters} label={unitPlural} collapsed={collapsed} />
           <NavItem to="/documents" icon={icons.documents} label="Documents" collapsed={collapsed} />
           <NavItem to="/entities" icon={icons.entities} label="Entities" collapsed={collapsed} />
           <NavItem to="/graph" icon={icons.graph} label="Graph" collapsed={collapsed} />

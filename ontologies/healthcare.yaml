@@ -34,6 +34,7 @@ entity_types:
     help: "Plays the role Matter does in the legal pack: the organising unit."
     # An EHR-issued visit number, like Matter in the legal pack. Not ours to rewrite.
     external_id: true
+    organising_unit: true
   - id: Clinician
     label: Clinician
     description: A treating professional.

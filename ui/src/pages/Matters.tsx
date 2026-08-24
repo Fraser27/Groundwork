@@ -8,6 +8,7 @@ import {
   type WithheldMatter,
 } from '../api'
 import { getTenantId } from '../auth'
+import { useUnitLabel } from '../useUnitLabel'
 import { HELP } from '../epistemic'
 import ConfidenceBar from '../components/ConfidenceBar'
 import EpistemicBadge from '../components/EpistemicBadge'
@@ -17,6 +18,7 @@ import WipeDialog from '../components/WipeDialog'
 import { fmtDate, fmtNum } from '../format'
 
 export default function Matters() {
+  const unit = useUnitLabel()
   const tenant = getTenantId()
   const [matters, setMatters] = useState<Matter[]>([])
   // Kept in its own piece of state, never merged into `matters`. A screened matter must
@@ -329,10 +331,11 @@ export default function Matters() {
       <div className="page-header">
         <div className="page-header-row">
           <div>
-            <h2>Matters</h2>
+            <h2>{unit.plural}</h2>
             <p>
-              Matters are subgraphs of one firm-wide graph, not separate graphs, conflict checking is
-              by definition cross-matter, and shared parties are the conflict signal.
+              {unit.plural} are subgraphs of one tenant-wide graph, not separate graphs. A conflict
+              check is by definition cross-{unit.singular.toLowerCase()}, and a shared party is the
+              signal it reads.
             </p>
           </div>
         </div>
@@ -340,7 +343,7 @@ export default function Matters() {
 
       {error && (
         <ErrorState
-          title="Could not load matters"
+          title={`Could not load ${unit.plural.toLowerCase()}`}
           detail={error}
           onRetry={retry}
         />
@@ -390,7 +393,7 @@ export default function Matters() {
 
       <div className="search-bar">
         <input
-          placeholder="Filter by matter id, name or client…"
+          placeholder={`Filter by ${unit.singular.toLowerCase()} id, name or client…`}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />

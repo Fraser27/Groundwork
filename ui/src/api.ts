@@ -1115,6 +1115,12 @@ export interface TenantSettings {
   embedding_model: string
   available_models: { id: string; label: string }[]
   available_domains: string[]
+  /**
+   * What this tenant's pack calls the unit work is organised by: Matter for law, Encounter for
+   * care, Facility for lending. The scoping key is still `matter_id` everywhere, so this is
+   * wording only.
+   */
+  unit_label?: { singular: string; plural: string }
 }
 
 /**

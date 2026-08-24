@@ -9,6 +9,7 @@ import {
   type TenantUser,
 } from '../api'
 import { getTenantId } from '../auth'
+import { forgetUnitLabel } from '../useUnitLabel'
 import { HELP } from '../epistemic'
 import ConfidenceBar from '../components/ConfidenceBar'
 import FieldHelp from '../components/FieldHelp'
@@ -230,6 +231,9 @@ export default function Admin() {
     )
       return
     await patch('domain', { ontology_domain: domain }, `Ontology set to ${domain}`)
+    // The pack names the unit work is organised by, so the navigation and page titles change with
+    // it. Dropping the cache is what makes that visible without a reload.
+    forgetUnitLabel()
     try {
       setOntology(await api.ontology(domain))
     } catch (e) {

@@ -55,6 +55,9 @@ entity_types:
     description: An engagement — a case, transaction, or advisory instruction.
     help: The organising unit of legal work. Most other entities hang off a Matter.
     external_id: true
+    # What a reader navigates by. The scoping key stays `matter_id` everywhere in the code;
+    # this is only what it is called on screen.
+    organising_unit: true
   - id: Party
     label: Party
     description: A person or organisation with an interest in a matter.
