@@ -107,7 +107,7 @@ export const HELP = {
   premise:
     'A fact that an inference rests on. Retract a premise and the conclusion drawn from it is retracted too, so a proof tree is never left hanging.',
   proofTree:
-    'The full chain of reasoning behind an inferred fact, unwound to the documents and records at its base. If any step in it is wrong, the conclusion is wrong, and you can see which step.',
+    'Every fact this conclusion was drawn from, each with its own source. If any one of them is wrong, the conclusion is wrong, and you can see which. A premise that was itself inferred says how many facts it rests on in turn, and opens onto them, so the chain is walked a step at a time rather than shown all at once.',
   sourceLocator:
     'Exactly where a fact came from, precise enough to check by hand: for a document, the file, the page and the sentence quoted from it; for a database, the source, table and column.',
   pageCitation:

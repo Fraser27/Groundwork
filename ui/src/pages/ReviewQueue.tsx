@@ -877,7 +877,11 @@ function CorrectionDialog({
   )
 }
 
-/** Loads full provenance for one claim — the source document and any proof tree. */
+/** Loads full provenance for one claim — the source document and any proof tree.
+ *
+ *  A premise that is itself inferred is followed by loading it here, so the reader walks the
+ *  derivation without losing the queue behind it. `back` is the trail, so a deep chain returns
+ *  the way it came rather than dumping the reader at the top. */
 function InspectorPanel({
   assertion,
   floor,
@@ -887,8 +891,28 @@ function InspectorPanel({
   floor: number
   onClose: () => void
 }) {
-  const { provenance, error } = useProvenance(getTenantId(), assertion.assertion_id)
+  const [trail, setTrail] = useState<string[]>([])
+  const showing = trail[trail.length - 1] ?? assertion.assertion_id
+  const { provenance, error } = useProvenance(getTenantId(), showing)
   if (error) return <ErrorState title="Could not load this provenance" detail={error} />
   if (!provenance) return <Spinner />
-  return <ProvenancePanel provenance={provenance} confidenceFloor={floor} onClose={onClose} />
+  return (
+    <>
+      {trail.length > 0 && (
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ marginBottom: 8 }}
+          onClick={() => setTrail((t) => t.slice(0, -1))}
+        >
+          Back to the fact this supports
+        </button>
+      )}
+      <ProvenancePanel
+        provenance={provenance}
+        confidenceFloor={floor}
+        onClose={onClose}
+        onSelectAssertion={(id) => setTrail((t) => [...t, id])}
+      />
+    </>
+  )
 }

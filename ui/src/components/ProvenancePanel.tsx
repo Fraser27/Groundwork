@@ -11,7 +11,7 @@
  */
 
 import { useState, type CSSProperties } from 'react'
-import type { Assertion, EpistemicClass, PageCitation, Provenance, ProofNode } from '../api'
+import type { Assertion, EpistemicClass, PageCitation, Premise, Provenance } from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC, HELP } from '../epistemic'
 import { epiStyle } from '../format'
@@ -49,35 +49,46 @@ export function Triple({ a }: { a: Assertion }) {
   )
 }
 
-function ProofTreeNode({ node, depth = 0 }: { node: ProofNode; depth?: number }) {
-  const a = node.assertion
-  const style = { '--epi-colour': EPISTEMIC[a.epistemic_class].colour } as CSSProperties
+/** One premise row. A premise that is itself inferred says so, and says how deep it goes. */
+function PremiseRow({ premise, onSelect }: { premise: Premise; onSelect?: (id: string) => void }) {
+  if (!premise.visible) {
+    return (
+      <div className="proof-row proof-row-hidden">
+        <span className="proof-triple">
+          A fact you are not cleared to see, on another matter.
+        </span>
+        <code className="proof-method">{premise.assertion_id.slice(0, 12)}</code>
+      </div>
+    )
+  }
+
+  const style = { '--epi-colour': EPISTEMIC[premise.epistemic_class].colour } as CSSProperties
+  const restsOn = premise.premises?.length ?? 0
 
   return (
-    <div className="proof-node">
-      <div className={`proof-row${depth === 0 ? ' proof-row-root' : ''}`} style={style}>
-        <EpistemicBadge epistemicClass={a.epistemic_class} size="sm" showLabel={false} />
-        <span className="proof-triple">
-          <Triple a={a} />
-        </span>
-        <ConfidenceBar value={a.confidence} width={48} />
-        <span className="proof-method">{a.method}</span>
-      </div>
-      {node.premises.length > 0 && (
-        <div className="proof-children">
-          {node.premises.map((p) => (
-            <ProofTreeNode key={p.assertion.assertion_id} node={p} depth={depth + 1} />
-          ))}
-        </div>
-      )}
+    <div className="proof-row" style={style}>
+      <EpistemicBadge epistemicClass={premise.epistemic_class} size="sm" showLabel={false} />
+      <span className="proof-triple">
+        <Triple a={premise} />
+      </span>
+      <ConfidenceBar value={premise.confidence} width={48} />
+      <span className="proof-method">{premise.method}</span>
+      {restsOn > 0 &&
+        (onSelect ? (
+          <button className="btn btn-ghost btn-sm" onClick={() => onSelect(premise.assertion_id)}>
+            rests on {restsOn} more
+          </button>
+        ) : (
+          <span className="proof-deeper">rests on {restsOn} more</span>
+        ))}
     </div>
   )
 }
 
-/** Collect the leaf confidences, to show why the conclusion is capped where it is. */
-function weakestPremise(node: ProofNode): number | null {
-  if (node.premises.length === 0) return null
-  return Math.min(...node.premises.map((p) => p.assertion.confidence))
+/** The cap on the conclusion: an inference is never firmer than its weakest premise. */
+function weakestPremise(premises: Premise[]): number | null {
+  const known = premises.filter((p) => p.visible).map((p) => p.confidence)
+  return known.length > 0 ? Math.min(...known) : null
 }
 
 /** File, page and quote — with the action that resolves them against the original. */
@@ -94,22 +105,23 @@ function CitationBlock({
     <div className="prov-citation" style={epiStyle(epistemicClass)}>
       <div className="prov-citation-head">
         <div className="prov-citation-file">
-          <strong>{citation.filename}</strong>
-          <div className="prov-citation-page">
-            Page {citation.page}
-            {citation.page_count ? ` of ${citation.page_count}` : ''}
-            <FieldHelp title="How to check this" text={HELP.pageCitation} />
-          </div>
+          <strong>{citation.filename || citation.document_id}</strong>
+          {citation.page != null && (
+            <div className="prov-citation-page">
+              Page {citation.page}
+              <FieldHelp title="How to check this" text={HELP.pageCitation} />
+            </div>
+          )}
         </div>
-        <button className="btn btn-primary btn-sm" onClick={onOpen}>
-          Open document at page {citation.page}
-        </button>
+        {citation.link_unavailable ? (
+          <span className="prov-citation-nolink">{citation.link_unavailable}</span>
+        ) : (
+          <button className="btn btn-primary btn-sm" onClick={onOpen}>
+            {citation.page != null ? `Open document at page ${citation.page}` : 'Open document'}
+          </button>
+        )}
       </div>
-      <SourceSpan
-        text={citation.quote}
-        before={citation.context_before}
-        after={citation.context_after}
-      />
+      {citation.quote && <SourceSpan text={citation.quote} />}
     </div>
   )
 }
@@ -118,24 +130,27 @@ export default function ProvenancePanel({
   provenance,
   confidenceFloor,
   onClose,
+  onSelectAssertion,
   compact = false,
 }: {
   provenance: Provenance
   confidenceFloor?: number
   onClose?: () => void
+  /** Follow a premise that is itself inferred. Omitted, the depth is stated but not walkable. */
+  onSelectAssertion?: (assertionId: string) => void
   compact?: boolean
 }) {
   const [viewing, setViewing] = useState(false)
   const a = provenance.assertion
-  const citation = provenance.citation
-  const proof = provenance.proof
+  const citation = provenance.document
+  const premises = provenance.premises ?? []
   const isStructured = !!a.source_locator.source_id && !a.source_locator.document_id
-  const ceiling = proof ? weakestPremise(proof) : null
+  const ceiling = premises.length > 0 ? weakestPremise(premises) : null
   const offsets =
     a.source_locator.char_start != null && a.source_locator.char_end != null
       ? { start: a.source_locator.char_start, end: a.source_locator.char_end }
       : null
-  const spanHash = citation?.span_sha256 ?? a.source_locator.span_sha256
+  const spanHash = a.source_locator.span_sha256
   const chunkId = citation?.chunk_id ?? a.source_locator.chunk_id
 
   return (
@@ -173,7 +188,7 @@ export default function ProvenancePanel({
           </div>
         )}
 
-        {a.source_locator.document_id && !citation && (
+        {a.source_locator.document_id && !citation?.quote && (
           <div className="banner banner-warn" style={{ marginBottom: 0 }}>
             <span>
               <strong>No quoted words are attached to this fact.</strong> It names a document
@@ -305,15 +320,27 @@ export default function ProvenancePanel({
           </div>
         )}
 
-        {/* Inferred: the proof tree. */}
-        {proof && (
+        {/* Inferred: the facts it was drawn from. */}
+        {premises.length > 0 && (
           <div>
             <div className="prov-section-title">
               Proof tree
               <FieldHelp text={HELP.proofTree} />
             </div>
             <div className="proof-tree">
-              <ProofTreeNode node={proof} />
+              <div className="proof-row proof-row-root" style={epiStyle(a.epistemic_class)}>
+                <EpistemicBadge epistemicClass={a.epistemic_class} size="sm" showLabel={false} />
+                <span className="proof-triple">
+                  <Triple a={a} />
+                </span>
+                <ConfidenceBar value={a.confidence} width={48} />
+                <span className="proof-method">{a.method}</span>
+              </div>
+              <div className="proof-children">
+                {premises.map((p) => (
+                  <PremiseRow key={p.assertion_id} premise={p} onSelect={onSelectAssertion} />
+                ))}
+              </div>
             </div>
             {ceiling !== null && (
               <p className="proof-note">
@@ -336,7 +363,7 @@ export default function ProvenancePanel({
           </div>
         )}
 
-        {a.epistemic_class === 'INFERRED' && !proof && (
+        {a.epistemic_class === 'INFERRED' && premises.length === 0 && (
           <div className="banner banner-warn" style={{ marginBottom: 0 }}>
             <span>
               <strong>Proof tree unavailable.</strong> This fact is recorded as inferred, so it must
@@ -422,11 +449,11 @@ export default function ProvenancePanel({
         </div>
       </div>
 
-      {viewing && citation && (
+      {viewing && citation && citation.page != null && (
         <DocumentViewer
           tenant={getTenantId()}
           documentId={citation.document_id}
-          filename={citation.filename}
+          filename={citation.filename || citation.document_id}
           page={citation.page}
           quote={citation.quote}
           onClose={() => setViewing(false)}

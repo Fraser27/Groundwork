@@ -962,7 +962,6 @@ code, pre { font-family: var(--mono); }
 
 /* Proof tree — indentation plus a connector rail, so premise depth is legible. */
 .proof-tree { font-size: 12.5px; }
-.proof-node { position: relative; }
 .proof-children {
   margin-left: 15px;
   padding-left: 14px;
@@ -984,6 +983,17 @@ code, pre { font-family: var(--mono); }
   background: var(--bg-card);
 }
 .proof-row-root { background: var(--bg-alt); }
+/* A premise behind a matter wall. Dashed, because the row stands for a fact it does not show. */
+.proof-row-hidden {
+  border-style: dashed;
+  border-left-color: var(--border);
+  color: var(--text-dim);
+  font-style: italic;
+}
+.proof-deeper {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
 .proof-triple { font-size: 12.5px; }
 .proof-triple .prov-pred { margin: 0 4px; }
 .proof-method {
@@ -1071,6 +1081,14 @@ code, pre { font-family: var(--mono); }
   margin-top: 2px;
 }
 .prov-citation .prov-quote { background: var(--bg-card); }
+/* Why no link. The page and quote still identify the passage, so this reads as a note. */
+.prov-citation-nolink {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: right;
+  max-width: 190px;
+  line-height: 1.45;
+}
 
 /* Offsets and hashes. Present for diagnosis, closed by default so they do not read
    as part of the citation. */

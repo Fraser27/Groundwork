@@ -123,10 +123,15 @@ export interface Assertion {
   inferred?: number
 }
 
-/** One node of a proof tree: an assertion plus the assertions it rests on. */
-export interface ProofNode {
-  assertion: Assertion
-  premises: ProofNode[]
+/**
+ * One premise of an inference, as the endpoint returns it: flat, not nested.
+ *
+ * `visible: false` means the premise exists but this reader may not see it, so only its id
+ * is sent. A gap in a proof tree has to be shown as a gap; silently dropping the row would
+ * make a partially visible derivation look fully accounted for.
+ */
+export interface Premise extends Assertion {
+  visible: boolean
 }
 
 /**
@@ -137,27 +142,32 @@ export interface ProofNode {
  */
 export interface PageCitation {
   document_id: string
-  filename: string
-  page: number
-  quote: string
+  filename?: string | null
+  page?: number | null
+  quote?: string | null
   chunk_id?: string | null
-  page_count?: number | null
-  context_before?: string | null
-  context_after?: string | null
-  span_sha256?: string | null
   download_url?: string | null
   expires_at?: string | null
-  /** Debug only. Offsets into the extracted text, not into the PDF. */
-  char_start?: number | null
-  char_end?: number | null
+  /** Why there is no link. Provenance without one is degraded, not broken. */
+  link_unavailable?: string | null
 }
 
 export interface Provenance {
   assertion: Assertion
-  /** Populated for document-sourced assertions. */
-  citation?: PageCitation | null
-  /** Populated for INFERRED assertions. */
-  proof?: ProofNode | null
+  /**
+   * The premises an INFERRED fact rests on, in the order the rule bound them.
+   *
+   * One level deep. A premise that is itself inferred carries its own `premises` ids, and
+   * following those means another fetch; the panel links rather than recursing.
+   */
+  premises?: Premise[]
+  /** Populated for document-sourced assertions. Named `document` by the endpoint. */
+  document?: PageCitation | null
+  rule_id?: string | null
+  rule_version?: string | null
+  is_current?: boolean
+  /** Plain-language account of where the fact came from. */
+  explanation?: string
   /** Retraction / supersession trail, newest first. */
   history?: ProvenanceEvent[]
 }
