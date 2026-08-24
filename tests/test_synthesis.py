@@ -96,6 +96,33 @@ class TestABlockedFactStaysBlocked:
         prompt = build_prompt("q", parts=[_part()], blocks=[])
         assert "withheld" not in prompt
 
+    def test_a_notify_finding_is_not_reported_as_withheld(self):
+        """`effect: notify` suppresses nothing, so telling the model content was withheld makes it
+        write that the answer may be incomplete when the evidence is complete. Every legal rule
+        finding is `notify`, so this fired on any answer that reached a conflict."""
+        prompt = build_prompt(
+            "q",
+            parts=[_part()],
+            blocks=[{"reason": "Potential conflict involving matter:NTL", "effect": "notify"}],
+        )
+        assert "withheld" not in prompt
+        assert "incomplete" not in prompt
+
+    def test_a_withholding_finding_among_advisories_is_still_reported(self):
+        """The filter is on effect, not on emptiness: one real refusal alongside advisories must
+        still tell the model the answer is partial."""
+        prompt = build_prompt(
+            "q",
+            parts=[_part()],
+            blocks=[
+                {"reason": "Potential conflict involving matter:NTL", "effect": "notify"},
+                {"reason": "ethical screen on MBC-2024-0431", "effect": "withhold"},
+            ],
+        )
+        assert "ethical screen on MBC-2024-0431" in prompt
+        assert "Potential conflict" not in prompt
+        assert "incomplete" in prompt
+
 
 class TestWhatTheModelIsGiven:
     def test_the_parts_are_passed_through(self):

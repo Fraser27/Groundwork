@@ -80,6 +80,11 @@ def build_prompt(
     answer is partial -- that is the whole argument for disclosing a screen within a firm -- but a
     model that saw the blocked fact could paraphrase it, which would defeat the block it was told
     about.
+
+    Only `effect: withhold` findings count. An advisory suppresses nothing, so describing one as
+    withheld made the model hedge a complete answer -- and since every legal rule finding is
+    `notify`, that happened on any answer which reached a conflict. `Screen.withholding` draws the
+    same line for the row filter; this is the same rule for the prompt.
     """
     payload: dict[str, Any] = {
         "question": question,
@@ -95,10 +100,11 @@ def build_prompt(
             for p in parts
         ],
     }
-    if blocks:
+    withheld = [b for b in blocks if str(b.get("effect") or "withhold") == "withhold"]
+    if withheld:
         payload["withheld"] = {
-            "count": len(blocks),
-            "reasons": sorted({str(b.get("reason") or "not stated") for b in blocks}),
+            "count": len(withheld),
+            "reasons": sorted({str(b.get("reason") or "not stated") for b in withheld}),
             "note": "Content withheld deliberately. Say the answer may be incomplete.",
         }
     return json.dumps(payload, indent=2, default=str)
