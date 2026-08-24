@@ -151,7 +151,7 @@ def _infer_after_review(services: Any, ctx: AuthContext) -> int:
     from src.reasoning.engine import infer_and_stage
 
     try:
-        return infer_and_stage(services.ontology, services.review_queue, ctx).count
+        return infer_and_stage(services.ontology_for(ctx.tenant_id), services.review_queue, ctx).count
     except Exception as e:  # noqa: BLE001
         logger.warning("inference after approval failed for %s: %s", ctx.tenant_id, e)
         return 0
@@ -555,7 +555,7 @@ async def run_reasoner(services: ServicesDep, principal: TenantDep) -> dict[str,
     from src.reasoning.engine import infer_and_stage
 
     try:
-        report = infer_and_stage(services.ontology, services.review_queue, ctx)
+        report = infer_and_stage(services.ontology_for(ctx.tenant_id), services.review_queue, ctx)
     except ScopeViolation as e:
         raise scope_violation_to_http(e) from e
 
@@ -598,10 +598,11 @@ async def correct(
     require_reviewer(principal)
     ctx, _ = principal
     floor = services.settings_for(ctx.tenant_id).min_confidence_floor
+    onto = services.ontology_for(ctx.tenant_id)
 
     predicate = body.predicate
-    allowed = services.ontology.allowed_for(predicate) if predicate else None
-    if predicate and predicate in services.ontology.rule_conclusions:
+    allowed = onto.allowed_for(predicate) if predicate else None
+    if predicate and predicate in onto.rule_conclusions:
         # Only a rule may conclude these, and a reviewer correcting a claim into one would create
         # a conflict flag with no premises -- exactly what the extractor is already barred from.
         raise HTTPException(
@@ -671,6 +672,7 @@ async def merge_entity(
     """
     require_reviewer(principal)
     ctx, _ = principal
+    onto = services.ontology_for(ctx.tenant_id)
 
     from src.documents.merge import MergeError, merge_entities, plan_merge
 
@@ -689,8 +691,8 @@ async def merge_entity(
                 losing_id=body.losing_id,
                 winning_id=body.winning_id,
                 reason=body.reason,
-                allowed_predicates=services.ontology.governing_predicates,
-                canonical_entity_id=services.ontology.canonical_entity_id,
+                allowed_predicates=onto.governing_predicates,
+                canonical_entity_id=onto.canonical_entity_id,
             )
     except ScopeViolation as e:
         raise scope_violation_to_http(e) from e

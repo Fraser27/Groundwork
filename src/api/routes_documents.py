@@ -283,7 +283,7 @@ def _run_pipeline(
     if extraction is None:
         settings = services.settings_for(ctx.tenant_id)
         extractor = ModelExtractor(
-            services.ontology,
+            services.ontology_for(ctx.tenant_id),
             # The tenant's own model id, not the process default: a model change is a
             # settings change in Admin, not a redeploy.
             model_id=settings.extraction_model or services.config.models.extraction_model,
@@ -364,7 +364,7 @@ def _infer(services: Services, ctx: AuthContext) -> dict[str, Any]:
     from src.reasoning.engine import infer_and_stage
 
     try:
-        report = infer_and_stage(services.ontology, services.review_queue, ctx)
+        report = infer_and_stage(services.ontology_for(ctx.tenant_id), services.review_queue, ctx)
     except Exception as e:  # noqa: BLE001
         logger.warning("inference after ingest failed for %s: %s", ctx.tenant_id, e)
         return {"ran": False, "error": str(e), "staged": 0}

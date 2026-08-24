@@ -27,7 +27,7 @@ from src.discovery.catalog_store import CatalogTable
 from src.discovery.glue_scanner import scan_catalog
 from src.graph.assertions import EpistemicClass, ReviewState
 from src.graph.scope import ScopeViolation
-from src.ontology.loader import ONTOLOGY_DIR, load_ontology
+from src.ontology.loader import available_domains, load_ontology
 from src.query_audit import MAX_SCAN
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ router = APIRouter(tags=["catalog"])
 
 
 def available_ontology_domains() -> list[str]:
-    return sorted(p.stem for p in ONTOLOGY_DIR.glob("*.yaml"))
+    return available_domains()
 
 
 def _table_summary(table: CatalogTable) -> dict[str, Any]:
@@ -247,6 +247,7 @@ async def neighbourhood(
     frontier = {node_id}
     seen_nodes: set[str] = set()
     edges: list[dict[str, Any]] = []
+    onto = services.ontology_for(ctx.tenant_id)
 
     for _ in range(depth):
         next_frontier: set[str] = set()
@@ -265,7 +266,7 @@ async def neighbourhood(
                         "below_floor": a.confidence < settings.min_confidence_floor,
                         # Drawn more prominently: these are the edges a conflict check
                         # or a privilege wall actually reads.
-                        "governing": services.ontology.is_governing(a.predicate),
+                        "governing": onto.is_governing(a.predicate),
                         "matter_id": a.matter_id,
                     }
                 )
@@ -302,6 +303,7 @@ def _graph_overview(
     view shows the firmest facts rather than an arbitrary slice.
     """
     edges: list[dict[str, Any]] = []
+    onto = services.ontology_for(ctx.tenant_id)
     for r in records:
         a = r.assertion
         edges.append(
@@ -314,7 +316,7 @@ def _graph_overview(
                 "confidence": a.confidence,
                 "review_state": a.review_state.value,
                 "below_floor": a.confidence < settings.min_confidence_floor,
-                "governing": services.ontology.is_governing(a.predicate),
+                "governing": onto.is_governing(a.predicate),
                 "matter_id": a.matter_id,
             }
         )
@@ -454,7 +456,24 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
             for m in sorted({models.extraction_model, models.synthesis_model})
         ],
         "available_domains": available_ontology_domains(),
+        # What this tenant's pack calls the unit work is organised by: Matter for law, Encounter
+        # for care, Facility for lending. Sent so the nav, page titles and filter labels follow the
+        # pack instead of hardcoding "Matter". The scoping key is still `matter_id` -- renaming that
+        # would touch Cedar, a Cognito group and a Neptune constraint to change a caption.
+        "unit_label": _unit_label(services, ctx.tenant_id),
     }
+
+
+def _unit_label(services: Any, tenant_id: str) -> dict[str, str]:
+    """Singular and plural wording for the organising unit, with a fallback.
+
+    Falls back to Matter rather than to the entity id: a pack that declares no organising unit
+    would otherwise put a bare kind name in the navigation, and the default pack is legal.
+    """
+    unit = services.ontology_for(tenant_id).organising_unit
+    if unit is None:
+        return {"singular": "Matter", "plural": "Matters"}
+    return {"singular": unit.label, "plural": unit.label_plural or unit.label + "s"}
 
 
 @router.get("/tenants/{tenant}/glue/databases")

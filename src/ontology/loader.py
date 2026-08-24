@@ -120,6 +120,22 @@ class EntityDef:
     id and breaks matter-scoped reads loudly, while forgetting the other way leaves the silent
     conflict miss this whole mechanism exists to prevent."""
 
+    organising_unit: bool = False
+    """Whether this is the kind every other entity hangs off, and the one access is scoped by.
+
+    `matter_id` is the scoping key throughout the code and stays that name -- it is in Cedar, in
+    Cognito group names and in a Neptune constraint, and renaming a load-bearing key to relabel a
+    screen would be the wrong trade. This is what the *reader* sees it called: Matter for law,
+    Encounter for care, Facility for lending. One kind per pack, enforced at load, because a UI
+    asking "which unit am I in" cannot be answered with two."""
+
+    label_plural: str = ""
+    """The plural, when adding `s` is wrong. `Facility` -> `Facilities`.
+
+    Declared rather than derived: an English pluraliser is a pile of special cases that would put
+    "Facilitys" in the navigation, and the pack author already knows the word. Empty means append
+    `s`, which is right for Matter, Encounter, Party and most kinds."""
+
     @property
     def slug(self) -> str:
         """The id prefix form: `Party` -> `party`.
@@ -203,6 +219,15 @@ class Ontology:
 
     def is_governing(self, predicate: str) -> bool:
         return predicate in self.governing_predicates
+
+    @functools.cached_property
+    def organising_unit(self) -> EntityDef | None:
+        """The kind a reader navigates by, for labelling only. None when no pack declares one.
+
+        None rather than a guess: a UI falling back to its own wording is honest, whereas picking
+        the first entity type would put an arbitrary label on the screen that governs access.
+        """
+        return next((e for e in self.entities.values() if e.organising_unit), None)
 
     @functools.cached_property
     def finding_predicates(self) -> frozenset[str]:
@@ -469,6 +494,8 @@ def _parse(raw: dict[str, Any]) -> Ontology:
             help=e.get("help"),
             layer=e.get("layer", "domain"),
             external_id=bool(e.get("external_id", False)),
+            organising_unit=bool(e.get("organising_unit", False)),
+            label_plural=e.get("label_plural", ""),
         )
         for e in raw.get("entity_types", [])
     }
@@ -515,8 +542,30 @@ def _parse(raw: dict[str, Any]) -> Ontology:
     _validate_transitive(predicates, ontology.domain)
     _validate_symmetric(predicates, ontology.domain)
     _validate_entity_ids(entities, ontology.domain)
+    _validate_organising_unit(entities, ontology.domain)
     _validate_rules(ontology)
     return ontology
+
+
+def _validate_organising_unit(entities: dict[str, EntityDef], domain: str) -> None:
+    """At most one kind may claim to be the unit a reader navigates by.
+
+    Two would make "which unit am I in" unanswerable, and the UI would silently label a screen
+    after whichever the dict happened to yield first. None is allowed: a pack that declares no
+    organising unit gets the UI's own wording rather than a guess.
+    """
+    claimed = [e.id for e in entities.values() if e.organising_unit]
+    if len(claimed) > 1:
+        raise ValueError(
+            f"the {domain} pack declares {len(claimed)} organising units ({', '.join(claimed)}); "
+            "a reader navigates by one kind, and two would be labelled by whichever was read first"
+        )
+    for e in entities.values():
+        if e.organising_unit and e.layer != "domain":
+            raise ValueError(
+                f"entity {e.id!r} in the {domain} pack is organising_unit but layer: {e.layer!r}; "
+                "the unit a reader navigates by is a domain concept, not catalogued schema"
+            )
 
 
 def _validate_entity_ids(entities: dict[str, EntityDef], domain: str) -> None:
@@ -666,10 +715,14 @@ def _validate_rules(ontology: Ontology) -> None:
                 )
 
 
+def available_domains() -> list[str]:
+    """Every pack on disk. Not cached: an operator adding one should not have to restart."""
+    return sorted(p.stem for p in ONTOLOGY_DIR.glob("*.yaml"))
+
+
 @functools.lru_cache(maxsize=8)
 def load_ontology(domain: str = "legal") -> Ontology:
     path = ONTOLOGY_DIR / f"{domain}.yaml"
     if not path.exists():
-        available = sorted(p.stem for p in ONTOLOGY_DIR.glob("*.yaml"))
-        raise FileNotFoundError(f"no ontology pack {domain!r}; available: {available}")
+        raise FileNotFoundError(f"no ontology pack {domain!r}; available: {available_domains()}")
     return _parse(yaml.safe_load(path.read_text()))

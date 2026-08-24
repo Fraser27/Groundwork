@@ -146,6 +146,32 @@ class Services:
             )
         return self.governance[tenant_id]
 
+    def ontology_for(self, tenant_id: str) -> Ontology:
+        """The pack this tenant is governed by, which is not necessarily the one loaded at boot.
+
+        `ontology_domain` was a per-tenant setting that nothing read: Admin persisted it, the
+        vocabulary table re-rendered from `/ontology/{domain}`, and every write kept validating
+        against the process-wide pack. A control that reports success and changes nothing is worse
+        than no control, because the closed vocabulary is what the graph's defensibility rests on.
+
+        Falls back to `self.ontology` when the tenant names no pack or names one that will not
+        load. A missing pack must not take the tenant's writes down with it -- the boot pack is a
+        working vocabulary, and the alternative is a 500 on every ingest.
+        """
+        domain = self.settings_for(tenant_id).ontology_domain
+        if not domain or domain == self.ontology.domain:
+            return self.ontology
+        try:
+            return load_ontology(domain)
+        except FileNotFoundError:
+            logger.warning(
+                "tenant %s names ontology pack %r, which does not exist; using %r",
+                tenant_id,
+                domain,
+                self.ontology.domain,
+            )
+            return self.ontology
+
     def record_blocked(self, tenant_id: str, entry: dict[str, Any]) -> None:
         """Remember a refusal for the Governance screen."""
         log = self.blocked_queries.setdefault(tenant_id, [])

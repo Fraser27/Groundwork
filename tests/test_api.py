@@ -852,6 +852,38 @@ class TestSettingsProjectsWhatThePageCanChange:
         body = self._save(client, {"ontology_domain": "healthcare"})
         assert body["ontology_domain"] == "healthcare"
 
+    def test_switching_the_pack_switches_what_a_write_is_validated_against(self, client):
+        """Reporting the tenant's pack was only half of it. The selector persisted the setting and
+        every write kept validating against the boot pack, so an admin switched to healthcare, saw
+        healthcare predicates render, and the closed vocabulary still refused them. A control that
+        reports success and changes nothing is worse than no control."""
+        services = get_services()
+        assert services.ontology.domain == "legal"
+        assert services.ontology_for(TENANT).domain == "legal"
+
+        self._save(client, {"ontology_domain": "healthcare"})
+        onto = services.ontology_for(TENANT)
+        assert onto.domain == "healthcare"
+        # The vocabulary a write is checked against actually moved.
+        assert "REPRESENTS" not in onto.governing_predicates
+
+    def test_the_unit_label_follows_the_pack(self, client):
+        """"Matter" was hardcoded in the navigation, page titles and every filter. It is the legal
+        pack's word for the unit work is organised by; lending calls it a Facility. The scoping key
+        stays `matter_id` -- this is only what a reader sees it called."""
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        assert body["unit_label"] == {"singular": "Matter", "plural": "Matters"}
+
+        self._save(client, {"ontology_domain": "fintech"})
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        assert body["unit_label"] == {"singular": "Facility", "plural": "Facilities"}
+
+    def test_an_unknown_pack_falls_back_rather_than_breaking_every_write(self, client):
+        """A pack that will not load must not take the tenant's ingest down with it. The boot pack
+        is a working vocabulary; a 500 on every write is not a safer failure."""
+        self._save(client, {"ontology_domain": "nonexistent-domain"})
+        assert get_services().ontology_for(TENANT).domain == "legal"
+
 
 class TestTheAuditPageAsksForEveryState:
     """The Audit page claims to show "every fact the graph has ever held".
