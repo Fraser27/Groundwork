@@ -31,10 +31,13 @@ thing standing between two law firms' data. Treat it accordingly.
 Determinism is the whole point of governed metrics. `src/metrics/compiler.py`
 compiles YAML to Athena SQL with no model in the path.
 
-**4. Deterministic extractors run before model extractors.**
-Citations, docket numbers and dates are parseable, so they are parsed — never
-LLM-extracted. Model extractors receive what was already found so they do not
-re-derive it.
+**4. Claims are split by checkability, not by who proposed them.**
+There is no regex layer; `src/documents/extractors/model.py` is the only extraction path
+and its header explains why the parser was deleted. A model proposes, and a mechanical
+check either confirms it or does not: a quote found verbatim in the chunk is
+`EXTRACTED_DET` and auto-asserts, but only ever as `MENTIONS`, because presence is all a
+quote-match establishes. Everything interpretive is `EXTRACTED_MODEL` and waits for a
+human. Never widen what auto-asserts.
 
 **5. Governing predicates are closed.**
 An extractor proposing `is_counsel_to` when the vocabulary says `REPRESENTS` gets
