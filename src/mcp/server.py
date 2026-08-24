@@ -29,7 +29,13 @@ from typing import Any
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
-from src.api.deps import Services, build_services, get_services, set_services
+from src.api.deps import (
+    Services,
+    build_services,
+    drain_blocked,
+    get_services,
+    set_services,
+)
 from src.auth import AuthError
 from src.config import LexGraphConfig
 from src.documents.review import AssertionNotFound
@@ -57,6 +63,12 @@ Start with `ask`. It routes through three tiers and tells you which one answered
 All three are governed. Always relay the tier, and relay `governed` with it: it is false
 when a model wrote any part of the answer, and that is a claim about trustworthiness rather
 than about which tier ran.
+
+Use `compose` instead when you need to see everything the system found rather than the first
+answer it could give. It runs every permitted lane and keeps them apart, so trust is stated
+per part rather than once for the whole result, and it reports which lanes did not run and
+why. `ask` is the better call for a question a governed metric answers, because a metric is
+exact and fanning out adds nothing.
 
 Authorization is the user's, not yours. You see exactly what the person whose token you
 are carrying sees — same firm, same ethical screens. If a question returns nothing, that may
@@ -144,6 +156,70 @@ def _resolution_out(resolution: Resolution) -> dict[str, Any]:
     # Names rather than the ints `to_dict` emits: the REST caller renders these, an agent
     # reads them.
     out["tiers_attempted"] = [Tier(t).name for t in resolution.tiers_attempted]
+    return out
+
+
+async def compose(
+    ctx: Context, question: str, execute: bool = True, synthesise: bool = False
+) -> dict[str, Any]:
+    """Answer from every permitted lane at once, keeping their results apart.
+
+    TRUST: mixed, and stated per part, which is the reason to call this instead of `ask`. `ask`
+    returns the first tier that could answer and one confidence for it. This runs the lanes the
+    question needs and does not merge them, because a compiled metric is exact, a quoted passage
+    is exact text chosen by similarity, and a graph fact is a reading that carries a confidence.
+    Averaging those would invent a statistic.
+
+    Read `governance` before you write anything. It stops saying "governed" the moment a model
+    contributed, and `fully_deterministic` is the same fact as a boolean. Do not describe a
+    result as governed because a governed lane appears in it.
+
+    `lanes_run` and `lanes_skipped` are the shape of the search. A skipped lane says why, and the
+    reasons are not interchangeable: "an administrator turned this off for your firm" and "there
+    was no vector store to search" and "the router did not select it" mean different things to
+    the person reading your answer. Relay the distinction rather than reporting an absence.
+
+    `blocks` are findings the graph made, applied before any model saw the evidence. A block is
+    something to tell your user about, not an omission to work around. `parts[].assertion_ids`
+    are ids for `get_provenance`.
+
+    Scoped to the calling user's firm and matters, exactly as `ask` is.
+
+    Args:
+        question: A question in ordinary language.
+        execute: Run the compiled or generated SQL. False returns it unrun, which is the
+            reviewable form for a governed metric.
+        synthesise: Ask a second model to write prose over the parts. Off by default here and on
+            for the web UI, deliberately: you are the writer, and prose you then write over
+            would be a second ungoverned layer with nobody able to say which of you added a
+            claim. Turn it on only if you are relaying a summary verbatim.
+    """
+    services, auth_ctx = _principal(ctx)
+    settings = services.settings_for(auth_ctx.tenant_id)
+
+    planner = services.build_planner(auth_ctx.tenant_id, synthesise=synthesise)
+    try:
+        answer = planner.plan(
+            auth_ctx, question, settings, execute=execute, allow_synthesis=synthesise
+        )
+    except QueryBlocked as e:
+        raise ToolError(str(e)) from e
+    except ScopeViolation as e:
+        raise ToolError(str(e)) from e
+    finally:
+        # Even on a refusal: the refusal is the thing the backlog exists to record.
+        drain_blocked(services, auth_ctx.tenant_id, planner.blocked)
+
+    logger.info(
+        "mcp compose tenant=%s lanes=%s blocks=%d",
+        auth_ctx.tenant_id,
+        ",".join(lane.value for lane in answer.lanes_run),
+        len(answer.blocks),
+    )
+    out = answer.to_dict()
+    # The floor actually applied, matching the REST route. An agent reading a confidence needs
+    # to know what it was compared against.
+    out["min_confidence"] = settings.min_confidence_floor
     return out
 
 
@@ -506,6 +582,7 @@ async def graph_neighbourhood(ctx: Context, node_id: str, depth: int = 2) -> dic
 
 TOOLS = (
     ask,
+    compose,
     list_metrics,
     describe_ontology,
     search_assertions,

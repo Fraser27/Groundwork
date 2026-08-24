@@ -204,9 +204,10 @@ def _text(result: Any) -> str:
 
 
 class TestToolListing:
-    def test_all_six_tools_are_exposed(self):
+    def test_every_tool_is_exposed(self):
         assert {t.name for t in _list_tools()} == {
             "ask",
+            "compose",
             "list_metrics",
             "describe_ontology",
             "search_assertions",
@@ -225,6 +226,57 @@ class TestToolListing:
         by_name = {t.name: " ".join((t.description or "").split()) for t in _list_tools()}
         assert "deterministic SQL with no model in the path" in by_name["list_metrics"]
         assert "claims still waiting for a human" in by_name["search_assertions"]
+
+
+class TestCompose:
+    """The lane-level tool. `ask` returns the first tier that could answer; this returns what
+    every permitted lane found, kept apart, which is what an agent needs to show a trace."""
+
+    def test_returns_the_composed_vocabulary_not_the_thin_one(self):
+        """The reason this tool exists. `ask` has no lanes_run, no lanes_skipped and no parts, so
+        an agent limited to it cannot say where the system looked or what it declined to merge."""
+        body = _call(
+            TOKEN_A, "compose", {"question": "show me fees billed by month"}
+        ).structuredContent
+
+        for field in ("parts", "lanes_run", "lanes_skipped", "governance", "fully_deterministic"):
+            assert field in body, field
+        # Not a renamed `ask`: the single-tier shape must not leak into this one, or a caller
+        # would read one confidence for a result that deliberately has several.
+        for absent in ("tier_name", "governed", "assertions_used"):
+            assert absent not in body, absent
+
+    def test_a_metric_question_stays_deterministic(self):
+        body = _call(
+            TOKEN_A, "compose", {"question": "show me fees billed by month", "execute": False}
+        ).structuredContent
+
+        assert body["lanes_run"] == ["metric"]
+        assert body["governance"] == "governed"
+        assert body["fully_deterministic"] is True
+        [part] = body["parts"]
+        assert (part["lane"], part["provenance"], part["tier"]) == ("metric", "deterministic", 1)
+        assert "SELECT" in part["sql"]
+
+    def test_the_floor_it_was_compared_against_is_reported(self):
+        """A confidence means nothing without the threshold it was judged by, and the floor is
+        per tenant, so an agent cannot assume the default."""
+        body = _call(TOKEN_A, "compose", {"question": "anything"}).structuredContent
+        assert body["min_confidence"] == 0.8
+
+    def test_no_prose_unless_asked_for(self):
+        """Off by default here and on for the web UI. The agent is the writer, and a second
+        model's paragraph underneath its own would be an ungoverned layer nobody can attribute."""
+        body = _call(
+            TOKEN_A, "compose", {"question": "show me fees billed by month"}
+        ).structuredContent
+        assert body["synthesis"] is None
+
+    def test_does_not_cross_tenants(self):
+        _stage(TENANT_B, matter_id="M-B")
+        body = _call(TOKEN_A, "compose", {"question": "which topics are covered"}).structuredContent
+        ids = [i for part in body["parts"] for i in part["assertion_ids"]]
+        assert ids == []
 
 
 class TestAsk:

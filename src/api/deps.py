@@ -235,6 +235,36 @@ class Services:
             router=self.build_tier_router(),
         )
 
+    def build_planner(self, tenant_id: str = "", *, synthesise: bool = True) -> Any:
+        """A planner over the same lanes `build_resolver` uses.
+
+        Here rather than in the route because two callers now build one: `/query/compose` and the
+        `compose` MCP tool. Two copies of this wiring would drift in the direction that matters
+        least visibly -- one caller getting a `sql_lane` and the other not means the same question
+        is governed differently depending on whether a person or an agent asked it.
+
+        `synthesise` is a parameter rather than a fixed choice because the two callers want
+        opposite defaults: a person reading the page wants prose over the parts, while an agent
+        *is* the writer and a second model's paragraph would be an ungoverned layer it then writes
+        over, with nobody able to say which of them added a claim.
+        """
+        from src.query.planner import Planner
+
+        matcher = self.metric_matcher or (
+            build_metric_matcher(self, tenant_id) if tenant_id else None
+        )
+        return Planner(
+            metric_matcher=matcher,
+            graph_reader=self.graph_reader,
+            vector_search=VectorSearch(self.embedder) if self.embedder else None,
+            catalog=self.catalog,
+            synthesiser=build_synthesiser(self) if synthesise else None,
+            # Recorded, not obeyed: `ROUTER_NARROWS_LANES` is False, so every permitted lane still
+            # runs. The router's decision is part of the trace rather than a filter on it.
+            router=self.build_tier_router(),
+            sql_lane=self.build_sql_lane(tenant_id) if tenant_id else None,
+        )
+
     def build_sql_lane(self, tenant_id: str) -> Any | None:
         """Model-written SQL over this tenant's catalogued schema, or None with no model.
 
@@ -730,6 +760,42 @@ def require_admin(principal: tuple[AuthContext, Grants]) -> None:
     _, grants = principal
     if not grants.is_platform_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "requires platform-admin")
+
+
+def build_synthesiser(services: Services) -> Any | None:
+    """The synthesis model, or None when the deployment has no Bedrock access.
+
+    None rather than raising: without a model the parts and their citations are still the answer,
+    and refusing the question outright would trade a complete result for no result.
+    """
+    model_id = getattr(getattr(services, "config", None), "models", None)
+    model_id = getattr(model_id, "synthesis_model", "")
+    if not model_id:
+        return None
+
+    from src.query.synthesis import Synthesiser
+
+    return Synthesiser(model_id=model_id)
+
+
+def drain_blocked(services: Any, tenant_id: str, blocked: list[Any]) -> None:
+    """Move a request's refusals onto `Services`, which outlives it.
+
+    A resolver and a planner are both built per request and discarded, so their lists died with
+    them and the Governance screen could only ever show an empty backlog. A refusal is the signal
+    the kill switch exists to produce: a question people keep asking is a metric waiting to be
+    written.
+    """
+    for entry in blocked:
+        services.record_blocked(
+            tenant_id,
+            {
+                "question": entry.question,
+                "user_id": entry.user_id,
+                "reason": entry.reason,
+                "at": entry.at,
+            },
+        )
 
 
 def require_home_admin(services: Services, principal: tuple[AuthContext, Grants]) -> AuthContext:

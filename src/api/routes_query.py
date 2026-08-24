@@ -11,10 +11,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
-from src.api.deps import ServicesDep, TenantDep, build_metric_matcher
-from src.query.planner import Planner
+from src.api.deps import ServicesDep, TenantDep, drain_blocked
 from src.query.resolver import QueryBlocked, Tier
-from src.query.vector_search import VectorSearch
 from src.query_audit import event_for
 
 router = APIRouter(tags=["query"])
@@ -58,26 +56,6 @@ class QueryRequest(BaseModel):
         return sorted(set(v))
 
 
-def _drain_blocked(services: Any, tenant_id: str, blocked: list[Any]) -> None:
-    """Move a request's refusals onto `Services`, which outlives it.
-
-    A resolver and a planner are both built per request and discarded, so their lists died with
-    them and the Governance screen could only ever show an empty backlog. A refusal is the signal
-    the kill switch exists to produce: a question people keep asking is a metric waiting to be
-    written.
-    """
-    for entry in blocked:
-        services.record_blocked(
-            tenant_id,
-            {
-                "question": entry.question,
-                "user_id": entry.user_id,
-                "reason": entry.reason,
-                "at": entry.at,
-            },
-        )
-
-
 @router.post("/tenants/{tenant}/query")
 async def run_query(
     services: ServicesDep,
@@ -101,14 +79,14 @@ async def run_query(
             execute=body.execute,
         )
     except QueryBlocked as e:
-        _drain_blocked(services, ctx.tenant_id, resolver.blocked)
+        drain_blocked(services, ctx.tenant_id, resolver.blocked)
         # 403, not 400: the request was well-formed and deliberately refused.
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from e
 
     # Also drained on the success path, and that is the whole of what the kill switch does: it
     # skips the SQL lane and records the refusal, and tier 3 still answers with its passages and
     # its graph facts. A refusal that raised would have taken those down with it.
-    _drain_blocked(services, ctx.tenant_id, resolver.blocked)
+    drain_blocked(services, ctx.tenant_id, resolver.blocked)
 
     # A read that leaves no trace cannot answer "what did we tell the client, and on what
     # basis?". Refusals are not recorded here: `record_blocked` above already has them, and a
@@ -127,22 +105,6 @@ async def run_query(
             "This question was answered but not recorded in the audit trail.",
         ]
     return out
-
-
-def _synthesiser_for(services: Any) -> Any | None:
-    """The synthesis model, or None when the deployment has no Bedrock access.
-
-    None rather than raising: without a model the parts and their citations are still the answer,
-    and refusing the question outright would trade a complete result for no result.
-    """
-    model_id = getattr(getattr(services, "config", None), "models", None)
-    model_id = getattr(model_id, "synthesis_model", "")
-    if not model_id:
-        return None
-
-    from src.query.synthesis import Synthesiser
-
-    return Synthesiser(model_id=model_id)
 
 
 class ComposeRequest(BaseModel):
@@ -180,23 +142,7 @@ async def compose_query(
     ctx, _ = principal
     settings = services.settings_for(ctx.tenant_id).with_raised_floor(body.min_confidence)
 
-    planner = Planner(
-        metric_matcher=build_metric_matcher(services, ctx.tenant_id),
-        graph_reader=services.graph_reader,
-        vector_search=VectorSearch(services.embedder) if services.embedder else None,
-        catalog=services.catalog,
-        # Built per request from the tenant's configured model, so changing the model is a settings
-        # change rather than a release. This was `None` for the life of the route, so compose
-        # always answered "no synthesis model is configured": the seam existed with nothing in it.
-        synthesiser=_synthesiser_for(services) if body.synthesise else None,
-        # Recorded, not obeyed: `ROUTER_NARROWS_LANES` is False, so every permitted lane still
-        # runs. Compose had no router at all, which meant the one page whose purpose is showing
-        # everything the system found could not say why it looked where it looked.
-        router=services.build_tier_router(),
-        # The same lane `/query` gets, from `Services`, so the two endpoints cannot disagree about
-        # whether a question got model-written SQL.
-        sql_lane=services.build_sql_lane(ctx.tenant_id),
-    )
+    planner = services.build_planner(ctx.tenant_id, synthesise=body.synthesise)
     answer = planner.plan(
         ctx,
         body.query,
@@ -204,7 +150,7 @@ async def compose_query(
         execute=body.execute,
         allow_synthesis=body.synthesise,
     )
-    _drain_blocked(services, ctx.tenant_id, planner.blocked)
+    drain_blocked(services, ctx.tenant_id, planner.blocked)
     out = answer.to_dict()
     out["min_confidence"] = settings.min_confidence_floor
     return out
