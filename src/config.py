@@ -190,6 +190,16 @@ class LexGraphConfig:
     endpoint. Empty means that endpoint refuses every call: there is no user on that
     path, so being reachable only from inside the VPC is not by itself authorization."""
 
+    mcp_url: str = ""
+    """Where the retrieval agent reaches the MCP tools.
+
+    A separate process, not this one. The MCP tool bodies are `async def` with no `await`
+    inside, so their graph and Athena calls block the event loop -- an agent awaiting its own
+    worker would starve the loop that has to serve it. In deployment this is a sidecar
+    container on `127.0.0.1`; locally it is the `mcp` compose service.
+
+    Empty disables the Retrieval routes, which answer 503 rather than pretending to work."""
+
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
     """Retrieval trust floor. Narrow it freely; widening it below the default lets
     low-confidence model output shape answers."""
@@ -308,6 +318,7 @@ def load_config() -> LexGraphConfig:
             grants=_env("GRANT_TABLE"),
         ),
         internal_api_secret=_env("INTERNAL_API_SECRET"),
+        mcp_url=_env("MCP_URL"),
         min_confidence=_env_float("MIN_CONFIDENCE", DEFAULT_MIN_CONFIDENCE),
         require_review_for_model_extractions=_env_bool(
             "REQUIRE_REVIEW_FOR_MODEL_EXTRACTIONS", True

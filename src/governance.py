@@ -153,6 +153,13 @@ class GovernanceSettings:
     project's life, which is the same failure shape as the kill switch above: a setting an
     administrator can change and that controls nothing."""
 
+    retrieval_agent_model: str = DEFAULT_QUERY_MODEL
+    """The model that drives the Retrieval agent's tool-calling loop.
+
+    Separate from `query_model` on purpose, even though they default the same. That one decides
+    which model writes SQL; changing who writes a query must not silently change who drives the
+    loop that decides whether to run one at all."""
+
     ocr_model: str = DEFAULT_OCR_MODEL
     """Vision model that transcribes document pages. Deliberately separate from the
     extraction model: transcription is mechanical and a cheap model does it well, so
@@ -260,6 +267,7 @@ class GovernanceSettings:
             router_metric_boost=_f("LEXGRAPH_ROUTER_METRIC_BOOST", 0.05),
             block_model_extraction=_b("LEXGRAPH_BLOCK_MODEL_EXTRACTION", False),
             query_model=os.getenv("LEXGRAPH_QUERY_MODEL", DEFAULT_QUERY_MODEL),
+            retrieval_agent_model=os.getenv("LEXGRAPH_RETRIEVAL_AGENT_MODEL", DEFAULT_QUERY_MODEL),
             ocr_model=os.getenv("LEXGRAPH_OCR_MODEL", DEFAULT_OCR_MODEL),
             extraction_model=os.getenv("LEXGRAPH_EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),
             enrichment_model=os.getenv("LEXGRAPH_ENRICHMENT_MODEL", DEFAULT_ENRICHMENT_MODEL),
@@ -375,9 +383,15 @@ FIELD_HELP: dict[str, str] = {
         "proposed from them."
     ),
     "query_model": (
-        "Reserved. Nothing reads this today: questions are matched by term overlap and by "
-        "similarity, and no SQL is generated from a question, so changing it has no effect. It "
-        "is the setting a future question-to-SQL step would use."
+        "The AI model that writes SQL for a question no approved metric covers. Read on the "
+        "tier 3 path, so a change takes effect on the next question. It never writes SQL for a "
+        "governed metric: those are compiled from a definition somebody approved."
+    ),
+    "retrieval_agent_model": (
+        "The AI model that drives the Retrieval agent, which answers by calling this system's "
+        "own tools and shows every call it made. Deliberately separate from the query model: "
+        "which model writes a query and which one decides whether to run one are different "
+        "choices, and a firm may want to pay for a stronger model on only one of them."
     ),
     "ocr_model": (
         "The AI model that reads document pages and turns them into text. It also "

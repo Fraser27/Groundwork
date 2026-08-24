@@ -19,6 +19,10 @@ dependencies = [
     "pyyaml>=6.0",
     "httpx>=0.27.0",
     "mcp>=1.9,<2.0",
+    # The Retrieval agent's loop. Deliberately NOT `strands-agents-tools`: this agent binds
+    # only the MCP tools, and that package's built-ins are shell, file and http access, which
+    # is precisely what must never be reachable from a loop a model drives.
+    "strands-agents>=1.53,<2",
     "pydantic>=2.0",
     "pyjwt[crypto]>=2.8.0",
     # Multipart upload for POST /tenants/{t}/documents.

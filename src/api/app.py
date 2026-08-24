@@ -29,6 +29,7 @@ from src.api import (
     routes_governance,
     routes_metrics,
     routes_query,
+    routes_retrieval,
     routes_review,
     routes_tenants,
 )
@@ -193,6 +194,7 @@ def create_app(config: LexGraphConfig | None = None) -> FastAPI:
         routes_documents,
         routes_metrics,
         routes_query,
+        routes_retrieval,
         routes_tenants,
     ):
         app.include_router(module.router, prefix="/api")
