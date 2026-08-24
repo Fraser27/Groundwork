@@ -373,13 +373,34 @@ class TestPrompt:
 
     def test_the_chunks_own_matter_is_offered_as_a_subject(self):
         """`ADVERSE_TO` needs a Matter subject, and the only matter id in scope is the one the
-        document was filed under. A descriptive predicate carries no shape, so it is sent bare."""
+        document was filed under. A descriptive predicate carries no shape, so it is sent bare.
+
+        The filing reference keeps its case: `Matter` declares `external_id`, so
+        `canonical_entity_id` leaves the local part alone and a lowercased id would not join."""
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
-        ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk(matter_id="matter:NTL-2026-0114"))
+        ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk(matter_id="NTL-2026-0114"))
         sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
         assert sent["this_matter"] == "matter:NTL-2026-0114"
         mentions = next(p for p in sent["allowed_predicates"] if p["predicate"] == "MENTIONS")
         assert "subject_kinds" not in mentions
+
+    def test_the_offered_matter_is_an_entity_id_not_a_bare_filing_reference(self):
+        """A `Chunk.matter_id` is a filing reference (`NTL`), not an entity id. Offering it bare
+        made the model echo it back as an `ADVERSE_TO` subject, and `validate` then dropped the
+        claim for an unknown entity kind -- so the conflict rule stayed starved while the document
+        looked like it had nothing to say. Every other id in the prompt is `kind:local`."""
+        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
+        ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk(matter_id="NTL"))
+        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        assert sent["this_matter"] == "matter:NTL"
+
+    def test_no_matter_is_offered_when_the_chunk_is_unfiled(self):
+        """`null` is the documented signal to omit matter claims. `matter:None` would be a
+        well-formed id for a matter that does not exist."""
+        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
+        ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk())
+        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        assert sent["this_matter"] is None
 
     def test_temperature_is_omitted_by_default(self):
         """The newest Claude models reject the parameter, and a ValidationException on

@@ -159,6 +159,9 @@ def build_prompt(
 
     `this_matter` offers the chunk's own matter as a subject. Without it the model has no id for
     "the engagement this document belongs to" and no way to state the fact a conflict check reads.
+    It is sent as an *entity id*, because a bare filing reference is not one: the model echoed
+    `NTL` back as an `ADVERSE_TO` subject and `validate` dropped the claim for an unknown entity
+    kind, which starved the conflict rule while the document looked like it had nothing to say.
     """
     shapes = predicate_shapes or {}
     return json.dumps(
@@ -182,7 +185,7 @@ def build_prompt(
                 for p in allowed_predicates
             ],
             "entity_kinds": list(entity_kinds),
-            "this_matter": chunk.matter_id,
+            "this_matter": matter_entity_id(chunk),
         },
         indent=2,
     )
@@ -243,6 +246,15 @@ def document_entity_id(chunk: Chunk) -> str:
     locator cites cannot drift apart.
     """
     return f"document:{chunk.document_id}"
+
+
+def matter_entity_id(chunk: Chunk) -> str | None:
+    """Graph node id for the chunk's matter, or None when the document is unfiled.
+
+    `Chunk.matter_id` is a filing reference (`NTL`), not an entity id. `Matter` declares
+    `external_id`, so the local part keeps its case and only the prefix is added.
+    """
+    return f"matter:{chunk.matter_id}" if chunk.matter_id else None
 
 
 def locate_quote(chunk: Chunk, quote: str) -> tuple[int, int] | None:
