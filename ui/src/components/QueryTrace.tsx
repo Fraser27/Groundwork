@@ -111,11 +111,7 @@ export default function QueryTrace({
           <TiersStep router={router} lanes={lanes} />
         </Step>
 
-        <Step
-          n={3}
-          title={ran.length > 1 ? 'Searched in parallel' : 'Searched'}
-          summary={lanesSummary(ran, skipped)}
-        >
+        <Step n={3} title={searchTitle(ran)} summary={lanesSummary(ran, skipped)}>
           <LanesStep lanes={lanes} floor={floor} onOpenPassage={onOpenPassage} />
         </Step>
 
@@ -551,6 +547,18 @@ function TiersStep({ router, lanes }: { router?: RouterTrace | null; lanes: Trac
 
 // ── Step 3: what each lane returned ─────────────────────────────────────────
 
+/** Lanes run in sequence, never concurrently. Said plainly because the reader is being asked to
+ *  audit an answer, and "in parallel" would have claimed the lanes were independent when the
+ *  graph lane's input is the passage lane's output. */
+function searchTitle(ran: TraceLane[]): string {
+  return ran.length > 1 ? 'Searched in sequence' : 'Searched'
+}
+
+/** True when the graph lane walked out from retrieved passages rather than only term-matching. */
+function chainedRetrieval(ran: TraceLane[]): boolean {
+  return ran.some((l) => l.key === 'passages') && ran.some((l) => l.key === 'graph')
+}
+
 function lanesSummary(ran: TraceLane[], skipped: TraceLane[]): string {
   if (ran.length === 0) {
     return skipped.length > 0
@@ -581,6 +589,15 @@ function LanesStep({
   }
   return (
     <div className="qtrace-lanes">
+      {/* The cards read graph first because a verified relationship is the stronger claim, which
+          is the opposite of the order they ran in. Say so, or the reader infers the graph found
+          these independently. */}
+      {chainedRetrieval(ran) && (
+        <p className="qtrace-note">
+          Documents were searched first. The graph lane then walked out from the passages below, so
+          a fact marked with hops was reached because a passage cited it, not found on its own.
+        </p>
+      )}
       {ran.map((lane) => (
         <LaneCard key={lane.key} lane={lane} floor={floor} onOpenPassage={onOpenPassage} />
       ))}

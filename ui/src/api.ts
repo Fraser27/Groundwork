@@ -237,6 +237,23 @@ export interface QueryAuditEvent {
   document_ids: string[]
   facts_used: number
   ids_truncated: boolean
+  /** Which way in produced this row. Absent on a row written before the field existed, which was
+   *  always the Ask page. */
+  surface?: string
+  /**
+   * What the answer may be called, in the words the trace shows: `governed`, `verbatim + inferred`,
+   * `... + written by agent`.
+   *
+   * Read this in preference to `governed`, which cannot express a composed answer: a run mixing a
+   * compiled metric with a model's reading is neither, and the boolean has to pick one.
+   */
+  governance?: string
+  /** `governance` when there is one, else the boolean rendered as a word. Always safe to show. */
+  basis?: string
+  /** Retrieval runs only. Ties the row to the transcript that produced it. */
+  run_id?: string | null
+  /** Retrieval runs only: the tool ladder in call order, repeats included. */
+  tools_called?: string[]
 }
 
 export interface ProvenanceEvent {

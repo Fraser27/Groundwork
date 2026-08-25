@@ -616,7 +616,7 @@ function Questions({
           <EmptyState title={applied ? 'No question used this fact' : 'No questions recorded'}>
             {applied
               ? 'Nothing in the window scanned rested on it. A question asked before that window may still have.'
-              : 'Every answered question is recorded here with the tier that answered and the facts it used. Refused questions are not: they produced no answer, and an administrator sees them in Governance.'}
+              : 'Every answered question is recorded here with the surface it arrived on, the tier that answered and the facts it used. That includes Retrieval runs and agents calling the tools directly, not only the Ask page. Refused questions are not here: they produced no answer, and an administrator sees them in Governance.'}
           </EmptyState>
         </div>
       ) : (
@@ -634,8 +634,12 @@ function Questions({
                 <th>Who</th>
                 <th>Question</th>
                 <th>
+                  Asked from
+                  <FieldHelp text="Which surface the question came in on. An agent calling the tools does so on the user's own token and sees exactly what they would, so this changes nothing about what was permitted. It changes who composed the words: a Retrieval run ends in prose the agent wrote, and that is not the same artefact as a compiled metric read off the page." />
+                </th>
+                <th>
                   Answered by
-                  <FieldHelp text="Which tier produced the answer. A governed metric is deterministic; an AI-written query is not, and the distinction is recorded rather than inferred later. A route marked retired no longer exists: the log is append-only, so an answer given while it did still says so." />
+                  <FieldHelp text="Which tier produced the answer, and what the answer may be called. A governed metric is deterministic; an AI-written query is not, and the distinction is recorded rather than inferred later. Where several lanes contributed the basis names each rather than reducing them to the weakest. A route marked retired no longer exists: the log is append-only, so an answer given while it did still says so." />
                 </th>
                 <th className="num">Facts used</th>
               </tr>
@@ -656,9 +660,31 @@ function Questions({
                     )}
                   </td>
                   <td className="nowrap">
-                    <span className={`tag ${e.governed ? 'tag-green' : 'tag-orange'}`}>
-                      Tier {e.tier} &middot; {TIER_LABEL[e.tier] ?? e.tier_name}
+                    <span className="tag tag-neutral">
+                      {SURFACE_LABEL[e.surface ?? 'query'] ?? e.surface}
                     </span>
+                    {e.tools_called && e.tools_called.length > 0 && (
+                      <div
+                        className="dim"
+                        style={{ marginTop: 4, fontSize: 11.5 }}
+                        title={e.tools_called.join(' -> ')}
+                      >
+                        {e.tools_called.length}{' '}
+                        {e.tools_called.length === 1 ? 'tool call' : 'tool calls'}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <span className={`tag ${basisTone(e)}`}>
+                      {e.tier > 0
+                        ? `Tier ${e.tier} · ${TIER_LABEL[e.tier] ?? e.tier_name}`
+                        : 'no tier reached'}
+                    </span>
+                    {e.basis && (
+                      <div className="dim" style={{ marginTop: 4, fontSize: 11.5 }}>
+                        {e.basis}
+                      </div>
+                    )}
                   </td>
                   <td className="num">
                     {e.facts_used === 0 ? (
@@ -699,6 +725,22 @@ const TIER_LABEL: Record<number, string> = {
   2: 'knowledge graph',
   3: 'passages and graph',
   4: 'AI-written query (retired route)',
+}
+
+/** Where a question came in. Named, because "a lawyer asked this" and "an agent asked this on a
+ *  lawyer's token" carry different weight when a piece of advice is questioned later. */
+const SURFACE_LABEL: Record<string, string> = {
+  query: 'Ask',
+  compose: 'Ask (composed)',
+  retrieval_agent: 'Retrieval agent',
+  mcp: 'MCP tool call',
+}
+
+/** Green only for an answer no model contributed to. `basis` is the server's own words for what
+ *  the answer may be called, so anything containing a model reads as qualified rather than clean. */
+function basisTone(e: QueryAuditEvent): string {
+  if (e.governance) return e.governance === 'governed' ? 'tag-green' : 'tag-orange'
+  return e.governed ? 'tag-green' : 'tag-orange'
 }
 
 /** Plain language for the stored action names. */
