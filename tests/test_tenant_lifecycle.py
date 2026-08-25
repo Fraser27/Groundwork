@@ -260,7 +260,9 @@ class TestCreatingATenant:
 
         assert services.tenant_registry.get(TARGET) is None
         assert services.tenant_directory.users_for_tenant(TARGET) == []
-        assert services.governance_store.get(TARGET).ontology_domain == "legal"  # env default
+        # Empty, not a pack name: no pack was ever chosen for this tenant, which is the whole
+        # claim. A name here would mean the settings write had happened after all.
+        assert services.governance_store.get(TARGET).ontology_domain == ""
         assert TARGET not in [t.tenant_id for t in services.tenant_registry.list()]
 
     def test_a_taken_id_is_refused(self, monkeypatch, actor):

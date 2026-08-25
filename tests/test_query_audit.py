@@ -510,7 +510,7 @@ class TestEverySurfaceLeavesARow:
         assert e.answered is False
 
     def test_a_failed_run_is_still_recorded(self):
-        """"The agent could not answer this" is part of the record. A log holding only successes
+        """ "The agent could not answer this" is part of the record. A log holding only successes
         overstates how well the surface works."""
         result = RunResult(
             run_id="run:abc",

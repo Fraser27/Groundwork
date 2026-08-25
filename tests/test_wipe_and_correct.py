@@ -158,8 +158,10 @@ class TestANearDuplicateIsReported:
         """Two matter references issued by case management are two matters, however alike they
         look -- the issuing system already guarantees uniqueness."""
         queue = self._queue(onto)
-        queue.stage(ctx, [fact(predicate="RELATES_TO_MATTER", subject="document:doc-1",
-                               obj="matter:" + NTL)])
+        queue.stage(
+            ctx,
+            [fact(predicate="RELATES_TO_MATTER", subject="document:doc-1", obj="matter:" + NTL)],
+        )
         newcomer = fact(
             predicate="RELATES_TO_MATTER", subject="document:doc-2", obj="matter:" + MBC
         )
@@ -275,10 +277,16 @@ class TestATypedIdIsCanonicalised:
 
     def test_the_wired_queue_carries_the_normaliser(self):
         """The wiring is the feature. A normaliser nothing passes in is dead code, and this is
-        exactly the class of bug that left `blocking_facts` defined and never called."""
-        from src.api.deps import build_services
+        exactly the class of bug that left `blocking_facts` defined and never called.
 
-        services = build_services()
+        Built with the legal pack named, because the id it normalises is a legal one: `Party` is
+        not an entity kind in every pack, and a bare `build_services()` follows whatever the
+        default pack happens to be.
+        """
+        from src.api.deps import build_services
+        from src.config import LexGraphConfig
+
+        services = build_services(LexGraphConfig(ontology_pack="legal"))
         assert services.review_queue._canonical_entity_id is not None
         assert services.review_queue._canonical("Party: Calder Shipping AG") == (
             "party:calder-shipping-ag"
@@ -806,6 +814,9 @@ class TestOverHttp:
         from src.config import AuthConfig, GraphConfig, LexGraphConfig
 
         cfg = LexGraphConfig(
+            # Pinned rather than defaulted: these assert the legal pack's rules and
+            # vocabulary, so they must not follow a change of default pack.
+            ontology_pack="legal",
             environment="local",
             auth=AuthConfig(dev_bypass_tenant=TENANT),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

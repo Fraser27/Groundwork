@@ -23,6 +23,9 @@ TENANT = "dev-tenant"
 
 def _config(**over) -> LexGraphConfig:
     cfg = LexGraphConfig(
+        # Pinned rather than defaulted: this file asserts the legal pack's rules and
+        # vocabulary, so it must not follow a change of default pack.
+        ontology_pack="legal",
         environment="local",
         auth=AuthConfig(dev_bypass_tenant=TENANT),
         graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
@@ -868,7 +871,7 @@ class TestSettingsProjectsWhatThePageCanChange:
         assert "REPRESENTS" not in onto.governing_predicates
 
     def test_the_unit_label_follows_the_pack(self, client):
-        """"Matter" was hardcoded in the navigation, page titles and every filter. It is the legal
+        """ "Matter" was hardcoded in the navigation, page titles and every filter. It is the legal
         pack's word for the unit work is organised by; lending calls it a Facility. The scoping key
         stays `matter_id` -- this is only what a reader sees it called."""
         body = client.get(f"/api/tenants/{TENANT}/settings").json()

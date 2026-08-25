@@ -75,6 +75,9 @@ class _FakeVerifier:
 
 def _config(environment: str = "local", *, dev_bypass: str = "") -> LexGraphConfig:
     cfg = LexGraphConfig(
+        # Pinned rather than defaulted: this file asserts the legal pack's rules and
+        # vocabulary, so it must not follow a change of default pack.
+        ontology_pack="legal",
         environment=environment,
         auth=AuthConfig(dev_bypass_tenant=dev_bypass, issuer_url="https://issuer.test/pool"),
         graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

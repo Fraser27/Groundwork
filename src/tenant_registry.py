@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from src.constants import DEFAULT_ONTOLOGY_PACK
 from src.tenant_directory import KEY_ATTR, TENANT_GSI, TENANT_GSI_ATTR
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ class TableLike(Protocol):
 class TenantRecord:
     tenant_id: str
     name: str = ""
-    ontology_domain: str = "legal"
+    ontology_domain: str = DEFAULT_ONTOLOGY_PACK
     created_at: str = ""
     created_by: str = ""
 
@@ -92,7 +93,7 @@ def _to_record(item: dict[str, Any]) -> TenantRecord:
     return TenantRecord(
         tenant_id=str(item.get("registry_tenant_id", "")),
         name=str(item.get("name", "")),
-        ontology_domain=str(item.get("ontology_domain") or "legal"),
+        ontology_domain=str(item.get("ontology_domain") or DEFAULT_ONTOLOGY_PACK),
         created_at=str(item.get("created_at", "")),
         created_by=str(item.get("created_by", "")),
         deleted_at=item.get("deleted_at") or None,

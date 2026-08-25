@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.admin_ops import ResetScope, reset_derived
+from src.constants import DEFAULT_ONTOLOGY_PACK
 from src.graph.scope import AuthContext, is_valid_tenant_id
 from src.tenant_registry import TenantRecord
 
@@ -51,7 +52,7 @@ class CreateTenantReport:
     tenant_id: str
     admin_email: str
     admin_user_id: str = ""
-    ontology_domain: str = "legal"
+    ontology_domain: str = DEFAULT_ONTOLOGY_PACK
     note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -129,7 +130,7 @@ def create_tenant(
     tenant_id: str,
     admin_email: str,
     name: str = "",
-    ontology_domain: str = "legal",
+    ontology_domain: str = DEFAULT_ONTOLOGY_PACK,
 ) -> CreateTenantReport:
     """Create a tenant and invite its first admin. Both, or neither."""
     tenant_id = tenant_id.strip().lower()

@@ -174,7 +174,14 @@ class GovernanceSettings:
     requires re-embedding."""
 
     # ── Ontology ──────────────────────────────────────────────────────────────
-    ontology_domain: str = "legal"
+    ontology_domain: str = ""
+    """Which pack governs this tenant's writes. Empty means "whatever this process booted with",
+    resolved by `Services.settings_for` from `LexGraphConfig.ontology_pack`.
+
+    Empty rather than naming a pack here, because a default in this dataclass is a *second*
+    independent default: it silently outranked `LEXGRAPH_ONTOLOGY_PACK`, so a deployment could
+    boot one vocabulary, report it at `/health`, and validate every write against another."""
+
     enforce_closed_vocabulary: bool = True
     """Reject governing predicates outside the pack. Disabling this is how predicate
     sprawl starts, and sprawl is what makes a conflict check silently miss rows."""
@@ -272,7 +279,9 @@ class GovernanceSettings:
             extraction_model=os.getenv("LEXGRAPH_EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),
             enrichment_model=os.getenv("LEXGRAPH_ENRICHMENT_MODEL", DEFAULT_ENRICHMENT_MODEL),
             embedding_model=os.getenv("LEXGRAPH_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
-            ontology_domain=os.getenv("LEXGRAPH_ONTOLOGY_DOMAIN", "legal"),
+            # No fallback pack: empty defers to the boot pack, which `LEXGRAPH_ONTOLOGY_PACK`
+            # already sets. This variable exists to override that for one tenant.
+            ontology_domain=os.getenv("LEXGRAPH_ONTOLOGY_DOMAIN", ""),
             enforce_closed_vocabulary=_b("LEXGRAPH_CLOSED_VOCABULARY", True),
             vector_top_k=int(os.getenv("LEXGRAPH_VECTOR_TOP_K", "20")),
             graph_expand_depth=int(os.getenv("LEXGRAPH_GRAPH_DEPTH", "2")),

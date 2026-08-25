@@ -9,7 +9,7 @@ alternative — module-level singletons initialised in a lifespan hook — makes
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path as FsPath
 from typing import Annotated, Any
 
@@ -145,9 +145,15 @@ class Services:
     def settings_for(self, tenant_id: str) -> GovernanceSettings:
         if tenant_id not in self.governance:
             store = self.governance_store
-            self.governance[tenant_id] = (
-                store.get(tenant_id) if store is not None else GovernanceSettings.from_env()
-            )
+            settings = store.get(tenant_id) if store is not None else GovernanceSettings.from_env()
+            # A tenant that has never chosen a pack inherits the one this process booted with,
+            # rather than `GovernanceSettings`' own default. Two independent defaults meant
+            # `LEXGRAPH_ONTOLOGY_PACK` could be honoured at boot and then silently overridden per
+            # tenant, so the vocabulary a write was validated against was not the one the logs
+            # and `/health` reported.
+            if not settings.ontology_domain:
+                settings = replace(settings, ontology_domain=self.ontology.domain)
+            self.governance[tenant_id] = settings
         return self.governance[tenant_id]
 
     def ontology_for(self, tenant_id: str) -> Ontology:

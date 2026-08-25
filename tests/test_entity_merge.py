@@ -319,6 +319,12 @@ class TestOverHttp:
         from src.config import AuthConfig, GraphConfig, LexGraphConfig
 
         cfg = LexGraphConfig(
+
+            # Pinned rather than defaulted: this file asserts the legal pack's vocabulary, so it
+
+            # must not follow a change of default pack.
+
+            ontology_pack="legal",
             environment="local",
             auth=AuthConfig(dev_bypass_tenant=TENANT),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

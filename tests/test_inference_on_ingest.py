@@ -39,6 +39,9 @@ def client():
     from src.config import AuthConfig, GraphConfig, LexGraphConfig
 
     cfg = LexGraphConfig(
+        # Pinned rather than defaulted: this file asserts the legal pack's rules and
+        # vocabulary, so it must not follow a change of default pack.
+        ontology_pack="legal",
         environment="local",
         auth=AuthConfig(dev_bypass_tenant=TENANT),
         graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
@@ -61,7 +64,7 @@ def _ingest(c, text: str, *, matter_id: str, filename: str = "note.txt") -> dict
 
 class TestIngestReportsWhatItInferred:
     def test_the_response_says_inference_ran(self, client):
-        """"Ran and found nothing" and "never ran" are the pair this codebase keeps confusing,
+        """ "Ran and found nothing" and "never ran" are the pair this codebase keeps confusing,
         and only one of them is reassuring."""
         c, _ = client
         body = _ingest(c, "A short note naming nobody in particular.", matter_id=NTL)
@@ -125,9 +128,9 @@ class TestTheCrossDocumentConflictAppearsByItself:
         services.review_queue.promote(ctx, job_id="prior")
 
         before = c.get(f"/api/tenants/{TENANT}/assertions?review_state=PENDING").json()
-        assert not [
-            a for a in before["assertions"] if a["predicate"] == "POTENTIAL_CONFLICT"
-        ], "no conflict should exist before the second fact arrives"
+        assert not [a for a in before["assertions"] if a["predicate"] == "POTENTIAL_CONFLICT"], (
+            "no conflict should exist before the second fact arrives"
+        )
 
         # The new filing opposes the same company. Staged live the same way an approved
         # extraction would be, then ingest anything at all to trigger the pass.
