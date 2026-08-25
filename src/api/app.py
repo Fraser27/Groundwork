@@ -33,7 +33,13 @@ from src.api import (
     routes_review,
     routes_tenants,
 )
-from src.api.deps import Services, build_services, get_services, set_services
+from src.api.deps import (
+    Services,
+    build_services,
+    connect_graph,
+    get_services,
+    set_services,
+)
 from src.auth import AuthError
 from src.config import LexGraphConfig
 from src.graph.assertions import AssertionError_
@@ -69,39 +75,10 @@ async def lifespan(app: FastAPI):
             cfg.auth.dev_bypass_tenant,
         )
 
-    # Connect lazily: a graph that is not up yet must not stop the API from starting,
-    # or /health can never report why it is down.
-    if services.graph is None:
-        try:
-            from src.graph.client import GraphClient
-            from src.graph.schema import init_schema
-
-            client = GraphClient(
-                cfg.graph.uri,
-                cfg.graph.user,
-                cfg.graph.password,
-                iam_auth=cfg.graph.iam_auth,
-                region=cfg.graph.region,
-            )
-            if client.verify_connectivity():
-                init_schema(client, is_neptune=cfg.graph.iam_auth)
-                services.graph = client
-
-                # Swap the assertion store onto the graph now that one is reachable. Done
-                # here rather than in `build_services` because the client does not exist
-                # until this point, and connecting lazily is what lets /health report a
-                # graph that is down instead of the API failing to start.
-                #
-                # Until this line existed, an approval wrote to a dict and was lost on the
-                # next deploy while the UI reported success.
-                from src.graph.assertion_store import GraphAssertionStore
-
-                services.review_queue.store = GraphAssertionStore(graph=client)
-                logger.info("graph connected, assertions persisted to the graph")
-            else:
-                logger.warning("graph unreachable at %s, degraded mode", cfg.graph.uri)
-        except Exception as e:
-            logger.warning("graph init failed (%s), degraded mode", e)
+    # Connect lazily, so a graph that is not up yet does not stop the API from starting and
+    # /health can report why it is down. Shared with the MCP server, which serves the same
+    # container from a second process and needs the same store.
+    connect_graph(services)
 
     yield
 

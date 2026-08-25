@@ -31,6 +31,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from src.api.deps import (
     Services,
+    connect_graph,
     build_services,
     drain_blocked,
     get_services,
@@ -617,6 +618,10 @@ def create_app(config: LexGraphConfig | None = None):
     """
     services = build_services(config)
     set_services(services)
+    # The API's lifespan does this for its own process. This one has no lifespan hook, so
+    # without it every tool that reads a fact served an empty in-memory store and reported
+    # "nothing found" for a tenant holding thousands.
+    connect_graph(services)
     if services.authenticator.dev_mode:
         logger.warning(
             "DEV AUTH BYPASS ACTIVE, unauthenticated MCP tool calls will be served as tenant %r",

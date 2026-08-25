@@ -798,6 +798,56 @@ def drain_blocked(services: Any, tenant_id: str, blocked: list[Any]) -> None:
         )
 
 
+def connect_graph(services: Services) -> bool:
+    """Connect the graph and put the assertion store on it. True when the graph is reachable.
+
+    Here rather than in `build_services` because the client does not exist until something
+    decides to connect, and connecting lazily is what lets `/health` report a graph that is
+    down instead of the process failing to start.
+
+    Here rather than in the REST app's lifespan because **two** processes serve this container:
+    the API and the MCP sidecar. While this lived only in the lifespan, the MCP server built a
+    container, never connected, and served every tool from an empty `InMemoryAssertionStore` --
+    so `search_assertions` returned zero rows for a tenant holding 56 facts, and reported it as
+    an empty result rather than an error. A read path silently answering "nothing" is the exact
+    failure this codebase treats as worse than a crash.
+
+    Idempotent: an already-connected container is left alone.
+    """
+    if services.graph is not None:
+        return True
+
+    cfg = services.config
+    try:
+        from src.graph.client import GraphClient
+        from src.graph.schema import init_schema
+
+        client = GraphClient(
+            cfg.graph.uri,
+            cfg.graph.user,
+            cfg.graph.password,
+            iam_auth=cfg.graph.iam_auth,
+            region=cfg.graph.region,
+        )
+        if not client.verify_connectivity():
+            logger.warning("graph unreachable at %s, degraded mode", cfg.graph.uri)
+            return False
+
+        init_schema(client, is_neptune=cfg.graph.iam_auth)
+        services.graph = client
+
+        # Until this swap, an approval wrote to a dict and was lost on the next deploy while
+        # the UI reported success.
+        from src.graph.assertion_store import GraphAssertionStore
+
+        services.review_queue.store = GraphAssertionStore(graph=client)
+        logger.info("graph connected, assertions persisted to the graph")
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("graph init failed (%s), degraded mode", e)
+        return False
+
+
 def require_home_admin(services: Services, principal: tuple[AuthContext, Grants]) -> AuthContext:
     """Gate the routes where the tenant is an argument rather than the caller's own.
 
