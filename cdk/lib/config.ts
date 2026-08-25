@@ -79,7 +79,10 @@ export function readConfig(scope: Construct): LexGraphConfig {
     appDesiredCount: ctx('appDesiredCount', 1),
     appCpu: ctx('appCpu', 512),
     appMemoryMiB: ctx('appMemoryMiB', 1024),
-    defaultOntology: ctx('defaultOntology', 'legal'),
+    // Kept in step with `src/constants.DEFAULT_ONTOLOGY_PACK`. This value is passed as
+    // ONTOLOGY_PACK and so wins over the Python default, which means a mismatch here silently
+    // deploys a different vocabulary than the code says it ships.
+    defaultOntology: ctx('defaultOntology', 'fintech'),
     homeTenant: ctx('homeTenant', 'demo-firm'),
     availabilityZones: azs,
   };
