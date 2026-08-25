@@ -12,12 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import {
-  api,
-  type ComposedResult,
-  type QueryPassage,
-  type RetrievalEvent,
-} from '../api'
+import { api, type QueryPassage, type RetrievalEvent } from '../api'
 import { getTenantId } from '../auth'
 import DocumentViewer from '../components/DocumentViewer'
 import { FactsUsed, PassagesCited } from '../components/EvidencePanels'
@@ -26,7 +21,8 @@ import ProvenancePanel from '../components/ProvenancePanel'
 import QueryTrace from '../components/QueryTrace'
 import RunFlow from '../components/RunFlow'
 import { EmptyState, ErrorState, Spinner } from '../components/Shared'
-import { factsFromComposed, lanesFromComposed, passagesFromComposed } from '../trace'
+import TraceDialog from '../components/TraceDialog'
+import { type TraceView, traceOf } from '../trace'
 import { useProvenance } from '../useProvenance'
 
 const EXAMPLES = [
@@ -52,6 +48,7 @@ export default function Retrieval() {
   const [raw, setRaw] = useState<Set<number>>(new Set())
   const [selected, setSelected] = useState<string | null>(null)
   const [passage, setPassage] = useState<QueryPassage | null>(null)
+  const [fullTrace, setFullTrace] = useState<{ trace: TraceView; tool: string } | null>(null)
   const stop = useRef<(() => void) | null>(null)
 
   // Closing the socket stops the run, so leaving the page must not leave one going.
@@ -207,8 +204,7 @@ export default function Retrieval() {
             .map((event) => {
               const open = expanded.has(event.seq)
               const showRaw = raw.has(event.seq)
-              const composed =
-                event.result_kind === 'composed' ? (event.result as ComposedResult) : null
+              const trace = traceOf(event.result_kind, event.result)
 
               return (
                 <div
@@ -241,31 +237,36 @@ export default function Retrieval() {
                       )}
                       {event.error && <p className="hint">{event.error}</p>}
 
-                      {composed && !showRaw && (
+                      {trace && !showRaw && (
                         <>
+                          <div className="retrieval-turn-actions">
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setFullTrace({ trace, tool: event.tool ?? '' })}
+                            >
+                              Open full trace
+                            </button>
+                          </div>
                           <QueryTrace
-                            router={composed.router}
-                            gate={composed.gate}
-                            lanes={lanesFromComposed(composed)}
-                            blocks={composed.blocks ?? []}
-                            floor={composed.min_confidence ?? 0.8}
+                            router={trace.router}
+                            gate={trace.gate}
+                            lanes={trace.lanes}
+                            blocks={trace.blocks}
+                            floor={trace.floor}
                             onOpenPassage={setPassage}
                           />
                           {/* The same panels Ask renders. A citation drawn two ways would be two
                               claims about what a citation is. */}
-                          <PassagesCited
-                            passages={passagesFromComposed(composed)}
-                            onOpen={setPassage}
-                          />
+                          <PassagesCited passages={trace.passages} onOpen={setPassage} />
                           <FactsUsed
-                            facts={factsFromComposed(composed)}
-                            floor={composed.min_confidence ?? 0.8}
+                            facts={trace.facts}
+                            floor={trace.floor}
                             onExplain={setSelected}
                           />
                         </>
                       )}
 
-                      {!composed && !showRaw && event.kind === 'tool_result' && (
+                      {!trace && !showRaw && event.kind === 'tool_result' && (
                         <pre className="code-block">{JSON.stringify(event.result, null, 2)}</pre>
                       )}
 
@@ -314,6 +315,16 @@ export default function Retrieval() {
           </div>
         )}
       </div>
+
+      {fullTrace && (
+        <TraceDialog
+          trace={fullTrace.trace}
+          tool={fullTrace.tool}
+          onClose={() => setFullTrace(null)}
+          onOpenPassage={setPassage}
+          onExplain={setSelected}
+        />
+      )}
 
       {passage && (
         <DocumentViewer

@@ -10,9 +10,11 @@ import type {
   AnswerPart,
   CatalogSchemaRef,
   ComposedResult,
+  GateTrace,
   GeneratedSQLResult,
   Lane,
   QueryAnswer,
+  QueryBlock,
   QueryHit,
   QueryPassage,
   QueryResult,
@@ -20,6 +22,9 @@ import type {
   RouterTrace,
 } from './api'
 import { LANES } from './epistemic'
+
+/** The floor to assume when a response predates the field. Matches `scope.DEFAULT_MIN_CONFIDENCE`. */
+const DEFAULT_FLOOR = 0.8
 
 /**
  * `answer` is shaped by whichever tier answered, so it is narrowed rather than rendered.
@@ -286,4 +291,58 @@ export function droppedTiers(router: RouterTrace): { tier: number; reason: strin
     .map(([tier, reason]) => ({ tier: Number(tier), reason }))
     .filter((d) => Number.isFinite(d.tier))
     .sort((a, b) => a.tier - b.tier)
+}
+
+/** A tool result normalised far enough that the trace does not know which tool produced it. */
+export interface TraceView {
+  lanes: TraceLane[]
+  passages: QueryPassage[]
+  facts: QueryHit[]
+  blocks: QueryBlock[]
+  router: RouterTrace | null
+  gate: GateTrace | null
+  floor: number
+}
+
+/**
+ * The trace for one agent turn, from either tool's payload.
+ *
+ * Retrieval used to gate this on `result_kind === 'composed'`, so an `ask` turn fell through to
+ * raw JSON while a `compose` turn rendered the lanes, the edges and the ethical wall. Both tools
+ * return a router, a gate and blocks; only the answer shape differs, and that difference is
+ * already handled by `lanesFromResult` and `lanesFromComposed`.
+ *
+ * Returns null for a tool that carries no trace, which is every other tool: a `get_provenance`
+ * result rendered as an empty trace would claim a search happened.
+ */
+export function traceOf(kind: string | undefined, result: unknown): TraceView | null {
+  if (!result || typeof result !== 'object') return null
+
+  if (kind === 'composed') {
+    const composed = result as ComposedResult
+    return {
+      lanes: lanesFromComposed(composed),
+      passages: passagesFromComposed(composed),
+      facts: factsFromComposed(composed),
+      blocks: composed.blocks ?? [],
+      router: composed.router ?? null,
+      gate: composed.gate ?? null,
+      floor: composed.min_confidence ?? DEFAULT_FLOOR,
+    }
+  }
+
+  if (kind === 'resolution') {
+    const single = result as QueryResult
+    return {
+      lanes: lanesFromResult(single),
+      passages: asPassages(single.answer),
+      facts: asHits(single.answer),
+      blocks: single.blocks ?? [],
+      router: single.router ?? null,
+      gate: single.gate ?? null,
+      floor: single.min_confidence ?? DEFAULT_FLOOR,
+    }
+  }
+
+  return null
 }
