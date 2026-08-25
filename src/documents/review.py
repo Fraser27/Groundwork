@@ -191,6 +191,14 @@ class QueueItem:
 
     near_duplicates: tuple[str, ...] = ()
 
+    table: str = ""
+    column: str = ""
+    """Which table or column a claim is about, for the structured half of the locator.
+
+    Carried for the same reason as `quote`: this is the object a reviewer decides from. Without
+    these, a catalog enrichment row reads as a bare `DESCRIBED_AS` between two opaque ids, and
+    "every pending description for this table" is not a question the queue can answer."""
+
     @classmethod
     def of(cls, record: AssertionRecord) -> QueueItem:
         a = record.assertion
@@ -212,6 +220,8 @@ class QueueItem:
             job_id=record.job_id,
             quote=loc.quote or "",
             near_duplicates=record.near_duplicates,
+            table=loc.table or "",
+            column=loc.column or "",
         )
 
 

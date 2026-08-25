@@ -164,7 +164,7 @@ def build_enrichment_assertions(
         )
 
     if description := _truncate(enrichment.table_description):
-        add(subject, DESCRIBED_AS, _description_node(tenant_id, description), table_locator)
+        add(subject, DESCRIBED_AS, description_node(tenant_id, description), table_locator)
 
     for column, text in enrichment.column_descriptions.items():
         if column not in table.columns:
@@ -177,7 +177,7 @@ def build_enrichment_assertions(
         add(
             column_node_id(source_id, table.full_name, column),
             DESCRIBED_AS,
-            _description_node(tenant_id, text),
+            description_node(tenant_id, text),
             SourceLocator(source_id=source_id, table=table.full_name, column=column),
         )
 
@@ -292,7 +292,7 @@ def _extract_json(text: str) -> dict | None:
 # ── Nodes ─────────────────────────────────────────────────────────────────────
 
 
-def _description_node(tenant_id: str, text: str) -> CatalogNode:
+def description_node(tenant_id: str, text: str) -> CatalogNode:
     """Content-addressed, so two tables described identically share one node.
 
     That is not just deduplication: approving the text once approves it everywhere it

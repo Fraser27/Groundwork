@@ -142,6 +142,14 @@ class Services:
     """Builds those descriptions. Per-process rather than per-request: it holds no request state
     and the graph and metric store it reads through are the shared ones."""
 
+    enrichment_runs: dict[str, Any] = field(default_factory=dict)
+    """The catalog enrichment run in flight per tenant, so a page can poll it.
+
+    In process, like `blocked_queries`, and it dies with the container. That is the same limit
+    `BackgroundTasks` already has, and it is better than a durable record stuck at RUNNING with no
+    worker behind it. The work already staged survives regardless, because each table is staged as
+    it completes."""
+
     def settings_for(self, tenant_id: str) -> GovernanceSettings:
         if tenant_id not in self.governance:
             store = self.governance_store

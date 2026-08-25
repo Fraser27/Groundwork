@@ -194,6 +194,22 @@ class CatalogStore:
         with self._lock:
             return self._tables.get(tenant_id, {}).get(full_name)
 
+    def with_sources(self, tenant_id: str, full_name: str) -> tuple[CatalogTable, dict[str, str]]:
+        """One table, and where each description came from. Raises `KeyError` when unknown.
+
+        Part of this class rather than only of `EnrichedCatalog` because both have to answer it:
+        with no graph reachable, `Services.enriched_catalog` hands back this store directly, and a
+        route calling a method only the wrapper has would 500 on exactly the deployment that has
+        least to fall back on. Every description here came from the scan, so the answer is `glue`
+        or nothing.
+        """
+        from src.discovery.catalog_overlay import sources_for
+
+        found = self.table(tenant_id, full_name)
+        if found is None:
+            raise KeyError(full_name)
+        return found, sources_for(found, {})
+
     def sources(self, tenant_id: str) -> list[SourceRecord]:
         with self._lock:
             return sorted(self._sources.get(tenant_id, {}).values(), key=lambda s: s.source_id)

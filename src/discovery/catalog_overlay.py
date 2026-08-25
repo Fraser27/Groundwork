@@ -58,6 +58,27 @@ def _resolve(existing: str, found: DescriptionText | None) -> str:
     return existing
 
 
+def sources_for(
+    table: CatalogTable,
+    descriptions: Mapping[str, DescriptionText],
+) -> dict[str, str]:
+    """Where each description on this table came from, keyed by column name, `""` for the table.
+
+    Reported alongside the text rather than recomputed by the caller. A page that showed a model's
+    guess and a colleague's correction identically would be hiding the one distinction a reader
+    needs in order to know what to double-check.
+    """
+    out = {
+        "": source_of(
+            table.description, descriptions.get(table_node_id(table.source_id, table.full_name))
+        )
+    }
+    for column in table.columns:
+        node_id = column_node_id(table.source_id, table.full_name, column.name)
+        out[column.name] = source_of(column.description, descriptions.get(node_id))
+    return out
+
+
 def overlay_tables(
     tables: Sequence[CatalogTable],
     descriptions: Mapping[str, DescriptionText],
@@ -114,6 +135,18 @@ class EnrichedCatalog:
             return None
         overlaid = overlay_tables([found], self._descriptions(tenant_id))
         return overlaid[0] if overlaid else found
+
+    def with_sources(self, tenant_id: str, full_name: str) -> tuple[CatalogTable, dict[str, str]]:
+        """One table and where each of its descriptions came from, in a single graph read.
+
+        The pair, because a caller that fetched the text and then asked separately where it came
+        from would do two reads that could disagree.
+        """
+        found = self._catalog.table(tenant_id, full_name)
+        if found is None:
+            raise KeyError(full_name)
+        descriptions = self._descriptions(tenant_id)
+        return overlay_tables([found], descriptions)[0], sources_for(found, descriptions)
 
     def _descriptions(self, tenant_id: str) -> dict[str, DescriptionText]:
         """Approved descriptions, or none if the graph will not answer.

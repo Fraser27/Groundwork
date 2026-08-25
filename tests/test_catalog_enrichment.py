@@ -391,3 +391,123 @@ class TestTheCypherShape:
         for bad in ("Table {x}", "Table`", "Table Column", ""):
             with pytest.raises(UnsafeRelationshipType):
                 q.upsert_node(bad)
+
+
+class TestTheRoutes:
+    """The wiring, which is the half that was missing: `enrich_tables` had no caller at all."""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+
+        from src.api.app import create_app
+        from src.api.deps import get_services
+        from src.config import AuthConfig, GraphConfig, LexGraphConfig
+
+        cfg = LexGraphConfig(
+            environment="local",
+            auth=AuthConfig(dev_bypass_tenant=TENANT),
+            graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
+        )
+        cfg.validate()
+        app = create_app(cfg)
+        services = get_services()
+        services.catalog._tables[TENANT] = {FULL_NAME: table()}
+        return TestClient(app)
+
+    def test_the_settings_projection_carries_the_enrichment_model(self, client):
+        """A field missing here does not merely fail to display. `updateSettings` patches
+        governance then re-reads this projection, so the Admin picker would silently revert the
+        control the user just moved."""
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        assert "enrichment_model" in body
+        assert body["enrichment_model"] in {m["id"] for m in body["available_models"]}
+
+    def test_enriching_an_unknown_table_is_refused(self, client):
+        r = client.post(f"/api/tenants/{TENANT}/sources/enrich", json={"tables": ["nope.missing"]})
+        assert r.status_code == 404
+        assert "Scan the source first" in r.json()["detail"]
+
+    def test_the_table_detail_reports_where_each_description_came_from(self, client):
+        """Without this the review gate is invisible: a proposal exists, does nothing, and there is
+        nowhere to approve it from."""
+        body = client.get(f"/api/tenants/{TENANT}/tables/{FULL_NAME}").json()
+        assert "description_source" in body
+        assert "pending_enrichment" in body
+        assert all("description_source" in c for c in body["columns"])
+
+    def test_an_empty_description_is_refused_rather_than_stored(self, client):
+        r = client.patch(
+            f"/api/tenants/{TENANT}/tables/{FULL_NAME}/description", json={"text": "   "}
+        )
+        assert r.status_code == 400
+
+    def test_describing_an_unknown_column_is_refused(self, client):
+        r = client.patch(
+            f"/api/tenants/{TENANT}/tables/{FULL_NAME}/description",
+            json={"column": "nope", "text": "Something."},
+        )
+        assert r.status_code == 404
+
+    def test_a_human_description_is_declared_and_sits_on_the_floor(self):
+        """Not REVIEWER_CONFIDENCE. At 0.98 a description would outrank an ADVERSE_TO a partner
+        approved at 0.9, which is the inversion DESCRIPTIVE_CONFIDENCE exists to undo."""
+        from src.documents.review import REVIEWER_CONFIDENCE
+
+        assert DESCRIPTIVE_CONFIDENCE < REVIEWER_CONFIDENCE
+        onto = load_ontology("fintech")
+        assertion = build_assertion(
+            tenant_id=TENANT,
+            subject_id=table_node_id(SOURCE, FULL_NAME),
+            predicate=DESCRIBED_AS,
+            object_id="description:abc",
+            epistemic_class=EpistemicClass.DECLARED,
+            method="admin:me@firm.example",
+            confidence=DESCRIPTIVE_CONFIDENCE,
+            source_locator=SourceLocator(source_id=SOURCE, table=FULL_NAME),
+            allowed_predicates=onto.allowed_for(DESCRIBED_AS),
+        )
+        # DECLARED plus a non-governing predicate derives AUTO_ASSERTED, so it needs no review.
+        assert assertion.review_state.value == "AUTO_ASSERTED"
+        assert assertion.confidence == DESCRIPTIVE_CONFIDENCE
+
+    def test_the_queue_item_says_which_table_a_claim_is_about(self):
+        """`QueueItem` carried document_id and page but not table/column, so "every pending
+        description for this table" was not a question the queue could answer."""
+        from src.documents.review import AssertionRecord, QueueItem
+
+        assertion = build_assertion(
+            tenant_id=TENANT,
+            subject_id=table_node_id(SOURCE, FULL_NAME),
+            predicate=DESCRIBED_AS,
+            object_id="description:abc",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:m1",
+            confidence=DESCRIPTIVE_CONFIDENCE,
+            source_locator=SourceLocator(source_id=SOURCE, table=FULL_NAME, column="bal"),
+        )
+        item = QueueItem.of(AssertionRecord(assertion=assertion))
+        assert item.table == FULL_NAME
+        assert item.column == "bal"
+
+
+class TestTheRunIsBounded:
+    def test_the_table_cap_keeps_a_run_under_the_store_limit(self):
+        """`GraphAssertionStore.DEFAULT_LIMIT` is 5000 and `all_for_tenant` truncates there. One
+        table is roughly 1 + N columns + up to 14 terms, so an uncapped catalog-wide run would
+        silently truncate the review queue it exists to fill."""
+        from src.discovery.enrichment_run import MAX_TABLES_PER_RUN
+        from src.graph.assertion_store import DEFAULT_LIMIT
+
+        worst_case_per_table = 1 + 40 + 8 + 6
+        assert MAX_TABLES_PER_RUN * worst_case_per_table < DEFAULT_LIMIT
+
+    def test_existing_descriptions_are_not_re_guessed(self):
+        """Built from the overlaid tables, so an approved model description or a person's edit is
+        left alone. That is what makes "a model never overwrites a human" hold across runs."""
+        from src.discovery.enrichment_run import existing_descriptions
+
+        have = existing_descriptions([table(description="T.", column_description="C.")], SOURCE)
+        assert have[FULL_NAME] == "T."
+        assert have[f"{FULL_NAME}.bal"] == "C."
+        assert f"{FULL_NAME}.fac_id" not in have

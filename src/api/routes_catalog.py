@@ -12,7 +12,7 @@ import logging
 from collections import Counter
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.admin_ops import ResetScope, replay, reset_derived, sweep_undeclared_endpoints
@@ -21,12 +21,27 @@ from src.api.deps import (
     TenantDep,
     build_router_indexer,
     require_admin,
+    require_reviewer,
     scope_violation_to_http,
 )
 from src.constants import SELECTABLE_MODELS
 from src.discovery.catalog_store import CatalogTable
+from src.discovery.enrichment import DESCRIBED_AS, description_node
+from src.discovery.enrichment_run import (
+    MAX_TABLES_PER_RUN,
+    STATE_RUNNING,
+    pending_for_table,
+    run_enrichment,
+    subject_ids_for,
+)
 from src.discovery.glue_scanner import scan_catalog
-from src.graph.assertions import EpistemicClass, ReviewState
+from src.graph.assertions import (
+    DESCRIPTIVE_CONFIDENCE,
+    EpistemicClass,
+    ReviewState,
+    SourceLocator,
+    build_assertion,
+)
 from src.graph.scope import ScopeViolation
 from src.ontology.loader import available_domains, load_ontology
 from src.query_audit import MAX_SCAN
@@ -355,24 +370,39 @@ def _node(entity_id: str) -> dict[str, Any]:
 
 @router.get("/tenants/{tenant}/tables")
 async def list_tables(services: ServicesDep, principal: TenantDep) -> list[dict[str, Any]]:
-    """Tables found by the last catalog scan. Empty until a source is scanned."""
+    """Tables found by the last catalog scan. Empty until a source is scanned.
+
+    Read through the enriched catalog, so the description shown here is the one the SQL generator
+    was given. Two different answers to "what does this column mean" would make the page useless
+    for judging a generated query.
+    """
     ctx, _ = principal
-    return [_table_summary(t) for t in services.catalog.tables(ctx.tenant_id)]
+    return [_table_summary(t) for t in services.enriched_catalog().tables(ctx.tenant_id)]
 
 
 @router.get("/tenants/{tenant}/tables/{full_name}")
 async def get_table(services: ServicesDep, principal: TenantDep, full_name: str) -> dict[str, Any]:
     ctx, _ = principal
-    table = services.catalog.table(ctx.tenant_id, full_name)
-    if table is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no table {full_name!r}")
+    try:
+        table, sources = services.enriched_catalog().with_sources(ctx.tenant_id, full_name)
+    except KeyError:
+        raise HTTPException(  # noqa: B904
+            status.HTTP_404_NOT_FOUND, f"no table {full_name!r}"
+        ) from None
+
+    pending = _pending_descriptions(services, ctx, full_name)
     return {
         **_table_summary(table),
+        "description_source": sources.get(""),
+        "pending_description": pending.get(""),
+        "pending_enrichment": len(pending),
         "columns": [
             {
                 "name": c.name,
                 "data_type": c.data_type,
                 "description": c.description,
+                "description_source": sources.get(c.name, ""),
+                "pending_description": pending.get(c.name),
                 "is_partition": c.is_partition,
                 "is_primary_key": c.is_primary_key,
             }
@@ -382,6 +412,33 @@ async def get_table(services: ServicesDep, principal: TenantDep, full_name: str)
         "scanned_at": table.scanned_at,
         "location": table.location,
     }
+
+
+def _pending_descriptions(
+    services: ServicesDep, ctx: Any, full_name: str
+) -> dict[str, dict[str, Any]]:
+    """Unreviewed descriptions for this table, keyed by column name (empty for the table).
+
+    Shown so the review gate is visible on the page it matters. Without this a proposal exists,
+    does nothing, and there is nowhere to approve it from.
+    """
+    try:
+        items = services.review_queue.list_pending(ctx, limit=2000)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("could not read pending descriptions for %s: %s", full_name, e)
+        return {}
+
+    out: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if item.predicate != DESCRIBED_AS or item.table != full_name:
+            continue
+        out[item.column or ""] = {
+            "assertion_id": item.assertion_id,
+            "object_id": item.object_id,
+            "method": item.method,
+            "confidence": item.confidence,
+        }
+    return out
 
 
 @router.get("/tenants/{tenant}/sources")
@@ -452,6 +509,7 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
         "extraction_model": settings.extraction_model or models.extraction_model,
         "synthesis_model": models.synthesis_model,
         "retrieval_agent_model": settings.retrieval_agent_model,
+        "enrichment_model": settings.enrichment_model,
         "embedding_model": services.config.vector.embedding_model,
         "available_models": _selectable_models(settings, models),
         "available_domains": available_ontology_domains(),
@@ -480,6 +538,7 @@ def _selectable_models(settings: Any, models: Any) -> list[dict[str, str]]:
     configured = {
         settings.extraction_model,
         settings.retrieval_agent_model,
+        settings.enrichment_model,
         models.extraction_model,
         models.synthesis_model,
     }
@@ -648,6 +707,235 @@ async def scan_sources(
         "note": (
             "Schemas only, no rows were read. Column types and descriptions are now "
             "citable as DECLARED facts, and metrics can be compiled against them."
+        ),
+    }
+
+
+class EnrichRequest(BaseModel):
+    source_id: str = Field(default="glue-main", max_length=128)
+    tables: list[str] = Field(default_factory=list, max_length=200)
+    """Empty enriches every catalogued table, up to the run cap."""
+
+
+@router.post("/tenants/{tenant}/sources/enrich", status_code=status.HTTP_202_ACCEPTED)
+async def enrich_catalog(
+    services: ServicesDep,
+    principal: TenantDep,
+    background: BackgroundTasks,
+    body: Annotated[EnrichRequest, Body()],
+) -> dict[str, Any]:
+    """Ask a model to describe these tables and columns. Nothing goes live.
+
+    Glue says a column is `mtr_stat_cd varchar(2)`. It does not say that is a matter status, and a
+    model is good at that guess. A guess is exactly what it stays: every description is staged as
+    EXTRACTED_MODEL and waits for a human, because the descriptions reach the model that writes
+    SQL and an unreviewed one would steer a query nobody checked.
+
+    202 with a background task, because a Bedrock call per table is far too slow to hold a request
+    open. Each table is staged as it completes, so a container replaced mid-run loses the tables
+    not yet reached rather than the whole run.
+
+    No per-request model override: the administrator's setting is the control, and since the model
+    id is the assertion's version a one-off model would quietly fork assertion identity.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+
+    running = services.enrichment_runs.get(ctx.tenant_id)
+    if running is not None and running.state == STATE_RUNNING:
+        # Refusing costs a retry. An unbounded queue turns a bulk action into memory pressure and a
+        # thundering herd at Bedrock, which is `IngestLimiter`'s reasoning.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "an enrichment run is already in progress for this firm; wait for it to finish",
+        )
+
+    settings = services.settings_for(ctx.tenant_id)
+    if not settings.enrichment_model:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "no enrichment model is configured, so there is nothing to propose descriptions with",
+        )
+
+    catalog = services.enriched_catalog()
+    known = {t.full_name for t in catalog.tables(ctx.tenant_id)}
+    unknown = [t for t in body.tables if t not in known]
+    if unknown:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"not in this firm's catalog: {sorted(unknown)}. Scan the source first.",
+        )
+
+    queued = len(body.tables) if body.tables else len(known)
+    background.add_task(
+        run_enrichment,
+        services,
+        ctx,
+        source_id=body.source_id,
+        only=tuple(body.tables),
+    )
+    return {
+        "status": "accepted",
+        "tables_queued": min(queued, MAX_TABLES_PER_RUN),
+        "max_tables_per_run": MAX_TABLES_PER_RUN,
+        "model": settings.enrichment_model,
+        "note": (
+            "Descriptions are proposed, never applied. Poll the status endpoint for progress, "
+            "then approve what is right on each table."
+        ),
+    }
+
+
+@router.get("/tenants/{tenant}/sources/enrich/status")
+async def enrichment_status(services: ServicesDep, principal: TenantDep) -> dict[str, Any]:
+    """How the current or last enrichment run is going."""
+    require_admin(principal)
+    ctx, _ = principal
+    run = services.enrichment_runs.get(ctx.tenant_id)
+    if run is None:
+        return {"state": "none", "note": "No enrichment run has been started on this container."}
+    return run.to_dict()
+
+
+class DescriptionRequest(BaseModel):
+    column: str | None = Field(default=None, max_length=256)
+    """None describes the table itself."""
+
+    text: str = Field(default="", max_length=2000)
+    """Empty retracts the current description rather than storing an empty one."""
+
+
+@router.patch("/tenants/{tenant}/tables/{full_name:path}/description")
+async def set_description(
+    services: ServicesDep,
+    principal: TenantDep,
+    full_name: str,
+    body: Annotated[DescriptionRequest, Body()],
+) -> dict[str, Any]:
+    """Write a description a person typed. Live immediately.
+
+    DECLARED, so `_derive_review_state` makes it AUTO_ASSERTED and it needs no review: a person
+    asserting something is the thing review exists to obtain. Nothing here opts out of the gate;
+    the assertion contract derives the state from the class.
+
+    Confidence is DESCRIPTIVE_CONFIDENCE and not REVIEWER_CONFIDENCE, which is the subtle part.
+    A reviewer's 0.98 on a description would outrank a governing fact a partner personally approved
+    at 0.9, and that inversion is exactly what `DESCRIPTIVE_CONFIDENCE` exists to prevent.
+
+    A model's competing proposal is left in the queue. Precedence at read time is the single
+    definition of which description is used, and rejecting here as well would be a second answer to
+    one question in a second place.
+    """
+    require_admin(principal)
+    ctx, _ = principal
+
+    catalog = services.enriched_catalog()
+    table = catalog.table(ctx.tenant_id, full_name)
+    if table is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no catalogued table {full_name!r}")
+    if body.column and body.column not in {c.name for c in table.columns}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{full_name} has no column {body.column!r}")
+
+    # The request is checked before the infrastructure. A bad request is a bad request whether or
+    # not the graph happens to be up, and answering 503 to it tells the caller to retry something
+    # that will never succeed.
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "an empty description is not stored. Reject the proposal instead, or say what the "
+            "column means.",
+        )
+
+    store = services.catalog_graph_store()
+    if store is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "no graph is reachable, so nothing can be stored"
+        )
+
+    source_id = table.source_id or "glue-main"
+    subject_id = subject_ids_for(source_id, full_name, body.column)
+
+    node = description_node(ctx.tenant_id, text)
+    try:
+        store.persist([node])
+    except Exception as e:
+        # Refused rather than staged: the edge would point at a node with no text, and the
+        # description would be unreadable with no way to tell it had been lost.
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"the description text could not be stored: {e}"
+        ) from e
+
+    onto = services.ontology_for(ctx.tenant_id)
+    assertion = build_assertion(
+        tenant_id=ctx.tenant_id,
+        subject_id=subject_id,
+        predicate=DESCRIBED_AS,
+        object_id=node.node_id,
+        epistemic_class=EpistemicClass.DECLARED,
+        method=f"admin:{ctx.user_id}",
+        confidence=DESCRIPTIVE_CONFIDENCE,
+        source_locator=SourceLocator(
+            source_id=source_id, table=full_name, column=body.column or None
+        ),
+        allowed_predicates=onto.allowed_for(DESCRIBED_AS),
+        endpoint_kinds=onto.endpoint_kinds(DESCRIBED_AS),
+    )
+    job_id = f"describe-{full_name}"
+    services.review_queue.stage(ctx, [assertion], job_id=job_id)
+    live = services.review_queue.promote(ctx, job_id=job_id)
+
+    return {
+        "subject_id": subject_id,
+        "text": text,
+        "assertion_id": assertion.assertion_id,
+        "live": assertion.assertion_id in live,
+        "source": "human",
+        "note": (
+            "Recorded as a declaration, so it is live at once and outranks a model's proposal "
+            "for the same column."
+        ),
+    }
+
+
+@router.post("/tenants/{tenant}/tables/{full_name:path}/enrichment/approve")
+async def approve_table_enrichment(
+    services: ServicesDep, principal: TenantDep, full_name: str
+) -> dict[str, Any]:
+    """Approve every pending description, synonym and topic for one table.
+
+    A reviewer act, so `require_reviewer` rather than `require_admin`, matching
+    `routes_review.approve_many`.
+
+    Reported per id rather than all-or-nothing: a reviewer clearing sixty columns must not lose
+    fifty-nine decisions to one cascade.
+
+    No inference pass afterwards, unlike `routes_review`. No rule in any shipped pack matches on a
+    descriptive catalog predicate, so a full pass over the tenant's facts per table would be pure
+    waste. That changes the day a pack writes a rule over one of these.
+    """
+    require_reviewer(principal)
+    ctx, _ = principal
+
+    ids = pending_for_table(services, ctx, full_name)
+    approved: list[str] = []
+    failed: dict[str, str] = {}
+    for assertion_id in ids:
+        try:
+            services.review_queue.approve(ctx, assertion_id, note=f"catalog enrichment {full_name}")
+            approved.append(assertion_id)
+        except Exception as e:  # noqa: BLE001
+            failed[assertion_id] = str(e)
+
+    promoted = services.review_queue.promote(ctx) if approved else []
+    return {
+        "table": full_name,
+        "pending": len(ids),
+        "approved": len(approved),
+        "live": len(promoted),
+        "failed": failed,
+        "note": (
+            "Approved descriptions now reach the model that writes SQL for ungoverned questions."
         ),
     }
 
