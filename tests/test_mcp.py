@@ -221,6 +221,34 @@ class TestToolListing:
         for tool in _list_tools():
             assert "TRUST:" in (tool.description or ""), tool.name
 
+    def test_every_parameter_tells_the_model_what_to_pass(self):
+        """A parameter with no description is a parameter a model guesses at.
+
+        `Args:` in a docstring does not reach the schema -- FastMCP reads the docstring for the
+        tool description and nothing else -- so everything documented there was invisible. A
+        cheap model then passed an entity id to `get_provenance`, which correctly refused it,
+        and the refusal looked like a broken tool rather than a missing description.
+        """
+        undocumented = [
+            f"{tool.name}.{name}"
+            for tool in _list_tools()
+            for name, spec in ((tool.inputSchema or {}).get("properties") or {}).items()
+            if not spec.get("description")
+        ]
+        assert undocumented == []
+
+    def test_the_two_id_shaped_arguments_say_they_are_different(self):
+        """The mistake that started this. `get_provenance` takes a hex assertion id and
+        `graph_neighbourhood` takes a `kind:slug` entity id, and nothing in the names says so."""
+        by_name = {t.name: t.inputSchema["properties"] for t in _list_tools()}
+        provenance = by_name["get_provenance"]["assertion_id"]["description"]
+        neighbourhood = by_name["graph_neighbourhood"]["node_id"]["description"]
+
+        assert "NOT an entity id" in provenance
+        assert "graph_neighbourhood" in provenance
+        assert "kind:slug" in neighbourhood
+        assert "get_provenance" in neighbourhood
+
     def test_governed_and_raw_tools_read_differently(self):
         """The distinction an agent has to be able to draw without reading the source."""
         by_name = {t.name: " ".join((t.description or "").split()) for t in _list_tools()}
@@ -295,7 +323,9 @@ class TestCompose:
 
     def test_the_default_adds_no_rendering(self):
         """So an existing client sees a byte-identical response."""
-        body = _call(TOKEN_A, "compose", {"question": "show me fees billed by month"}).structuredContent
+        body = _call(
+            TOKEN_A, "compose", {"question": "show me fees billed by month"}
+        ).structuredContent
         assert "formatted" not in body
         assert "format" not in body
 

@@ -24,10 +24,11 @@ guesses, and letting an agent opt into them is how a guess reaches a client as a
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from src.api.deps import (
     Services,
@@ -119,7 +120,36 @@ def _principal(ctx: Context) -> tuple[Services, AuthContext]:
 
 
 async def ask(
-    ctx: Context, question: str, execute: bool = False, response_format: str = "data"
+    ctx: Context,
+    question: Annotated[
+        str,
+        Field(
+            description=(
+                "A question in ordinary language, as a person would ask it. Not a query, not "
+                "keywords: the routing reads the words, so 'Does acting for Calder create a "
+                "conflict?' works and 'calder conflict' loses the shape of what was asked."
+            )
+        ),
+    ],
+    execute: Annotated[
+        bool,
+        Field(
+            description=(
+                "Run the query. False returns the SQL unrun, which is the point of a governed "
+                "metric: a person can read what it will do before it does it."
+            )
+        ),
+    ] = False,
+    response_format: Annotated[
+        str,
+        Field(
+            description=(
+                "'data' (default) returns the structured answer alone. 'markdown' or 'table' add "
+                "a `formatted` string you can show a person as-is, built from the same fields "
+                "with no model involved. The structured answer is always present either way."
+            )
+        ),
+    ] = "data",
 ) -> dict[str, Any]:
     """Answer a question through the governed resolver, and report how it was answered.
 
@@ -174,10 +204,39 @@ def _resolution_out(resolution: Resolution) -> dict[str, Any]:
 
 async def compose(
     ctx: Context,
-    question: str,
-    execute: bool = True,
-    synthesise: bool = False,
-    response_format: str = "data",
+    question: Annotated[
+        str,
+        Field(
+            description=(
+                "A question in ordinary language, as a person would ask it. Not a query, not "
+                "keywords: the routing reads the words, so 'Does acting for Calder create a "
+                "conflict?' works and 'calder conflict' loses the shape of what was asked."
+            )
+        ),
+    ],
+    execute: Annotated[
+        bool, Field(description="Run the compiled or generated SQL. False returns it unrun.")
+    ] = True,
+    synthesise: Annotated[
+        bool,
+        Field(
+            description=(
+                "Ask a second model to write prose over the parts. Leave off: you are the writer, "
+                "and prose you then write over is a second ungoverned layer with nobody able to "
+                "say which of you added a claim. On only if you relay the summary verbatim."
+            )
+        ),
+    ] = False,
+    response_format: Annotated[
+        str,
+        Field(
+            description=(
+                "'data' (default) returns the structured answer alone. 'markdown' or 'table' add "
+                "a `formatted` string you can show a person as-is, built from the same fields "
+                "with no model involved. The structured answer is always present either way."
+            )
+        ),
+    ] = "data",
 ) -> dict[str, Any]:
     """Answer from every permitted lane at once, keeping their results apart.
 
@@ -368,10 +427,46 @@ async def describe_ontology(ctx: Context) -> dict[str, Any]:
 
 async def search_assertions(
     ctx: Context,
-    review_state: str | None = None,
-    epistemic_class: str | None = None,
-    matter_id: str | None = None,
-    limit: int = 50,
+    review_state: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Exactly one of AUTO_ASSERTED, PENDING, APPROVED, REJECTED. Omit for all states. "
+                "PENDING is a model's proposal nobody has checked, so filter to APPROVED when you "
+                "are looking for what the firm actually believes."
+            )
+        ),
+    ] = None,
+    epistemic_class: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Exactly one of DECLARED, EXTRACTED_DET, EXTRACTED_MODEL, INFERRED, PREDICTED. "
+                "Omit for all."
+            )
+        ),
+    ] = None,
+    matter_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                "A matter's own reference, as it appears in `matter_id` on a fact -- often short, "
+                "like 'NTL' or 'MBC-2024-0431'. Matched exactly, so a guess returns nothing: read "
+                "one off a fact or from the `matter_id` on a `compose` part rather than inventing "
+                "it from a document title. Omit for every matter this user may see."
+            )
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        # `ge` but no `le`: the handler already clamps with `min(limit, _MAX_ROWS)`, and an
+        # over-large ask is a reasonable thing for an agent to do -- silently returning 200 is
+        # kinder than refusing the call and making it guess the ceiling.
+        Field(
+            ge=1,
+            description="Maximum rows. Anything above 200 returns 200. Lowest confidence first.",
+        ),
+    ] = 50,
 ) -> dict[str, Any]:
     """List raw individual facts, filtered. An inventory, not an answer.
 
@@ -461,7 +556,23 @@ def _assertion_out(a: Any, floor: float) -> dict[str, Any]:
     }
 
 
-async def get_provenance(ctx: Context, assertion_id: str) -> dict[str, Any]:
+async def get_provenance(
+    ctx: Context,
+    assertion_id: Annotated[
+        str,
+        Field(
+            description=(
+                "The id of ONE FACT, as a 32-character hex string like "
+                "'1e9b2826e081e7b88da6789efc6033a6'. Take it from `assertions_used` on an `ask` "
+                "result, `parts[].assertion_ids` on a `compose` result, or `assertion_id` on a "
+                "row from `search_assertions` or `graph_neighbourhood`. This is NOT an entity id: "
+                "'party:acme-corporation' names a company, not a claim about one, and there is no "
+                "provenance for a company. To find what is known about an entity, call "
+                "`graph_neighbourhood` with it instead."
+            )
+        ),
+    ],
+) -> dict[str, Any]:
     """Show why the system believes one fact — the document page and quote, or the proof tree.
 
     TRUST: this is the audit trail itself. For an extraction it returns the filename, the
@@ -580,7 +691,33 @@ def _explain(a: Any) -> str:
     )
 
 
-async def graph_neighbourhood(ctx: Context, node_id: str, depth: int = 2) -> dict[str, Any]:
+async def graph_neighbourhood(
+    ctx: Context,
+    node_id: Annotated[
+        str,
+        Field(
+            description=(
+                "An ENTITY id, written 'kind:slug' -- 'party:calder-shipping-ag', "
+                "'matter:NTL-2026-0114', 'authority:the-marisol-2025-uksc-14'. The kinds this "
+                "firm uses come from `describe_ontology`. This is the tool for asking what is "
+                "known about a thing; `get_provenance` is for asking why one claim is believed, "
+                "and takes a hex assertion id rather than an entity id."
+            )
+        ),
+    ],
+    depth: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=3,
+            description=(
+                "How many hops out to walk. 1 is direct relationships only. 2 is the useful "
+                "default for a conflict question, because the fact in the middle -- one party "
+                "owning a stake in another -- is two hops from either end. 3 is capped."
+            ),
+        ),
+    ] = 2,
+) -> dict[str, Any]:
     """Show the verified relationships around one entity, walking out a few hops.
 
     TRUST: filtered. Only edges the user may see, above the firm's confidence floor and
