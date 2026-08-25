@@ -317,19 +317,29 @@ class Planner:
         # a verified relationship is the stronger claim and a reader should meet it first.
         passage_part = self._passage_part(ctx, question, settings) if 3 in runnable else None
 
+        # The graph part has two halves gated by different tiers, and conflating them was a bug.
+        #
+        # The term search over assertions is tier 2, and asking for it when tier 2 is forbidden
+        # would be a cap bypass. Walking out from the passages just retrieved is **tier 3's own
+        # work** -- it is what `TIER_EXPLANATION[HYBRID]` promises ("following verified
+        # relationships out from them") and what `Resolver._try_hybrid` does with no tier-2 check.
+        #
+        # While one `if 2 in runnable` guarded both, a tenant permitted only tier 3 got passages
+        # and nothing else: on `demo-firm` the walk finds 30 citable facts against the term
+        # search's 8, so the lane reported no `assertion_ids` at all and hybrid was not hybrid.
         seeds: list[str] = []
-        if 2 in runnable:
-            graph_part = self._graph_part(
-                ctx,
-                question,
-                settings,
-                passages=passage_part.content if passage_part is not None else None,
-            )
-            if graph_part is not None:
-                answer.parts.append(graph_part)
-                answer.lanes_run.append(Lane.GRAPH)
-                seeds = self._seeds_from(graph_part)
-        else:
+        graph_part = self._graph_part(
+            ctx,
+            question,
+            settings,
+            passages=passage_part.content if passage_part is not None else None,
+            include_search=2 in runnable,
+        )
+        if graph_part is not None:
+            answer.parts.append(graph_part)
+            answer.lanes_run.append(Lane.GRAPH)
+            seeds = self._seeds_from(graph_part)
+        elif 2 not in runnable:
             answer.lanes_skipped[Lane.GRAPH.value] = _skipped(2, allowed, decision)
 
         if 3 in runnable:
@@ -411,9 +421,7 @@ class Planner:
 
     # ── Routing ──────────────────────────────────────────────────────────────
 
-    def _route(
-        self, ctx: AuthContext, question: str, settings: GovernanceSettings
-    ) -> Any | None:
+    def _route(self, ctx: AuthContext, question: str, settings: GovernanceSettings) -> Any | None:
         """The routing decision, or None when there is no router. Never raises."""
         if self._router is None:
             return None
@@ -476,10 +484,21 @@ class Planner:
         settings: GovernanceSettings,
         *,
         passages: Any = None,
+        include_search: bool = True,
     ) -> Part | None:
+        """Verified relationships, from a term search and from walking out of the passages.
+
+        `include_search` is False when tier 2 is not permitted. The walk still runs, because it
+        belongs to tier 3: the passages it starts from were retrieved under tier 3 and the
+        relationships around them are what "hybrid" means. Only the term search is tier 2's.
+        """
         if self._graph is None:
             return None
-        hits = self._graph.search(ctx, question, min_confidence=settings.min_confidence_floor)
+        hits = (
+            self._graph.search(ctx, question, min_confidence=settings.min_confidence_floor)
+            if include_search
+            else []
+        )
         hits = [*hits, *self._walked(ctx, passages, settings, already=hits)]
         if not hits:
             return None
@@ -494,7 +513,10 @@ class Planner:
         return Part(
             lane=Lane.GRAPH,
             provenance=Provenance.INFERRED if model_written else Provenance.DETERMINISTIC,
-            tier=Tier.GRAPH_TRAVERSAL,
+            # The tier that authorised this part, which is not always tier 2. With the term
+            # search off, every fact here was walked out from a tier 3 retrieval, and stamping
+            # it tier 2 would report a tier the tenant has forbidden as having run.
+            tier=Tier.GRAPH_TRAVERSAL if include_search else Tier.HYBRID,
             content=hits,
             assertion_ids=[h["assertion_id"] for h in hits if "assertion_id" in h],
             confidence=min(confidences) if confidences and model_written else None,

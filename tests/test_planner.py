@@ -20,7 +20,7 @@ import pytest
 
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
-from src.query.planner import Lane, Planner, Provenance
+from src.query.planner import Lane, Planner, Provenance, Tier
 from src.query.router import RouterDecision
 
 TENANT = "demo-firm"
@@ -178,6 +178,56 @@ class TestComposeWalksOutFromThePassagesToo:
 
         facts = next(p for p in answer.parts if p.lane == Lane.GRAPH).content
         assert [f["assertion_id"] for f in facts] == ["walked-1"]
+
+    def test_the_walk_runs_even_when_tier_2_is_forbidden(self, ctx):
+        """The walk is tier 3's own work, so tier 2 must not gate it.
+
+        `TIER_EXPLANATION[HYBRID]` promises "following verified relationships out from them", and
+        `Resolver._try_hybrid` expands with no tier-2 check. Compose guarded both halves of the
+        graph lane behind `if 2 in runnable`, so a tenant permitted only tier 3 -- which is the
+        deployed configuration -- got passages and no `assertion_ids` at all. Every provenance
+        call then had nothing valid to be called with.
+        """
+        graph = FakeGraph(
+            hits=[{"assertion_id": "term-search-only"}],
+            walked=[{"assertion_id": "walked-1", "hops": 1}],
+        )
+        answer = Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(
+            ctx,
+            "does acting for calder create a conflict",
+            GovernanceSettings(allowed_tiers=frozenset({3})),
+            allow_synthesis=False,
+        )
+
+        part = next(p for p in answer.parts if p.lane == Lane.GRAPH)
+        ids = [f["assertion_id"] for f in part.content]
+        # The walk ran; the term search, which is tier 2's, did not.
+        assert ids == ["walked-1"]
+        assert part.assertion_ids == ["walked-1"]
+        assert Lane.GRAPH in answer.lanes_run
+
+    def test_a_walk_only_part_is_not_stamped_with_the_forbidden_tier(self, ctx):
+        """Reporting tier 2 on a part authorised by tier 3 would say a tier the tenant forbade
+        had run."""
+        graph = FakeGraph(walked=[{"assertion_id": "walked-1"}])
+        answer = Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(ctx, "q", GovernanceSettings(allowed_tiers=frozenset({3})), allow_synthesis=False)
+
+        assert next(p for p in answer.parts if p.lane == Lane.GRAPH).tier == Tier.HYBRID
+
+    def test_the_term_search_still_needs_tier_2(self, ctx):
+        """The other half of the split. Running the term search without tier 2 would be a cap
+        bypass, so with nothing to walk from the lane contributes nothing and says why."""
+        graph = FakeGraph(hits=[{"assertion_id": "term-search-only"}])
+        answer = Planner(graph_reader=graph, vector_search=FakeVectors([])).plan(
+            ctx, "q", GovernanceSettings(allowed_tiers=frozenset({3})), allow_synthesis=False
+        )
+
+        assert Lane.GRAPH not in answer.lanes_run
+        assert "graph" in answer.lanes_skipped
 
     def test_it_seeds_the_walk_the_way_the_resolver_does(self, ctx):
         """Both id forms. Seeding only the bare id matched nothing on the first frontier, which is
@@ -570,7 +620,8 @@ class TestRoutingNeverNarrowsCompose:
         vectors = FakeVectors([{"document_id": "d1"}])
         router = FakeRouter(decision([], degraded=True, reason="nothing resembled the question"))
         answer = Planner(
-            router=router, graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]),
+            router=router,
+            graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]),
             vector_search=vectors,
         ).plan(ctx, "q", GovernanceSettings())
 
@@ -603,7 +654,10 @@ class TestTheRouterCannotWidenTheTenantCap:
         assert Lane.PASSAGES.value in answer.lanes_skipped
 
     def test_an_empty_cap_runs_nothing_however_the_router_scored(self, ctx):
-        graph, vectors = FakeGraph(hits=[{"assertion_id": "a1"}]), FakeVectors([{"document_id": "d"}])
+        graph, vectors = (
+            FakeGraph(hits=[{"assertion_id": "a1"}]),
+            FakeVectors([{"document_id": "d"}]),
+        )
         matcher = FakeMatcher()
 
         class Catalog:
@@ -627,10 +681,12 @@ class TestTheRouterCannotWidenTheTenantCap:
         assert (graph.searched, vectors.searched, catalog.calls) == (False, False, 0)
 
     def test_a_capped_lane_is_named_as_the_cap_not_as_a_low_score(self, ctx):
-        """"Your administrator turned this off" and "this did not look relevant" are different
+        """ "Your administrator turned this off" and "this did not look relevant" are different
         facts, and a UI that cannot tell them apart tells the user to rephrase a question no
         rephrasing will help."""
-        router = FakeRouter(decision([2, 3], dropped={"1": "tier 1 is not permitted for this tenant"}))
+        router = FakeRouter(
+            decision([2, 3], dropped={"1": "tier 1 is not permitted for this tenant"})
+        )
         answer = Planner(
             router=router, metric_matcher=FakeMatcher(), graph_reader=FakeGraph()
         ).plan(ctx, "q", GovernanceSettings(allowed_tiers=frozenset({2, 3})))
