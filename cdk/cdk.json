@@ -24,7 +24,7 @@
     "appCpu": 512,
     "appMemoryMiB": 1024,
 
-    "defaultOntology": "legal",
+    "defaultOntology": "fintech",
 
     "aws-cdk:enableDiffNoFail": true,
     "@aws-cdk/aws-iam:minimizePolicies": true,
