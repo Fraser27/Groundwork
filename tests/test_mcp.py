@@ -344,6 +344,22 @@ class TestAsk:
         assert body["governed"] is True
         assert "SELECT" in body["sql"]
 
+    def test_reports_the_floor_it_applied(self):
+        """`compose` sent this and `ask` did not, so a reader of an `ask` result had to assume a
+        floor. A trace rendering "nothing cleared the floor of 0.8" from a default it invented is
+        claiming a control the server may never have exercised."""
+        body = _call(TOKEN_A, "ask", {"question": "show me fees billed by month"}).structuredContent
+        assert "min_confidence" in body
+        assert isinstance(body["min_confidence"], int | float)
+
+    def test_carries_what_a_trace_needs(self):
+        """Retrieval renders the same trace for `ask` as for `compose`, so the fields the trace
+        reads must be present on both. Without them the page silently falls back to raw JSON, which
+        is the bug this pins."""
+        body = _call(TOKEN_A, "ask", {"question": "show me fees billed by month"}).structuredContent
+        for field in ("tier", "tier_name", "governed", "blocks", "citations", "assertions_used"):
+            assert field in body, field
+
     def test_returns_assertions_used(self):
         """The audit trail an agent's answer rests on. Without these ids, a tool answer is
         less defensible than the same answer given by a human."""

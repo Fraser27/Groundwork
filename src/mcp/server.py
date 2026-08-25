@@ -198,7 +198,12 @@ async def ask(
         ctx,
         event_for(auth_ctx.tenant_id, auth_ctx.user_id, question, resolution),
     )
-    return _formatted(_resolution_out(resolution), response_format)
+    out = _resolution_out(resolution)
+    # The floor actually applied, matching `compose` and the REST route. Without it a reader has to
+    # assume one, and a page that renders "nothing cleared the floor of 0.8" from a default it
+    # invented is claiming a control it never exercised.
+    out["min_confidence"] = settings.min_confidence_floor
+    return _formatted(out, response_format)
 
 
 def _resolution_out(resolution: Resolution) -> dict[str, Any]:
