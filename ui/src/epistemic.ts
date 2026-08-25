@@ -95,7 +95,7 @@ export const REVIEW_STATE_LABEL: Record<ReviewState, string> = {
 
 export const HELP = {
   epistemicClass:
-    'How the system came to believe a fact: declared by a system of record, quoted from a document and checked, read into a document by a language model, inferred by a rule, or guessed. Every fact in LexGraph carries one, which is what lets you ask why it is believed.',
+    'How the system came to believe a fact: declared by a system of record, quoted from a document and checked, read into a document by a language model, inferred by a rule, or guessed. Every fact in Groundwork carries one, which is what lets you ask why it is believed.',
   confidence:
     'How sure the system is of this single fact, from 0 to 1. A model’s interpretation is held below the trust floor until someone approves it, and approval raises it above the floor in the order the model reported. A quoted name found on the page sits on the floor exactly: the check is certain, but knowing a name appears somewhere is worth less than knowing who is adverse to whom. An inference can never exceed the weakest fact it rests on.',
   confidenceFloor:

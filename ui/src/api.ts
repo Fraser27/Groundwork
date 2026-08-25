@@ -1,5 +1,5 @@
 /**
- * Typed client for the LexGraph API.
+ * Typed client for the Groundwork API.
  *
  * Every tenant-scoped path takes the tenant id explicitly. The server derives the
  * real tenant from the verified JWT and will reject a mismatch — the value here is

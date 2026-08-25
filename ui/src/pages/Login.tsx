@@ -7,7 +7,7 @@ export default function Login() {
     <div className="login-shell">
       <div className="login-card">
         <h1>
-          <span className="logo-mark">Lex</span>Graph
+          <span className="logo-mark">Ground</span>work
         </h1>
         <p className="login-sub">
           A governed semantic layer over your documents and your databases, where every fact carries

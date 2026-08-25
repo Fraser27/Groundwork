@@ -112,7 +112,7 @@ export default function TableDetail() {
           </div>
         </div>
         <p className="card-note" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          Rows are not copied into LexGraph. Only this metadata is recorded, and a query reads the
+          Rows are not copied into Groundwork. Only this metadata is recorded, and a query reads the
           table in place at the moment it is asked, so nothing here can go stale relative to the
           source.
         </p>

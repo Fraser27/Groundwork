@@ -99,7 +99,7 @@ function App() {
         <div className="sidebar-logo">
           <div className="sidebar-logo-text">
             <h1>
-              <span className="logo-mark">Lex</span>Graph
+              <span className="logo-mark">Ground</span>work
             </h1>
             <span>Every fact carries its provenance</span>
           </div>
