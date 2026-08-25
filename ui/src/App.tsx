@@ -115,7 +115,10 @@ function App() {
 
         <nav>
           <NavItem to="/" end icon={icons.dashboard} label="Dashboard" collapsed={collapsed} />
-          <NavItem to="/query" icon={icons.query} label="Ask" collapsed={collapsed} />
+          {/* Ask is deprecated and no longer in the menu. Retrieval renders the same trace, the
+              same evidence panels and the same wall, over an agent loop rather than one request.
+              The route stays so a bookmark still resolves, and because the page is the reference
+              the Retrieval panels were extracted from. */}
           <NavItem to="/retrieval" icon={icons.retrieval} label="Retrieval" collapsed={collapsed} />
           <NavItem
             to="/review"
@@ -189,6 +192,7 @@ function App() {
       <main className="main-content">
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          {/* Deprecated, and out of the menu. Kept routed so an existing bookmark resolves. */}
           <Route path="/query" element={<QueryBuilder />} />
           <Route path="/retrieval" element={<Retrieval />} />
           <Route path="/review" element={<ReviewQueue />} />
@@ -279,12 +283,6 @@ const icons = {
       <rect x="14" y="3" width="7" height="7" />
       <rect x="14" y="14" width="7" height="7" />
       <rect x="3" y="14" width="7" height="7" />
-    </>,
-  ),
-  query: svg(
-    <>
-      <circle cx="11" cy="11" r="7" />
-      <path d="M20 20l-3.5-3.5" />
     </>,
   ),
   review: svg(

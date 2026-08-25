@@ -1762,6 +1762,15 @@ export const api = {
       method: 'POST',
     }),
 
+  /**
+   * @deprecated Use `compose`, or drive the agent through `runRetrieval`.
+   *
+   * Answers from the first tier that can, and returns one tier's confidence for it. That is the
+   * limitation `compose` exists to fix: a compiled metric, a quoted passage and a model's reading
+   * are not the same kind of claim, and reporting one number over them invents a statistic.
+   *
+   * Still called by the Ask page, which is deprecated with it and no longer in the menu.
+   */
   query: (
     tenant: string,
     body: { question: string; matter_id?: string; as_of?: string; min_confidence?: number },

@@ -1,6 +1,14 @@
 /**
  * QueryBuilder — ask a question, and see which part of the system answered it.
  *
+ * @deprecated Superseded by Retrieval, and removed from the menu. Reachable only by an existing
+ * bookmark. Retrieval renders the same trace, the same evidence panels and the same wall over an
+ * agent loop, and its turns show a tool ladder this page cannot.
+ *
+ * Not deleted, for one reason worth keeping in mind before anybody does delete it: this page is
+ * where `EvidencePanels` and the trace idiom came from, and `lanesFromResult` is still the only
+ * reader of the single-tier answer shape, which Retrieval now depends on for `ask` turns.
+ *
  * The tier is not a diagnostic detail: it tells the reader how much of the answer
  * was generated. Tier 1 is a compiled metric with no model involved; tier 3 leans
  * on similarity to decide what to read. Both are legitimate, and a reader is
@@ -176,6 +184,16 @@ export default function QueryBuilder() {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* Said plainly rather than left implicit: this page is out of the menu, so anyone here
+          arrived by a bookmark and would otherwise not know it had been superseded. */}
+      <div className="banner banner-warn">
+        <span>
+          <strong>This page is deprecated.</strong> Retrieval answers the same questions and shows
+          the same evidence, with the agent's tool calls alongside it.{' '}
+          <Link to="/retrieval">Open Retrieval</Link>.
+        </span>
       </div>
 
       {contextError && (
