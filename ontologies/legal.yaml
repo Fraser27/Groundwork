@@ -283,6 +283,17 @@ descriptive_predicates:
     label: mentions
     description: Named in the text without a stronger relationship being established.
     help: The safe default when an extractor sees two entities together but cannot justify a governing predicate.
+  # Catalog enrichment. Descriptive, so approval lands these on the trust floor rather than in the
+  # answerable band: a description helps a model read a schema and must never outrank a fact with
+  # consequence. Deliberately no domain/range -- declaring either turns on endpoint validation, and
+  # no pack declares a Description entity kind, so every enrichment write would then be rejected.
+  - id: DESCRIBED_AS
+    label: described as
+    description: Plain-language description of a table or column, written by a person or proposed by a model.
+    help: A model's description waits for review like any other reading. Only an approved one reaches the query planner.
+  - id: HAS_SYNONYM
+    label: has synonym
+    description: Another name people use for this table, so a question using their word still finds it.
 
 # Rules materialise INFERRED edges. Each carries premises, so any conclusion
 # unwinds into a proof tree.

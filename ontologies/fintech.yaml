@@ -225,6 +225,21 @@ descriptive_predicates:
     label: mentions
     description: Named in the text without a stronger relationship being established.
     help: The safe default when an extractor sees two entities together but cannot justify a governing predicate.
+  # CONCERNS_TOPIC was missing here while the other two packs declared it, and
+  # `enrichment.py` proposes it for every tenant regardless of pack. An undeclared
+  # predicate is treated as governing by the approval rescale, so a topic tag would have
+  # been promoted into the answerable band on approval.
+  - id: CONCERNS_TOPIC
+    label: concerns topic
+    description: Subject-matter tag.
+  # Catalog enrichment. See the note in legal.yaml: descriptive on purpose, and no domain/range.
+  - id: DESCRIBED_AS
+    label: described as
+    description: Plain-language description of a table or column, written by a person or proposed by a model.
+    help: A model's description waits for review like any other reading. Only an approved one reaches the query planner.
+  - id: HAS_SYNONYM
+    label: has synonym
+    description: Another name people use for this table, so a question using their word still finds it.
 
 # Rules materialise INFERRED edges. Each carries premises, so any conclusion
 # unwinds into a proof tree.

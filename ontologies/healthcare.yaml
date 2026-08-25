@@ -148,6 +148,14 @@ descriptive_predicates:
   - id: MENTIONS
     label: mentions
     description: Named in the text without a stronger relationship established.
+  # Catalog enrichment. See the note in legal.yaml: descriptive on purpose, and no domain/range.
+  - id: DESCRIBED_AS
+    label: described as
+    description: Plain-language description of a table or column, written by a person or proposed by a model.
+    help: A model's description waits for review like any other reading. Only an approved one reaches the query planner.
+  - id: HAS_SYNONYM
+    label: has synonym
+    description: Another name people use for this table, so a question using their word still finds it.
 
 rules:
   - id: contraindication_alert

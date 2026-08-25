@@ -182,6 +182,38 @@ class Services:
             )
             return self.ontology
 
+    def catalog_graph_store(self) -> Any | None:
+        """Catalog nodes and their descriptions in the graph, or None with no graph."""
+        if self.graph is None:
+            return None
+        from src.discovery.graph_store import CatalogGraphStore
+
+        return CatalogGraphStore(self.graph)
+
+    def enriched_catalog(self) -> Any:
+        """The catalog with approved descriptions layered on.
+
+        Every read path uses this rather than `self.catalog`, so the schema the SQL generator is
+        given and the schema the Tables page shows are the same text. The raw store is deliberately
+        kept for two callers: the firewall's allowlist and the metric compiler's schema. A
+        description cannot change which tables exist or what type a column is, and a graph outage
+        must not be able to shrink the allowlist.
+        """
+        store = self.catalog_graph_store()
+        if store is None:
+            return self.catalog
+        from src.discovery.catalog_overlay import EnrichedCatalog
+
+        # Tenant scope with no matter filter, which is correct here and worth stating because it is
+        # the one place this module builds a context rather than receiving one. A description
+        # describes a column, not a case: `enrich_tables` sets no `matter_id`, so these assertions
+        # are tenant-level and a matter allowlist would filter on a property none of them carry.
+        return EnrichedCatalog(
+            self.catalog,
+            store,
+            lambda tenant_id: AuthContext(user_id="catalog", tenant_id=tenant_id),
+        )
+
     def record_blocked(self, tenant_id: str, entry: dict[str, Any]) -> None:
         """Remember a refusal for the Governance screen."""
         log = self.blocked_queries.setdefault(tenant_id, [])
@@ -236,7 +268,7 @@ class Services:
             metric_matcher=matcher,
             graph_reader=self.graph_reader,
             vector_search=VectorSearch(self.embedder) if self.embedder else None,
-            catalog=self.catalog,
+            catalog=self.enriched_catalog(),
             sql_lane=self.build_sql_lane(tenant_id) if tenant_id else None,
             router=self.build_tier_router(),
         )
@@ -263,7 +295,7 @@ class Services:
             metric_matcher=matcher,
             graph_reader=self.graph_reader,
             vector_search=VectorSearch(self.embedder) if self.embedder else None,
-            catalog=self.catalog,
+            catalog=self.enriched_catalog(),
             synthesiser=build_synthesiser(self) if synthesise else None,
             # Recorded, not obeyed: `ROUTER_NARROWS_LANES` is False, so every permitted lane still
             # runs. The router's decision is part of the trace rather than a filter on it.

@@ -611,7 +611,20 @@ async def scan_sources(
     # than losing the scan.
     staged: list[str] = []
     promoted: list[str] = []
+    nodes_written = 0
     graph_error: str | None = None
+
+    # Nodes before assertions, because an edge references them. These were built and discarded
+    # for the life of the project: `LINK_METRIC_TO_TABLE` matches `(t:Table {full_name})` and so
+    # never linked, and `enrich_tables` had nowhere to hang a description.
+    catalog_store = services.catalog_graph_store()
+    if catalog_store is not None and result.nodes:
+        try:
+            nodes_written = catalog_store.persist(result.nodes)
+        except Exception as e:
+            graph_error = str(e)
+            logger.warning("catalog scan could not write its nodes: %s", e)
+
     if result.assertions:
         try:
             job_id = f"scan-{body.source_id}"
@@ -627,6 +640,7 @@ async def scan_sources(
         "assertions_declared": len(result.assertions),
         "assertions_live": len(promoted),
         "assertions_staged": len(staged),
+        "nodes_written": nodes_written,
         "scan_errors": result.errors,
         "graph_error": graph_error,
         "status": record.status,
