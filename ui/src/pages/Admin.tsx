@@ -1,6 +1,7 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   api,
+  type EnrichmentStatus,
   type Ontology,
   type ResetScope,
   type RetrievalGovernance,
@@ -63,11 +64,36 @@ export default function Admin() {
   /** Open the database picker rather than scanning straight away: a shared catalog holds other
    *  teams' databases, and reading all of them makes the graph misleading. */
   const [scanning, setScanning] = useState(false)
+  const [enrichment, setEnrichment] = useState<EnrichmentStatus | null>(null)
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
     setTimeout(() => setToast(null), type === 'error' ? 9000 : 5000)
   }
+
+  const runEnrichment = async () => {
+    try {
+      const r = await api.enrichCatalog(tenant)
+      setEnrichment({ state: 'running', tables_total: r.tables_queued, tables_done: 0 })
+      showToast(`Describing ${r.tables_queued} tables with ${r.model}`)
+    } catch (e) {
+      showToast((e as Error).message, 'error')
+    }
+  }
+
+  // Polled rather than streamed. `src/api/events.py` treats the poll as the correctness guarantee
+  // and the websocket as a latency improvement, so for a run measured in minutes this is the whole
+  // of what is needed. Stops as soon as the run is not running, so an idle page is not asking.
+  useEffect(() => {
+    if (enrichment?.state !== 'running') return
+    const id = setInterval(() => {
+      api
+        .enrichmentStatus(tenant)
+        .then(setEnrichment)
+        .catch(() => undefined)
+    }, 4000)
+    return () => clearInterval(id)
+  }, [tenant, enrichment?.state])
 
   const setScopeFlag = (key: keyof ResetScope, on: boolean) => {
     setScope((s) => ({ ...s, [key]: on }))
@@ -753,6 +779,29 @@ export default function Admin() {
             </select>
             <p className="hint">{modelNote(settings, settings.retrieval_agent_model)}</p>
           </div>
+          <div className="form-group">
+            <label>
+              Catalog enrichment
+              <FieldHelp text="Writes plain-language descriptions for tables and columns, which are then given to the model that generates SQL. Glue says a column is mtr_stat_cd varchar(2); this is what says it is a matter status. A cheap model does this well, because it is describing names and types rather than reasoning over them. Every description it proposes waits for review before any query can use it." />
+            </label>
+            <select
+              value={settings.enrichment_model ?? ''}
+              onChange={(e) =>
+                patch(
+                  'enrich-model',
+                  { enrichment_model: e.target.value },
+                  'Enrichment model updated',
+                )
+              }
+            >
+              {settings.available_models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <p className="hint">{modelNote(settings, settings.enrichment_model)}</p>
+          </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>
               Embeddings
@@ -805,6 +854,35 @@ export default function Admin() {
           <p className="card-note" style={{ marginTop: 10 }}>
             A scan records metadata only. Rows never leave the source.
           </p>
+
+          <div className="subcard" style={{ marginTop: 12 }}>
+            <div className="subcard-header">
+              <span className="subcard-title">
+                Describe the catalog
+                <FieldHelp text="Asks the enrichment model for a plain-language description of every catalogued table and column, so the model that writes SQL knows what a column means rather than only what it is called. Each description is a proposal: it waits for review on the table's own page and changes no query until approved." />
+              </span>
+              <span className="subcard-note">One model call per table, in the background</span>
+            </div>
+            <div>
+              <button
+                className="btn btn-ghost"
+                onClick={runEnrichment}
+                disabled={enrichment?.state === 'running'}
+              >
+                {enrichment?.state === 'running' ? 'Describing' : 'Describe all tables'}
+              </button>
+            </div>
+            {enrichment && enrichment.state !== 'none' && (
+              <p className="hint" style={{ marginTop: 9 }}>
+                {enrichment.state === 'running'
+                  ? `Describing ${enrichment.tables_done ?? 0} of ${enrichment.tables_total ?? 0} tables.`
+                  : `${enrichment.state === 'failed' ? 'Stopped' : 'Finished'}: ${
+                      enrichment.staged ?? 0
+                    } descriptions proposed across ${enrichment.tables_done ?? 0} tables. Review them on each table.`}
+                {(enrichment.errors?.length ?? 0) > 0 && ` ${enrichment.errors!.length} failed.`}
+              </p>
+            )}
+          </div>
         </div>
       </div>
 

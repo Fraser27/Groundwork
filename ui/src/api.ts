@@ -382,10 +382,28 @@ export interface TableSummary {
   epistemic_class: EpistemicClass
 }
 
+/**
+ * Where a description came from, which is not decoration.
+ *
+ * A model's guess and a colleague's correction are different claims about what a column means, and
+ * the first is the one worth double-checking before trusting a generated query.
+ */
+export type DescriptionSource = '' | 'glue' | 'human' | 'model'
+
+/** A description a model proposed and nobody has reviewed. Not in use until approved. */
+export interface PendingDescription {
+  assertion_id: string
+  object_id: string
+  method: string
+  confidence: number
+}
+
 export interface Column {
   name: string
   data_type: string
   description?: string
+  description_source?: DescriptionSource
+  pending_description?: PendingDescription | null
   is_partition: boolean
   is_primary_key: boolean
 }
@@ -395,6 +413,24 @@ export interface TableDetail extends TableSummary {
   /** The catalog scan that declared this table. */
   method: string
   scanned_at?: string | null
+  description_source?: DescriptionSource
+  pending_description?: PendingDescription | null
+  /** How many proposals across this table and its columns are waiting for review. */
+  pending_enrichment?: number
+}
+
+/** Progress of a catalog enrichment run. In-memory server side, so it resets on a deploy. */
+export interface EnrichmentStatus {
+  state: 'none' | 'running' | 'done' | 'failed'
+  source_id?: string
+  tables_total?: number
+  tables_done?: number
+  staged?: number
+  nodes_written?: number
+  errors?: string[]
+  started_at?: string
+  finished_at?: string | null
+  note?: string
 }
 
 // ── Documents and the ingest state machine ───────────────────────────────────
@@ -1219,6 +1255,8 @@ export interface TenantSettings {
   synthesis_model: string
   /** Drives the Retrieval agent's loop. Separate from the query model, deliberately. */
   retrieval_agent_model?: string
+  /** Writes catalog descriptions. A cheap model is the right choice, so it is settable alone. */
+  enrichment_model?: string
   embedding_model: string
   /** `note` says what choosing this model trades away, since cheaper is usually the reason. */
   available_models: { id: string; label: string; note?: string }[]
@@ -1898,6 +1936,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ databases }),
     }),
+
+  /**
+   * Ask a model to describe these tables. Returns as soon as the work is queued.
+   *
+   * 202, not a result: a Bedrock call per table is far too slow to hold a request open. Poll
+   * `enrichmentStatus` for progress. Nothing it proposes is in use until somebody approves it.
+   */
+  enrichCatalog: (tenant: string, tables: string[] = [], sourceId = 'glue-main') =>
+    request<{ status: string; tables_queued: number; max_tables_per_run: number; model: string }>(
+      `/tenants/${tenant}/sources/enrich`,
+      { method: 'POST', body: JSON.stringify({ tables, source_id: sourceId }) },
+    ),
+
+  enrichmentStatus: (tenant: string) =>
+    request<EnrichmentStatus>(`/tenants/${tenant}/sources/enrich/status`),
+
+  /** Record a description a person wrote. Live at once, and it outranks a model's proposal. */
+  setDescription: (tenant: string, fullName: string, text: string, column?: string) =>
+    request<{ assertion_id: string; live: boolean; source: string }>(
+      `/tenants/${tenant}/tables/${encodeURIComponent(fullName)}/description`,
+      { method: 'PATCH', body: JSON.stringify({ column: column ?? null, text }) },
+    ),
+
+  /** Approve every pending description, synonym and topic for one table. */
+  approveTableEnrichment: (tenant: string, fullName: string) =>
+    request<{ pending: number; approved: number; live: number; failed: Record<string, string> }>(
+      `/tenants/${tenant}/tables/${encodeURIComponent(fullName)}/enrichment/approve`,
+      { method: 'POST' },
+    ),
 
   listAccessUsers: (tenant: string) =>
     // /access/users/{id} is one user's grants; the directory is /users, which returns

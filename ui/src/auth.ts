@@ -253,6 +253,16 @@ export function isPlatformAdmin(): boolean {
   return getUserRoles().includes('platform-admin')
 }
 
+/**
+ * Whether to offer approving a model's claim. Mirrors `Grants.can_review` in `src/auth.py`, and
+ * like `isPlatformAdmin` it is presentation only: `require_reviewer` answers 403 regardless.
+ */
+export function canReview(): boolean {
+  if (!isAuthEnabled()) return true
+  const roles = getUserRoles()
+  return ['platform-admin', 'matter-owner', 'reviewer'].some((r) => roles.includes(r))
+}
+
 function clearTokens(): void {
   localStorage.removeItem('id_token')
   localStorage.removeItem('access_token')
