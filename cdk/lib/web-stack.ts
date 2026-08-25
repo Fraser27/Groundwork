@@ -178,10 +178,24 @@ function handler(event) {
               exclude: ['node_modules', 'dist'],
               bundling: {
                 image: cdk.DockerImage.fromRegistry('node:20-slim'),
+                // Copied out of the bind mount before installing. `exclude` only filters what is
+                // hashed and uploaded, not what is mounted: CDK bind-mounts the real `ui/` at
+                // /asset-input, so `npm ci` there installs Linux bindings into the developer's own
+                // node_modules. That replaced @rolldown/binding-darwin-arm64 with
+                // binding-linux-arm64-gnu and left node_modules root-owned, so the next local
+                // `vite build` failed with a native binding error and `.bin/tsc` gave Permission
+                // denied. Cost of the copy is seconds; the failure looked like a corrupt install
+                // and cost far more than that, repeatedly.
                 command: [
                   'bash',
                   '-c',
-                  'npm ci --cache /tmp/.npm && npm run build && cp -r dist/* /asset-output/',
+                  [
+                    'cp -r /asset-input /tmp/ui',
+                    'cd /tmp/ui',
+                    'npm ci --cache /tmp/.npm',
+                    'npm run build',
+                    'cp -r dist/* /asset-output/',
+                  ].join(' && '),
                 ],
               },
             }),
