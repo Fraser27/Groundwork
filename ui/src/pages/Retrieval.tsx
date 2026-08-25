@@ -20,12 +20,13 @@ import {
 } from '../api'
 import { getTenantId } from '../auth'
 import DocumentViewer from '../components/DocumentViewer'
+import { FactsUsed, PassagesCited } from '../components/EvidencePanels'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
 import QueryTrace from '../components/QueryTrace'
 import RunFlow from '../components/RunFlow'
 import { EmptyState, ErrorState, Spinner } from '../components/Shared'
-import { lanesFromComposed } from '../trace'
+import { factsFromComposed, lanesFromComposed, passagesFromComposed } from '../trace'
 import { useProvenance } from '../useProvenance'
 
 const EXAMPLES = [
@@ -241,14 +242,27 @@ export default function Retrieval() {
                       {event.error && <p className="hint">{event.error}</p>}
 
                       {composed && !showRaw && (
-                        <QueryTrace
-                          router={composed.router}
-                          gate={composed.gate}
-                          lanes={lanesFromComposed(composed)}
-                          blocks={composed.blocks ?? []}
-                          floor={composed.min_confidence ?? 0.8}
-                          onOpenPassage={setPassage}
-                        />
+                        <>
+                          <QueryTrace
+                            router={composed.router}
+                            gate={composed.gate}
+                            lanes={lanesFromComposed(composed)}
+                            blocks={composed.blocks ?? []}
+                            floor={composed.min_confidence ?? 0.8}
+                            onOpenPassage={setPassage}
+                          />
+                          {/* The same panels Ask renders. A citation drawn two ways would be two
+                              claims about what a citation is. */}
+                          <PassagesCited
+                            passages={passagesFromComposed(composed)}
+                            onOpen={setPassage}
+                          />
+                          <FactsUsed
+                            facts={factsFromComposed(composed)}
+                            floor={composed.min_confidence ?? 0.8}
+                            onExplain={setSelected}
+                          />
+                        </>
                       )}
 
                       {!composed && !showRaw && event.kind === 'tool_result' && (

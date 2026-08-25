@@ -45,6 +45,38 @@ export function asPassages(answer: QueryAnswer): QueryPassage[] {
   return []
 }
 
+/**
+ * The passages a composed answer quoted, gathered from whichever parts carry them.
+ *
+ * `asPassages` reads the single-tier `answer` shape, where everything sits under one key. A
+ * composed answer nests each lane's output in `parts[].content`, so the same data is one level
+ * deeper and reading it the old way found nothing.
+ */
+export function passagesFromComposed(composed: ComposedResult): QueryPassage[] {
+  const out: QueryPassage[] = []
+  for (const part of composed.parts ?? []) {
+    if (part.lane !== 'passages' || !Array.isArray(part.content)) continue
+    for (const row of part.content) {
+      if (row && typeof row === 'object' && 'document_id' in row) out.push(row as QueryPassage)
+    }
+  }
+  return out
+}
+
+/** The verified relationships a composed answer walked, from the graph part. */
+export function factsFromComposed(composed: ComposedResult): QueryHit[] {
+  const out: QueryHit[] = []
+  for (const part of composed.parts ?? []) {
+    if (part.lane !== 'graph' || !Array.isArray(part.content)) continue
+    for (const row of part.content) {
+      // `assertion_id` is what makes a row citable: without one there is no provenance to open,
+      // so a row lacking it is not a fact this can offer to explain.
+      if (row && typeof row === 'object' && 'assertion_id' in row) out.push(row as QueryHit)
+    }
+  }
+  return out
+}
+
 /** Tier 3's AI-written query, or null when none was written. Absent on every older response. */
 export function asGenerated(answer: QueryAnswer): GeneratedSQLResult | null {
   if (!answer || typeof answer !== 'object' || !('generated' in answer)) return null
