@@ -23,6 +23,7 @@ compose cap is cost, not safety: every call is a full lane fan-out including Ath
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -310,6 +311,12 @@ def _payload(result: Any) -> Any:
     Strands returns `{"toolUseId", "status", "content": [{"json"|"text": ...}]}`. The UI needs
     the tool's dict to hand to `lanesFromComposed`, so an envelope reaching the browser would
     make every consumer unwrap it.
+
+    **A text block holding JSON is parsed back to a dict.** MCP serialises a tool's return value
+    into a text block, not the `json` block this first assumed, so every composed result reached
+    the browser as a *string*. Reading `.parts` off a string gives undefined, and the trace
+    rendered "nothing ran" for a result that had thirty facts in it -- the worst shape of failure
+    here, because it looks like an honest empty.
     """
     if not isinstance(result, dict):
         return result
@@ -319,8 +326,19 @@ def _payload(result: Any) -> Any:
     for block in content:
         if isinstance(block, dict) and "json" in block:
             return block["json"]
+
     texts = [b["text"] for b in content if isinstance(b, dict) and "text" in b]
-    return "\n".join(texts) if texts else result
+    if not texts:
+        return result
+    joined = "\n".join(texts)
+    try:
+        parsed = json.loads(joined)
+    except (TypeError, ValueError):
+        # Genuinely prose: a `ToolError` message, or a tool that returns text. Left as it is.
+        return joined
+    # Only a mapping is a tool result. A bare number or string that happens to be valid JSON is
+    # still text as far as a reader is concerned.
+    return parsed if isinstance(parsed, dict | list) else joined
 
 
 def _text_of(result: Any) -> str:

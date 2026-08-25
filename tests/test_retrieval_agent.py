@@ -130,6 +130,42 @@ class TestTheEventContract:
         # it straight to `lanesFromComposed`.
         assert tool_result["result"] == {"lanes_run": ["metric"], "governance": "governed"}
 
+    def test_a_json_text_block_reaches_the_ui_as_a_dict(self):
+        """MCP serialises a tool's return value into a **text** block, not the `json` block this
+        first assumed. Handing the browser the string meant `composed.parts` was undefined and the
+        trace rendered "nothing ran" for a result holding thirty facts, which is the worst shape of
+        failure here: it looks like an honest empty."""
+        import json as _json
+
+        payload = {"parts": [], "lanes_run": ["graph"], "governance": "verbatim"}
+        wrapper = {"status": "success", "content": [{"text": _json.dumps(payload)}]}
+
+        result = _agent([("compose", {}, wrapper)]).run("q")
+        [tool_result] = [e for e in result.events if e["kind"] == "tool_result"]
+        assert tool_result["result"] == payload
+
+    def test_a_json_block_still_works(self):
+        """Both shapes are handled: a server that sends structured content is not broken by the
+        text path."""
+        payload = {"parts": [], "lanes_run": ["metric"]}
+        wrapper = {"status": "success", "content": [{"json": payload}]}
+
+        result = _agent([("compose", {}, wrapper)]).run("q")
+        [tool_result] = [e for e in result.events if e["kind"] == "tool_result"]
+        assert tool_result["result"] == payload
+
+    def test_an_error_message_stays_text(self):
+        """A `ToolError` is prose, not a result. Parsing it into an object would make a refusal
+        look like data."""
+        wrapper = {
+            "status": "error",
+            "content": [{"text": "Error executing tool compose: response_format must be one of"}],
+        }
+        result = _agent([("compose", {}, wrapper)]).run("q")
+        [tool_result] = [e for e in result.events if e["kind"] == "tool_result"]
+        assert isinstance(tool_result["result"], str)
+        assert tool_result["is_error"] is True
+
     def test_an_unknown_tool_renders_as_raw_json_rather_than_as_governed(self):
         """A tool added to the MCP server without a decision here must not inherit a label that
         claims more than it is."""
