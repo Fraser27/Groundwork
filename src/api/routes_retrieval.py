@@ -41,6 +41,7 @@ from src.api.deps import Services, ServicesDep, TenantDep, get_services
 from src.api.events import get_event_hub
 from src.auth import AuthError, bearer_from_header
 from src.graph.scope import ScopeViolation
+from src.query_audit import event_for_run
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ async def run_retrieval(
         result = await anyio.to_thread.run_sync(agent.run, body.question)
     except AgentUnavailable as e:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    _record_run(services, ctx, body.question, result)
     return result.to_dict()
 
 
@@ -143,12 +145,16 @@ async def retrieval_events(websocket: WebSocket, tenant: str, token: str = "") -
         # synchronous, so running it on this loop would block the send that delivers its events.
         async with anyio.create_task_group() as tg:
             tg.start_soon(_relay, websocket, sub)
-            await anyio.to_thread.run_sync(
+            result = await anyio.to_thread.run_sync(
                 lambda: agent.run(
                     question,
                     sink=lambda event: hub.publish(ctx.tenant_id, event),
                 )
             )
+            # The streamed run is the one people actually use, so this is the path that matters
+            # for the audit. Recorded here rather than inside `agent.run` because the loop is
+            # deliberately free of service dependencies.
+            _record_run(services, ctx, question, result)
             # Let the relay drain what the run just published before the group is torn down.
             await anyio.sleep(0.1)
             tg.cancel_scope.cancel()
@@ -167,6 +173,15 @@ async def retrieval_events(websocket: WebSocket, tenant: str, token: str = "") -
                 logger.debug("could not report the failure to the client: %s", send_error)
     finally:
         hub.unsubscribe(ctx.tenant_id, sub)
+
+
+def _record_run(services: Services, ctx: Any, question: str, result: Any) -> None:
+    """One row per run, carrying the tools it called.
+
+    A failed run is recorded too. "The agent was asked this and could not answer" is part of the
+    record, and a log holding only successes overstates how well the surface works.
+    """
+    services.record_question(event_for_run(ctx.tenant_id, ctx.user_id, question, result))
 
 
 async def _relay(websocket: WebSocket, sub: Any) -> None:

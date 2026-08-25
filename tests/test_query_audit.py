@@ -26,6 +26,8 @@ from src.api.app import create_app
 from src.api.deps import get_services
 from src.config import AuthConfig, GraphConfig, LexGraphConfig
 from src.graph_audit import MAX_STORED_IDS
+from src.agent.loop import CAPPED_REASONS, RunResult
+from src.query.planner import ComposedAnswer, Lane, Part, Provenance
 from src.query.resolver import Resolution, Tier
 from src.query_audit import (
     ASK_PREFIX,
@@ -33,8 +35,11 @@ from src.query_audit import (
     InMemoryQueryAudit,
     QueryAudit,
     QueryEvent,
+    _to_event,
     asked_pk,
     event_for,
+    event_for_composed,
+    event_for_run,
 )
 
 TENANT = "dev-tenant"
@@ -345,3 +350,250 @@ class TestOverHttp:
 
     def test_the_scan_window_is_bounded(self):
         assert MAX_SCAN <= 500
+
+
+class TestEverySurfaceLeavesARow:
+    """The gap this closes: for weeks only `/query` recorded anything.
+
+    `/query/compose`, the Retrieval agent and every MCP tool call answered questions and left no
+    trace, which is the failure this whole module exists to prevent -- and it was invisible,
+    because the Audit page looked healthy while showing one surface out of four.
+    """
+
+    def composed(self, **over: Any) -> ComposedAnswer:
+        answer = ComposedAnswer()
+        answer.parts.append(
+            Part(
+                lane=Lane.GRAPH,
+                provenance=Provenance.INFERRED,
+                tier=Tier.GRAPH_TRAVERSAL,
+                content=[{"assertion_id": "a-1"}],
+                assertion_ids=["a-1"],
+            )
+        )
+        answer.parts.append(
+            Part(
+                lane=Lane.PASSAGES,
+                provenance=Provenance.VERBATIM,
+                tier=Tier.HYBRID,
+                content=[{"text": "..."}],
+                citations=[{"document_id": "doc-7"}],
+            )
+        )
+        for k, v in over.items():
+            setattr(answer, k, v)
+        return answer
+
+    def test_a_composed_answer_records_the_highest_tier_that_ran(self):
+        """The furthest the answer reached, not the first lane. A row saying tier 2 for an answer
+        that also read passages would understate what was permitted."""
+        e = event_for_composed(TENANT, "me", "q", self.composed())
+        assert e.tier == 3
+        assert e.tier_name == "HYBRID"
+
+    def test_a_composed_answer_records_its_basis_in_words_not_a_boolean(self):
+        """`governed` cannot express a mixed answer. A run over a verbatim passage and a model's
+        reading is neither governed nor ungoverned, and picking one would record a claim the
+        answer itself refuses to make."""
+        e = event_for_composed(TENANT, "me", "q", self.composed())
+        assert e.governance == "inferred + verbatim"
+        assert e.governed is False
+        assert e.basis == "inferred + verbatim"
+
+    def test_a_composed_answer_collects_facts_and_documents_from_every_part(self):
+        e = event_for_composed(TENANT, "me", "q", self.composed())
+        assert e.assertion_ids == ("a-1",)
+        assert e.document_ids == ("doc-7",)
+
+    def test_a_single_tier_row_still_reads_as_governed(self):
+        """The boolean is the whole truth for a `Resolution`, so nothing about the old rows or the
+        old lookup changes."""
+        r = Resolution(tier=Tier.GOVERNED_METRIC, answer=[{"x": 1}])
+        e = event_for(TENANT, "me", "q", r)
+        assert e.governance == ""
+        assert e.basis == "governed"
+        assert e.surface == "query"
+
+    def test_an_agent_run_is_one_row_carrying_its_tool_calls(self):
+        """Not a row per call. A run is one question with one answer, and eight rows would read as
+        eight pieces of advice."""
+        result = RunResult(
+            run_id="run:abc",
+            events=[
+                {"kind": "tool_call", "tool": "describe_ontology"},
+                {"kind": "tool_result", "tool": "describe_ontology", "result": {"units": []}},
+                {"kind": "tool_call", "tool": "compose"},
+                {
+                    "kind": "tool_result",
+                    "tool": "compose",
+                    "result": {
+                        "governance": "verbatim + inferred",
+                        "parts": [
+                            {
+                                "tier": 3,
+                                "assertion_ids": ["a-1", "a-2"],
+                                "citations": [{"document_id": "doc-1"}],
+                            }
+                        ],
+                    },
+                },
+            ],
+            answer="Grounded.",
+            stop_reason="end_turn",
+        )
+        e = event_for_run(TENANT, "me", "does acting for Calder conflict?", result)
+
+        assert e.surface == "retrieval_agent"
+        assert e.run_id == "run:abc"
+        assert e.tools_called == ("describe_ontology", "compose")
+        assert e.tier == 3
+        assert e.assertion_ids == ("a-1", "a-2")
+        assert e.document_ids == ("doc-1",)
+        assert e.answered is True
+
+    def test_an_agent_run_is_never_governed_however_governed_its_sources(self):
+        """The prose is the agent's own. A run that read nothing but compiled metrics still
+        produced an answer no human approved the wording of."""
+        result = RunResult(
+            run_id="run:abc",
+            events=[
+                {"kind": "tool_call", "tool": "compose"},
+                {
+                    "kind": "tool_result",
+                    "tool": "compose",
+                    "result": {"governance": "governed", "parts": [{"tier": 1}]},
+                },
+            ],
+        )
+        e = event_for_run(TENANT, "me", "q", result)
+        assert e.governed is False
+        assert e.governance == "governed + written by agent"
+
+    def test_a_capped_run_says_so_in_its_basis(self):
+        """A run cut off at a cap answered from less than it meant to read, and that belongs in
+        the record rather than only in the transcript."""
+        # Taken from the loop's own set rather than written out, so a renamed reason fails here
+        # instead of silently dropping the caveat from every capped row.
+        for reason in CAPPED_REASONS:
+            result = RunResult(
+                run_id="run:abc",
+                events=[{"kind": "tool_call", "tool": "compose"}],
+                stop_reason=reason,
+            )
+            assert "stopped at a cap" in event_for_run(TENANT, "me", "q", result).governance
+
+    def test_a_run_that_finished_does_not_claim_it_was_capped(self):
+        result = RunResult(
+            run_id="run:abc",
+            events=[{"kind": "tool_call", "tool": "compose"}],
+            stop_reason="end_turn",
+        )
+        assert "cap" not in event_for_run(TENANT, "me", "q", result).governance
+
+    def test_an_errored_tool_result_contributes_no_evidence(self):
+        """A failed call must not lend its ids to the row. The audit's claim is that the agent was
+        shown this evidence, and a refusal showed it nothing."""
+        result = RunResult(
+            run_id="run:abc",
+            events=[
+                {"kind": "tool_call", "tool": "compose"},
+                {
+                    "kind": "tool_result",
+                    "tool": "compose",
+                    "is_error": True,
+                    "result": {"parts": [{"tier": 3, "assertion_ids": ["a-9"]}]},
+                },
+            ],
+        )
+        e = event_for_run(TENANT, "me", "q", result)
+        assert e.assertion_ids == ()
+        assert e.answered is False
+
+    def test_a_failed_run_is_still_recorded(self):
+        """"The agent could not answer this" is part of the record. A log holding only successes
+        overstates how well the surface works."""
+        result = RunResult(
+            run_id="run:abc",
+            events=[{"kind": "run_failed", "error": "bedrock timed out"}],
+            stop_reason="error",
+        )
+        e = event_for_run(TENANT, "me", "q", result)
+        assert e.answered is False
+        assert e.governance == "no governed source + written by agent"
+
+    def test_the_new_fields_survive_a_dynamodb_round_trip(self):
+        """Written and read back, because a field the store drops is a field the page cannot show
+        and nothing else would notice."""
+        stored: list[dict] = []
+
+        class FakeTable:
+            def put_item(self, **kw):
+                stored.append(dict(kw["Item"]))
+                return {}
+
+            def query(self, **kw):
+                return {"Items": stored}
+
+        audit = QueryAudit(table=FakeTable())
+        audit.append(
+            asked(
+                surface="retrieval_agent",
+                governance="verbatim + written by agent",
+                run_id="run:xyz",
+                tools_called=("compose", "get_provenance"),
+            )
+        )
+        back = audit.questions(TENANT)[0]
+        assert back.surface == "retrieval_agent"
+        assert back.governance == "verbatim + written by agent"
+        assert back.run_id == "run:xyz"
+        assert back.tools_called == ("compose", "get_provenance")
+
+    def test_a_row_written_before_these_fields_reads_as_an_ask_row(self):
+        """Which is what it was. An absent surface must not render as blank or unknown."""
+        e = _to_event({"tenant_id": TENANT, "question": "old", "tier": 1, "governed": True})
+        assert e.surface == "query"
+        assert e.basis == "governed"
+        assert e.run_id is None
+
+    @pytest.fixture
+    def client_for_compose(self) -> TestClient:
+        cfg = LexGraphConfig(
+            environment="local",
+            auth=AuthConfig(dev_bypass_tenant=TENANT),
+            graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
+        )
+        cfg.validate()
+        app = create_app(cfg)
+        get_services().query_audit = InMemoryQueryAudit()
+        return TestClient(app)
+
+    def test_the_compose_route_records_the_question(self, client_for_compose):
+        """The wiring, which is the half that was missing. `event_for_composed` being correct is
+        worth nothing if the route never calls it."""
+        client = client_for_compose
+        r = client.post(f"/api/tenants/{TENANT}/query/compose", json={"query": "who acts for x"})
+        assert r.status_code == 200
+
+        log = client.get(f"/api/tenants/{TENANT}/audit/questions").json()
+        assert log["count"] == 1
+        assert log["questions"][0]["question"] == "who acts for x"
+        assert log["questions"][0]["surface"] == "compose"
+
+    def test_an_unrecorded_composed_answer_says_so(self, client_for_compose):
+        """Same contract as `/query`: the answer still returns, and the caller is told it is not in
+        the record. An unauditable answer must not look identical to an auditable one."""
+
+        class Broken:
+            def append(self, event):
+                raise RuntimeError("dynamodb is down")
+
+            def questions(self, tenant_id, *, limit=200):
+                return []
+
+        get_services().query_audit = Broken()
+        r = client_for_compose.post(
+            f"/api/tenants/{TENANT}/query/compose", json={"query": "who acts for x"}
+        )
+        assert r.status_code == 200
+        assert any("not recorded" in w for w in r.json()["warnings"])

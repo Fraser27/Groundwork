@@ -14,10 +14,18 @@ from __future__ import annotations
 
 from typing import Any, Self
 
+import sys
+import types
+
 import pytest
 from fastapi.testclient import TestClient
 
-from src.agent.events import DEFAULT_RESULT_KIND, EventStream, result_kind_for
+from src.agent.events import (
+    DEFAULT_RESULT_KIND,
+    RUN_ID_HEADER,
+    EventStream,
+    result_kind_for,
+)
 from src.agent.loop import CAPPED_REASONS, RetrievalAgent
 from src.api.app import create_app
 from src.config import AuthConfig, GraphConfig, LexGraphConfig
@@ -304,3 +312,62 @@ class TestTheRoutesRefuseBeforeTheyPretend:
             ) as ws,
         ):
             ws.receive_json()
+
+
+class TestTheRunIsRecordedOnce:
+    """One row per run, not one per tool call.
+
+    The agent calls `compose` up to three times, and the MCP server records every `compose` it
+    serves. Without the run header those are four rows for one question, which would make the
+    audit page read as four pieces of advice given.
+    """
+
+    def test_the_run_id_is_sent_to_mcp_alongside_the_token(self, monkeypatch):
+        """Asserted on the real client rather than through `client_factory`: the factory is the
+        test seam, so a test driven through it would pass while the deployed path sent neither
+        header."""
+        captured: dict[str, Any] = {}
+
+        class _Recording:
+            def __init__(self, *, url: str, headers: dict[str, str]) -> None:
+                captured.update(headers)
+
+        # `_client` imports MCPClient inside the function, so the patch lands on the module the
+        # import resolves to.
+        monkeypatch.setitem(
+            sys.modules, "strands.tools.mcp", types.SimpleNamespace(MCPClient=_Recording)
+        )
+        agent = RetrievalAgent(
+            tenant_id=TENANT,
+            bearer="token-for-the-user",
+            mcp_url="http://mcp.test/mcp",
+            model_id="some.model",
+        )
+        agent._client("run:abc")
+
+        assert captured["Authorization"] == "Bearer token-for-the-user"
+        assert captured[RUN_ID_HEADER] == "run:abc"
+
+    def test_a_call_carrying_a_run_id_is_not_recorded_by_the_mcp_server(self):
+        """The suppression itself. A forged header can only ever remove a duplicate: the run still
+        writes its own row, so no question can hide by sending one."""
+        from src.mcp.auth import run_id_from_context
+
+        class _Req:
+            headers = {RUN_ID_HEADER: "run:abc"}
+
+        class _Ctx:
+            request_context = type("RC", (), {"request": _Req()})()
+
+        assert run_id_from_context(_Ctx()) == "run:abc"
+
+    def test_a_third_party_call_sends_no_run_id_and_is_recorded(self):
+        from src.mcp.auth import run_id_from_context
+
+        class _Req:
+            headers: dict[str, str] = {}
+
+        class _Ctx:
+            request_context = type("RC", (), {"request": _Req()})()
+
+        assert run_id_from_context(_Ctx()) is None

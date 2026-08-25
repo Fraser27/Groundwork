@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
-from src.agent.events import EventStream
+from src.agent.events import RUN_ID_HEADER, EventStream
 from src.agent.prompt import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ class RetrievalAgent:
 
         started = time.monotonic()
         try:
-            client = self._client()
+            client = self._client(run_id)
             with client:
                 tools = client.list_tools_sync()
                 agent = self._agent(tools, stream, started)
@@ -176,7 +176,7 @@ class RetrievalAgent:
             turns=stream.turn,
         )
 
-    def _client(self) -> Any:
+    def _client(self, run_id: str) -> Any:
         if self.client_factory is not None:
             return self.client_factory()
         if not self.model_id:
@@ -188,10 +188,13 @@ class RetrievalAgent:
         # logic importable in a deployment that never runs an agent.
         from strands.tools.mcp import MCPClient
 
-        return MCPClient(
-            url=self.mcp_url,
-            headers={"Authorization": f"Bearer {self.bearer}"} if self.bearer else {},
-        )
+        headers = {"Authorization": f"Bearer {self.bearer}"} if self.bearer else {}
+        # Tells the MCP server these calls belong to a run that will record its own single audit
+        # row, so `compose` does not also write one per call. Not a credential and never trusted
+        # as one: authority is the bearer token above, and the worst a forged value can do is
+        # suppress a duplicate row that the run itself still writes.
+        headers[RUN_ID_HEADER] = run_id
+        return MCPClient(url=self.mcp_url, headers=headers)
 
     def _agent(self, tools: list[Any], stream: EventStream, started: float) -> Any:
         hooks = [_TraceHooks(self, stream, started)]

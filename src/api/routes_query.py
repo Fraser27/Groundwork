@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.api.deps import ServicesDep, TenantDep, drain_blocked
 from src.query.resolver import QueryBlocked, Tier
-from src.query_audit import event_for
+from src.query_audit import event_for, event_for_composed
 
 router = APIRouter(tags=["query"])
 
@@ -151,6 +151,17 @@ async def compose_query(
         allow_synthesis=body.synthesise,
     )
     drain_blocked(services, ctx.tenant_id, planner.blocked)
+
+    # Recorded for the same reason `/query` is: a read that leaves no trace cannot answer what we
+    # told the client and on what basis. This route answered questions for weeks without a row.
+    recorded = services.record_question(
+        event_for_composed(ctx.tenant_id, ctx.user_id, body.query, answer)
+    )
     out = answer.to_dict()
     out["min_confidence"] = settings.min_confidence_floor
+    if not recorded:
+        out["warnings"] = [
+            *out["warnings"],
+            "This question was answered but not recorded in the audit trail.",
+        ]
     return out

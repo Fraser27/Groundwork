@@ -24,6 +24,7 @@ guesses, and letting an agent opt into them is how a guess reaches a client as a
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -32,8 +33,8 @@ from pydantic import Field
 
 from src.api.deps import (
     Services,
-    connect_graph,
     build_services,
+    connect_graph,
     drain_blocked,
     get_services,
     set_services,
@@ -43,9 +44,10 @@ from src.config import LexGraphConfig
 from src.documents.review import AssertionNotFound
 from src.graph.assertions import EpistemicClass, ReviewState
 from src.graph.scope import AuthContext, ScopeViolation
-from src.mcp.auth import principal_from_context
+from src.mcp.auth import principal_from_context, run_id_from_context
 from src.query.rendering import UnknownFormat, render, validate_format
 from src.query.resolver import QueryBlocked, Resolution, Tier
+from src.query_audit import SURFACE_MCP, event_for, event_for_composed
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +193,11 @@ async def ask(
         resolution.tier.name,
         len(resolution.assertions_used),
     )
+    _record(
+        services,
+        ctx,
+        event_for(auth_ctx.tenant_id, auth_ctx.user_id, question, resolution),
+    )
     return _formatted(_resolution_out(resolution), response_format)
 
 
@@ -297,11 +304,29 @@ async def compose(
         ",".join(lane.value for lane in answer.lanes_run),
         len(answer.blocks),
     )
+    _record(
+        services,
+        ctx,
+        event_for_composed(auth_ctx.tenant_id, auth_ctx.user_id, question, answer),
+    )
     out = answer.to_dict()
     # The floor actually applied, matching the REST route. An agent reading a confidence needs
     # to know what it was compared against.
     out["min_confidence"] = settings.min_confidence_floor
     return _formatted(out, response_format)
+
+
+def _record(services: Services, ctx: Context, event: Any) -> None:
+    """Log the question, unless a retrieval run is already logging it.
+
+    Our own agent calls `compose` up to three times per run and records one row for the run, so
+    recording here as well would turn one question into four. A third-party agent sends no run
+    header and is recorded per call, which is the honest shape for a caller whose reasoning we
+    cannot see.
+    """
+    if run_id_from_context(ctx):
+        return
+    services.record_question(replace(event, surface=SURFACE_MCP))
 
 
 def _formatted(answer: dict[str, Any], response_format: str) -> dict[str, Any]:

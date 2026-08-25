@@ -15,9 +15,23 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import Context
 
+from src.agent.events import RUN_ID_HEADER
 from src.api.deps import Services
 from src.auth import Grants, bearer_from_header
 from src.graph.scope import AuthContext
+
+
+def run_id_from_context(ctx: Context) -> str | None:
+    """The retrieval run this call belongs to, if it says it belongs to one.
+
+    Only ever used to avoid writing a second audit row for a call a run already records. Never an
+    identity and never a grant: unlike the bearer token this is unverified, and the most a forged
+    value can achieve is suppressing a duplicate.
+    """
+    request = ctx.request_context.request
+    if request is None:
+        return None
+    return request.headers.get(RUN_ID_HEADER) or None
 
 
 def bearer_from_context(ctx: Context) -> str | None:
