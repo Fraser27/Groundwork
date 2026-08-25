@@ -23,6 +23,7 @@ import DocumentViewer from '../components/DocumentViewer'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
 import QueryTrace from '../components/QueryTrace'
+import RunFlow from '../components/RunFlow'
 import { EmptyState, ErrorState, Spinner } from '../components/Shared'
 import { lanesFromComposed } from '../trace'
 import { useProvenance } from '../useProvenance'
@@ -110,8 +111,8 @@ export default function Retrieval() {
       </div>
 
       <div className="card">
-        <div className="form-row" style={{ alignItems: 'flex-end' }}>
-          <div className="form-group" style={{ flex: 1 }}>
+        <div className="retrieval-composer">
+          <div className="form-group">
             <label>Question</label>
             <input
               value={question}
@@ -156,7 +157,7 @@ export default function Retrieval() {
 
       {error && <ErrorState title="The agent could not run" detail={error} onRetry={run} />}
 
-      <div className="retrieval-layout">
+      <div className={`retrieval-layout${provenance ? '' : ' retrieval-layout-solo'}`}>
         <div className="retrieval-transcript">
           {events.length === 0 && !running && !error && (
             <EmptyState title="No run yet">
@@ -164,6 +165,18 @@ export default function Retrieval() {
               returned.
             </EmptyState>
           )}
+
+          <RunFlow
+            events={events}
+            onSelect={(seq) => {
+              // The node stands for a `tool_call`; the row that expands is keyed on it, so
+              // selecting a node opens the turn it names rather than scrolling near it.
+              setExpanded((prev) => new Set(prev).add(seq))
+              document
+                .querySelector(`[data-turn-seq="${seq}"]`)
+                ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }}
+          />
 
           {started && (
             <div className="card">
@@ -199,6 +212,7 @@ export default function Retrieval() {
               return (
                 <div
                   key={event.seq}
+                  data-turn-seq={event.seq}
                   className={`retrieval-turn${event.is_error ? ' retrieval-turn-error' : ''}`}
                 >
                   <button
@@ -275,25 +289,16 @@ export default function Retrieval() {
           )}
         </div>
 
-        <div className="retrieval-rail">
-          {provenance ? (
+        {provenance && (
+          <div className="retrieval-rail">
             <ProvenancePanel
               provenance={provenance}
               onClose={() => setSelected(null)}
               onSelectAssertion={setSelected}
               compact
             />
-          ) : (
-            <div className="card">
-              <div className="card-header">
-                <h3>Provenance</h3>
-              </div>
-              <p className="hint" style={{ margin: 0 }}>
-                Open a tool result and select a fact to see the page and quote behind it.
-              </p>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {passage && (

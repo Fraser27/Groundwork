@@ -43,6 +43,7 @@ from src.documents.review import AssertionNotFound
 from src.graph.assertions import EpistemicClass, ReviewState
 from src.graph.scope import AuthContext, ScopeViolation
 from src.mcp.auth import principal_from_context
+from src.query.rendering import UnknownFormat, render, validate_format
 from src.query.resolver import QueryBlocked, Resolution, Tier
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,12 @@ answer it could give. It runs every permitted lane and keeps them apart, so trus
 per part rather than once for the whole result, and it reports which lanes did not run and
 why. `ask` is the better call for a question a governed metric answers, because a metric is
 exact and fanning out adds nothing.
+
+Both take `response_format`. Leave it at `data` when you are reading the result yourself.
+Ask for `markdown` or `table` when you are passing the answer to a person, and you get a
+rendered string *alongside* the structured answer rather than instead of it: it is built from
+the same fields with no model, and it always carries the trust label, the blocks and the lanes
+that did not run.
 
 Authorization is the user's, not yours. You see exactly what the person whose token you
 are carrying sees — same firm, same ethical screens. If a question returns nothing, that may
@@ -111,7 +118,9 @@ def _principal(ctx: Context) -> tuple[Services, AuthContext]:
     return services, auth_ctx
 
 
-async def ask(ctx: Context, question: str, execute: bool = False) -> dict[str, Any]:
+async def ask(
+    ctx: Context, question: str, execute: bool = False, response_format: str = "data"
+) -> dict[str, Any]:
     """Answer a question through the governed resolver, and report how it was answered.
 
     TRUST: varies, and the result says how. `tier_name` is GOVERNED_METRIC (SQL compiled from
@@ -128,6 +137,9 @@ async def ask(ctx: Context, question: str, execute: bool = False) -> dict[str, A
         question: A question in ordinary language.
         execute: Run the query. False returns the SQL for review without running it, which
             is the point of a governed metric — a person can read what it will do first.
+        response_format: `data` (default) returns the structured answer alone. `markdown` and
+            `table` add a `formatted` string you can show a person as-is, built from the same
+            data with no model involved. The structured answer is always present.
     """
     services, auth_ctx = _principal(ctx)
     settings = services.settings_for(auth_ctx.tenant_id)
@@ -149,7 +161,7 @@ async def ask(ctx: Context, question: str, execute: bool = False) -> dict[str, A
         resolution.tier.name,
         len(resolution.assertions_used),
     )
-    return _resolution_out(resolution)
+    return _formatted(_resolution_out(resolution), response_format)
 
 
 def _resolution_out(resolution: Resolution) -> dict[str, Any]:
@@ -161,7 +173,11 @@ def _resolution_out(resolution: Resolution) -> dict[str, Any]:
 
 
 async def compose(
-    ctx: Context, question: str, execute: bool = True, synthesise: bool = False
+    ctx: Context,
+    question: str,
+    execute: bool = True,
+    synthesise: bool = False,
+    response_format: str = "data",
 ) -> dict[str, Any]:
     """Answer from every permitted lane at once, keeping their results apart.
 
@@ -194,6 +210,11 @@ async def compose(
             for the web UI, deliberately: you are the writer, and prose you then write over
             would be a second ungoverned layer with nobody able to say which of you added a
             claim. Turn it on only if you are relaying a summary verbatim.
+        response_format: `data` (default) returns the structured answer alone. `markdown` and
+            `table` add a `formatted` string you can show a person as-is. The structured answer
+            is always present either way -- the rendering is built from it deterministically,
+            with no model, and always carries the governance label, the blocks and the lanes
+            that did not run.
     """
     services, auth_ctx = _principal(ctx)
     settings = services.settings_for(auth_ctx.tenant_id)
@@ -221,7 +242,25 @@ async def compose(
     # The floor actually applied, matching the REST route. An agent reading a confidence needs
     # to know what it was compared against.
     out["min_confidence"] = settings.min_confidence_floor
-    return out
+    return _formatted(out, response_format)
+
+
+def _formatted(answer: dict[str, Any], response_format: str) -> dict[str, Any]:
+    """Add a rendered string, keeping the structured answer intact.
+
+    Additive on purpose. Returning prose *instead of* the data would let a client show a
+    governance label with none of the parts behind it, and the whole reason these tools are
+    verbose is that a caller can check what it is repeating.
+    """
+    try:
+        fmt = validate_format(response_format)
+    except UnknownFormat as e:
+        raise ToolError(str(e)) from e
+    rendered = render(answer, fmt)
+    if rendered is not None:
+        answer["formatted"] = rendered
+        answer["format"] = fmt
+    return answer
 
 
 async def list_metrics(ctx: Context) -> dict[str, Any]:

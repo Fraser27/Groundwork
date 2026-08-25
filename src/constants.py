@@ -61,6 +61,45 @@ MAX_CONCURRENT_INGESTS = 4
 DEFAULT_EXTRACTION_MODEL = "global.anthropic.claude-sonnet-5"
 DEFAULT_SYNTHESIS_MODEL = "global.anthropic.claude-sonnet-5"
 
+#: Text models an administrator may choose between, with what the trade-off is.
+#:
+#: A list rather than a live `ListInferenceProfiles` call: that returns everything the account can
+#: reach, including vision-only and embedding models, and a dropdown offering a model that cannot
+#: do the job is worse than a short list. Each id is a **global** inference profile verified
+#: present in the deployment account -- a region-pinned id fails wherever the task is not, and
+#: that failure reads as the model refusing the request rather than as a configuration mistake.
+#:
+#: `note` exists because "cheaper" is usually the reason to change this, and offering the choice
+#: without saying what it costs in quality asks for a decision nobody can make.
+SELECTABLE_MODELS: tuple[tuple[str, str, str], ...] = (
+    (
+        "global.anthropic.claude-sonnet-5",
+        "Claude Sonnet 5",
+        "Most capable. The default for extraction, synthesis and the retrieval agent.",
+    ),
+    (
+        "global.anthropic.claude-sonnet-4-6",
+        "Claude Sonnet 4.6",
+        "Close to Sonnet 5 and usually cheaper.",
+    ),
+    (
+        "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "Claude Haiku 4.5",
+        (
+            "Fast and much cheaper. Good for transcription and straightforward extraction, "
+            "weaker at judging what a passage means."
+        ),
+    ),
+    (
+        "global.amazon.nova-2-lite-v1:0",
+        "Amazon Nova 2 Lite",
+        (
+            "Cheapest here. Worth testing for the retrieval agent, but watch the transcript: "
+            "a small model calls tools with wrong arguments more often."
+        ),
+    ),
+)
+
 #: Cap on rows returned from a structured query. A governed metric that would
 #: return more is answered with an aggregate, not a truncated table.
 MAX_QUERY_ROWS = 500

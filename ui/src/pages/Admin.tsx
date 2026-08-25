@@ -29,6 +29,11 @@ const RESET_OPTIONS: { key: keyof ResetScope; label: string; rebuild: string }[]
   { key: 'metrics', label: 'Metric definitions', rebuild: 'Nothing rebuilds these' },
 ]
 
+/** What choosing this model costs, as the server described it. Empty when it says nothing. */
+function modelNote(settings: TenantSettings, modelId?: string): string {
+  return settings.available_models.find((m) => m.id === modelId)?.note ?? ''
+}
+
 export default function Admin() {
   const tenant = getTenantId()
   const [settings, setSettings] = useState<TenantSettings | null>(null)
@@ -704,6 +709,7 @@ export default function Admin() {
                 </option>
               ))}
             </select>
+            <p className="hint">{modelNote(settings, settings.extraction_model)}</p>
           </div>
           <div className="form-group">
             <label>
@@ -722,6 +728,30 @@ export default function Admin() {
                 </option>
               ))}
             </select>
+            <p className="hint">{modelNote(settings, settings.synthesis_model)}</p>
+          </div>
+          <div className="form-group">
+            <label>
+              Retrieval agent
+              <FieldHelp text="Drives the Retrieval page's tool-calling loop: it decides which of this system's tools to call and in what order, then writes the answer over what they returned. Separate from the query model on purpose, so paying for a stronger model to write a query does not also change what drives the loop. A cheaper model here is worth trying, and the transcript shows you when it calls a tool badly." />
+            </label>
+            <select
+              value={settings.retrieval_agent_model ?? ''}
+              onChange={(e) =>
+                patch(
+                  'agent',
+                  { retrieval_agent_model: e.target.value },
+                  'Retrieval agent model updated',
+                )
+              }
+            >
+              {settings.available_models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <p className="hint">{modelNote(settings, settings.retrieval_agent_model)}</p>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>

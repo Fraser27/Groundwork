@@ -1200,8 +1200,11 @@ export interface TenantSettings {
   allowed_tiers?: number[]
   extraction_model: string
   synthesis_model: string
+  /** Drives the Retrieval agent's loop. Separate from the query model, deliberately. */
+  retrieval_agent_model?: string
   embedding_model: string
-  available_models: { id: string; label: string }[]
+  /** `note` says what choosing this model trades away, since cheaper is usually the reason. */
+  available_models: { id: string; label: string; note?: string }[]
   available_domains: string[]
   /**
    * What this tenant's pack calls the unit work is organised by: Matter for law, Encounter for

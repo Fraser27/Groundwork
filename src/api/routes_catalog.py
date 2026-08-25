@@ -23,6 +23,7 @@ from src.api.deps import (
     require_admin,
     scope_violation_to_http,
 )
+from src.constants import SELECTABLE_MODELS
 from src.discovery.catalog_store import CatalogTable
 from src.discovery.glue_scanner import scan_catalog
 from src.graph.assertions import EpistemicClass, ReviewState
@@ -450,11 +451,9 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
         "allowed_tiers": sorted(settings.allowed_tiers),
         "extraction_model": settings.extraction_model or models.extraction_model,
         "synthesis_model": models.synthesis_model,
+        "retrieval_agent_model": settings.retrieval_agent_model,
         "embedding_model": services.config.vector.embedding_model,
-        "available_models": [
-            {"id": m, "label": m.split(".")[-1]}
-            for m in sorted({models.extraction_model, models.synthesis_model})
-        ],
+        "available_models": _selectable_models(settings, models),
         "available_domains": available_ontology_domains(),
         # What this tenant's pack calls the unit work is organised by: Matter for law, Encounter
         # for care, Facility for lending. Sent so the nav, page titles and filter labels follow the
@@ -462,6 +461,37 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
         # would touch Cedar, a Cognito group and a Neptune constraint to change a caption.
         "unit_label": _unit_label(services, ctx.tenant_id),
     }
+
+
+def _selectable_models(settings: Any, models: Any) -> list[dict[str, str]]:
+    """The models Admin may choose between, plus whatever this tenant already runs.
+
+    The union matters. `available_models` used to be derived from the two configured models, so
+    the dropdown could only ever offer what was already set -- there was no way to pick a cheaper
+    one. But a model set by environment and absent from the curated list must still appear, or
+    opening the page and saving would silently move the tenant onto a different model than the one
+    that has been running.
+    """
+    known = {model_id for model_id, _, _ in SELECTABLE_MODELS}
+    out = [
+        {"id": model_id, "label": label, "note": note}
+        for model_id, label, note in SELECTABLE_MODELS
+    ]
+    configured = {
+        settings.extraction_model,
+        settings.retrieval_agent_model,
+        models.extraction_model,
+        models.synthesis_model,
+    }
+    for model_id in sorted(m for m in configured if m and m not in known):
+        out.append(
+            {
+                "id": model_id,
+                "label": model_id.split(".")[-1],
+                "note": "Configured for this deployment.",
+            }
+        )
+    return out
 
 
 def _unit_label(services: Any, tenant_id: str) -> dict[str, str]:

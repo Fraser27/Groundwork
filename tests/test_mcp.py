@@ -278,6 +278,34 @@ class TestCompose:
         ids = [i for part in body["parts"] for i in part["assertion_ids"]]
         assert ids == []
 
+    def test_a_rendered_answer_keeps_the_structured_one(self):
+        """Additive, never a substitution. Returning prose instead of the data would let a client
+        show a governance label with none of the parts behind it."""
+        body = _call(
+            TOKEN_A,
+            "compose",
+            {"question": "show me fees billed by month", "response_format": "markdown"},
+        ).structuredContent
+
+        assert "governed" in body["formatted"]
+        assert body["format"] == "markdown"
+        # Everything a `data` caller relies on is still here.
+        for field in ("parts", "lanes_run", "lanes_skipped", "governance", "min_confidence"):
+            assert field in body, field
+
+    def test_the_default_adds_no_rendering(self):
+        """So an existing client sees a byte-identical response."""
+        body = _call(TOKEN_A, "compose", {"question": "show me fees billed by month"}).structuredContent
+        assert "formatted" not in body
+        assert "format" not in body
+
+    def test_an_unsupported_format_is_refused_rather_than_ignored(self):
+        """Silently returning `data` for a format the caller asked for would make the caller
+        think it had prose to show."""
+        result = _call(TOKEN_A, "compose", {"question": "x", "response_format": "yaml"})
+        assert result.isError
+        assert "response_format must be one of" in _text(result)
+
 
 class TestAsk:
     def test_reports_the_tier_that_answered(self):

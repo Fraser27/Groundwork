@@ -2378,12 +2378,25 @@ code, pre { font-family: var(--mono); }
 
 /* Retrieval. The transcript is the feature, so a turn is a row that opens rather than a
    diagnostic tucked behind a toggle. */
+/* One field and two buttons, which `.form-row` is the wrong container for: it is a 1fr 1fr grid
+   built for two equal fields, so the button took half the card. */
+.retrieval-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.retrieval-composer .form-group { flex: 1; min-width: 0; margin-bottom: 0; }
+.retrieval-composer .btn { flex-shrink: 0; }
+
 .retrieval-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
   gap: 16px;
   align-items: start;
 }
+/* Until a fact is selected there is nothing to put in the rail, and a column held open by a
+   placeholder is 380px of nothing next to the thing the page is actually for. */
+.retrieval-layout-solo { grid-template-columns: minmax(0, 1fr); }
 .retrieval-transcript { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .retrieval-rail { position: sticky; top: 16px; }
 
@@ -2456,4 +2469,20 @@ code, pre { font-family: var(--mono); }
 @media (max-width: 1100px) {
   .retrieval-layout { grid-template-columns: 1fr; }
   .retrieval-rail { position: static; }
+}
+
+/* The run flow. Scrolls horizontally rather than wrapping: a run is a sequence, and a wrapped
+   sequence reads as two branches. */
+.runflow-card { padding-bottom: 8px; }
+.runflow-scroll { overflow-x: auto; margin: 0 -2px; }
+.runflow-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--text);
+}
+.runflow-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  fill: var(--text-dim);
 }
