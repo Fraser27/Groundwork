@@ -627,6 +627,9 @@ code, pre { font-family: var(--mono); }
   box-shadow: var(--shadow-lg);
 }
 .modal-wide { width: 860px; }
+/* Wider and taller than `modal-wide`, because the whole reason this one exists is that the
+   evidence chain does not fit inside a turn. */
+.modal-trace { width: 1120px; max-height: 92vh; }
 .modal h3 { font-size: 16px; margin-bottom: 4px; }
 .modal .modal-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 18px; }
 
@@ -2465,6 +2468,7 @@ code, pre { font-family: var(--mono); }
   flex-direction: column;
   gap: 10px;
 }
+.retrieval-turn-actions { display: flex; justify-content: flex-end; margin-bottom: -4px; }
 
 @media (max-width: 1100px) {
   .retrieval-layout { grid-template-columns: 1fr; }
