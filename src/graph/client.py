@@ -45,6 +45,36 @@ _SIGNED_PATH = "/opencypher"
 #: handshake uses a freshly signed token instead of replaying an expired one.
 NEPTUNE_MAX_CONNECTION_LIFETIME_SECONDS = 180
 
+#: One retry for a read the server killed. Two attempts, not five: a read that fails twice is not a
+#: blip, and a page that hangs retrying is worse than one that reports the failure.
+_READ_ATTEMPTS = 2
+_READ_RETRY_DELAY_SECONDS = 0.4
+
+#: Server-side terminations worth retrying. Matched on the message because Neptune reports both as
+#: `DatabaseError` with `BoltProtocol.unexpectedException`, so the class alone cannot tell an
+#: out-of-memory kill from a genuine server fault.
+_TRANSIENT_MARKERS = (
+    "out of memory",
+    "operation terminated",
+    "defunct connection",
+    "failed to read from",
+    "connection reset",
+)
+
+
+def _is_transient(error: Exception) -> bool:
+    """Whether a failed read is worth attempting again.
+
+    A `ClientError` never is: a malformed query or a missing parameter fails identically the second
+    time, and retrying it doubles the latency of every genuine mistake.
+    """
+    from neo4j.exceptions import ClientError
+
+    if isinstance(error, ClientError):
+        return False
+    message = str(error).lower()
+    return any(marker in message for marker in _TRANSIENT_MARKERS)
+
 
 def neptune_auth(uri: str, region: str) -> Auth:
     """A SigV4-signed Bolt auth token for Neptune.
@@ -143,8 +173,32 @@ class GraphClient:
 
     def query(self, cypher: str, params: dict | None = None) -> list[dict]:
         """Unscoped read. Admin/catalog use only, never for tenant graph data."""
-        with self._driver.session() as session:
-            return [r.data() for r in session.run(cypher, params or {})]
+        return self._read(cypher, params or {})
+
+    def _read(self, cypher: str, params: dict[str, Any]) -> list[dict]:
+        """Run a read, retrying once when the server failed rather than the query.
+
+        `db.t4g.medium` runs with a few hundred MB freeable, so a concurrent read can be killed
+        with "Operation terminated (out of memory)" while the same query succeeds immediately
+        afterwards. That reached the reviewer as a red banner on a queue holding 95 rows.
+
+        Retried only for a server-side termination. A `ClientError` is a bad query and would fail
+        identically the second time, and retrying a write is not safe to assume, which is why this
+        is on the read path alone.
+        """
+        last: Exception | None = None
+        for attempt in range(_READ_ATTEMPTS):
+            try:
+                with self._driver.session() as session:
+                    return [r.data() for r in session.run(cypher, params)]
+            except Exception as e:
+                if not _is_transient(e):
+                    raise
+                last = e
+                if attempt < _READ_ATTEMPTS - 1:
+                    logger.warning("graph read failed transiently, retrying: %s", e)
+                    time.sleep(_READ_RETRY_DELAY_SECONDS * (attempt + 1))
+        raise last if last else RuntimeError("graph read failed")
 
     def read_scoped(
         self, cypher_template: str, scope: ScopedQuery, params: dict[str, Any] | None = None
@@ -161,8 +215,7 @@ class GraphClient:
             )
         cypher = cypher_template.replace("{scope}", scope.where)
         merged = {**scope.params, **(params or {})}
-        with self._driver.session() as session:
-            return [r.data() for r in session.run(cypher, merged)]
+        return self._read(cypher, merged)
 
     def write(self, cypher: str, params: dict | None = None) -> None:
         with self._driver.session() as session:

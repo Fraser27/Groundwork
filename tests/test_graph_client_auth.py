@@ -154,3 +154,107 @@ class TestAuthManagerRefresh:
         from src.graph.client import _NeptuneAuthManager
 
         assert _NeptuneAuthManager(URI, "us-east-1")._lifetime <= 120
+
+
+class TestATransientReadIsRetried:
+    """`db.t4g.medium` runs with a few hundred MB freeable, so a concurrent read can be killed with
+    "Operation terminated (out of memory)" and succeed immediately afterwards. That reached a
+    reviewer as a red banner on a queue holding 95 rows, which is not a volume problem."""
+
+    def client(self, sessions):
+        """A `GraphClient` with the driver replaced. No network, per the injectable-boto3 rule."""
+        from src.graph.client import GraphClient
+
+        obj = GraphClient.__new__(GraphClient)
+        obj._driver = _FakeDriver(sessions)
+        return obj
+
+    def test_an_out_of_memory_read_is_retried_and_succeeds(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        from neo4j.exceptions import DatabaseError
+
+        oom = DatabaseError("Unexpected server exception 'Operation terminated (out of memory)'")
+        client = self.client([oom, [{"a": 1}]])
+        assert client.query("MATCH (n) RETURN n") == [{"a": 1}]
+
+    def test_a_defunct_connection_is_retried(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        client = self.client([OSError("Failed to read from defunct connection"), [{"a": 2}]])
+        assert client.query("MATCH (n) RETURN n") == [{"a": 2}]
+
+    def test_a_bad_query_is_not_retried(self):
+        """A `ClientError` fails identically the second time, so retrying it only doubles the
+        latency of every genuine mistake."""
+        from neo4j.exceptions import ClientError
+
+        driver = _FakeDriver([ClientError("Variable `x` not defined"), [{"a": 3}]])
+        client = self.client([])
+        client._driver = driver
+        with pytest.raises(ClientError):
+            client.query("RETURN x")
+        assert driver.attempts == 1
+
+    def test_it_gives_up_rather_than_hanging(self, monkeypatch):
+        """Two attempts, not five. A read that fails twice is not a blip, and a page that hangs
+        retrying is worse than one that reports the failure."""
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        from neo4j.exceptions import DatabaseError
+
+        from src.graph.client import _READ_ATTEMPTS
+
+        oom = DatabaseError("Operation terminated (out of memory)")
+        driver = _FakeDriver([oom, oom, [{"a": 4}]])
+        client = self.client([])
+        client._driver = driver
+        with pytest.raises(DatabaseError):
+            client.query("MATCH (n) RETURN n")
+        assert driver.attempts == _READ_ATTEMPTS == 2
+
+    def test_a_scoped_read_gets_the_same_protection(self, monkeypatch):
+        """The review queue reads through `read_scoped`, so a retry on `query` alone would have
+        left the failure that started this untouched."""
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        from neo4j.exceptions import DatabaseError
+
+        from src.graph.scope import ScopedQuery
+
+        client = self.client([DatabaseError("Operation terminated (out of memory)"), [{"a": 5}]])
+        scope = ScopedQuery(where="a.tenant_id = $scope_tenant", params={"scope_tenant": "t"})
+        assert client.read_scoped("MATCH (a) WHERE {scope} RETURN a", scope) == [{"a": 5}]
+
+
+class _FakeSession:
+    def __init__(self, outcome):
+        self._outcome = outcome
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def run(self, _cypher, _params=None):
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return [_FakeRecord(row) for row in self._outcome]
+
+
+class _FakeRecord:
+    def __init__(self, data):
+        self._data = data
+
+    def data(self):
+        return self._data
+
+
+class _FakeDriver:
+    """Yields each scripted outcome in turn, counting attempts."""
+
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+        self.attempts = 0
+
+    def session(self):
+        outcome = self._outcomes[min(self.attempts, len(self._outcomes) - 1)]
+        self.attempts += 1
+        return _FakeSession(outcome)

@@ -1941,7 +1941,52 @@ code, pre { font-family: var(--mono); }
 }
 .detail-field .value { font-size: 13px; word-break: break-word; }
 
-.admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; align-items: start; }
+/* Cards in a row share a height, and a card whose content is taller scrolls inside itself.
+   `align-items: start` sized each card to its own content, so a row of three settings cards came
+   out three different heights and the grid read as broken rather than dense. `stretch` is the
+   default, so this is a removal: the cap and the inner scroll are what is added. */
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 16px;
+}
+.admin-grid > .card {
+  display: flex;
+  flex-direction: column;
+  /* Tall enough for the longest card that is worth showing whole, short enough that a row does
+     not become a wall. Past this the card scrolls rather than stretching its neighbours. */
+  max-height: 420px;
+  overflow-y: auto;
+  /* Thin and inset, so the track sits inside the rounded corner instead of being drawn over the
+     border, which made a scrollable card read as a clipped one. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.admin-grid > .card::-webkit-scrollbar { width: 8px; }
+.admin-grid > .card::-webkit-scrollbar-track { background: transparent; }
+.admin-grid > .card::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+  /* Keeps the thumb clear of the card edge without needing a gutter on every card, scrolling or
+     not: a reserved gutter shifted the content of short cards and broke column alignment. */
+  border: 2px solid var(--bg-card);
+  background-clip: padding-box;
+}
+/* A sticky header, so scrolling a long card does not lose the name of the thing being changed.
+   The negative margins and matching padding widen the opaque strip to the card's full width:
+   without them, content scrolls visibly through the 18px of padding either side of the header. */
+.admin-grid > .card > .card-header {
+  position: sticky;
+  top: -18px;
+  margin: -18px -18px 12px;
+  padding: 18px 18px 10px;
+  background: var(--bg-card);
+  z-index: 1;
+  /* No rule under the header. It would show on every card whether or not it scrolls, and only the
+     scrolling ones need one; drawing it always trades a real inconsistency for a cosmetic one.
+     The opaque background is what keeps content from showing through while scrolling, and that is
+     the part that matters. */
+}
 
 .loading, .empty-state {
   text-align: center;
