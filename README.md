@@ -252,48 +252,38 @@ That is the whole list. Every default is Nova 2 Lite precisely so a workshop acc
 needs no Anthropic access; if you want stronger extraction, enable Claude Sonnet as well
 and change it per tenant in **Admin**.
 
-### 3. Resolve your availability zones
-
-**Do this second, and do not skip it.** AZ *names* are shuffled per account, so
-`us-east-1a` is a different physical zone in your account than in anyone else's.
-AgentCore Runtime supports only three zones in `us-east-1`, and putting a subnet in the
-wrong one fails `LexGraphMcp` with an error that names the *subnet* rather than the zone.
-
-```bash
-aws ec2 describe-availability-zones \
-  --query 'AvailabilityZones[].[ZoneName,ZoneId]' --output text
-```
-
-Pick the two names whose IDs are among `use1-az1`, `use1-az2`, `use1-az4`, and set them
-in `cdk/cdk.json`:
-
-```json
-"availabilityZones": ["us-east-1a", "us-east-1b"]
-```
-
-### 4. Bootstrap and deploy
+### 3. Deploy
 
 ```bash
 git clone https://github.com/Fraser27/Groundwork.git && cd Groundwork
-make setup                                  # venv, dependencies, CDK node modules
-cd cdk && npx cdk bootstrap aws://<account-id>/us-east-1
-npx cdk deploy --all                        # 25-30 min, most of it Neptune
+make setup                    # venv, dependencies, CDK node modules
+./scripts/deploy.sh           # or: ./scripts/deploy.sh eu-west-1
 ```
 
-### 5. Close the login loop
+Non-interactive, and takes 25-30 minutes, most of it Neptune creating itself. It does
+everything that was previously three manual steps:
 
-There is one genuinely circular requirement: the Cognito hosted UI needs the CloudFront
-domain as a callback URL, and CloudFront does not exist until the first deploy. So it is
-two passes, deliberately, rather than a custom resource whose failure mode is a
-half-configured login page.
+- **Resolves your availability zones.** AZ *names* are shuffled per account, so
+  `us-east-1a` is a different physical zone in your account than in anyone else's.
+  AgentCore Runtime supports only a subset, and a subnet in the wrong one fails
+  `LexGraphMcp` with an error that names the *subnet* rather than the zone. The script
+  maps the supported zone IDs to your account's names and writes them to `cdk.json`.
+- **Bootstraps and deploys** all six stacks.
+- **Closes the circular callback requirement.** The Cognito hosted UI needs the
+  CloudFront domain as a callback URL, and CloudFront does not exist until the first
+  deploy. The script reads the URL from the stack output, sets `webOrigin`, and
+  redeploys the two stacks that consume it: `LexGraphAuth` for the callback and
+  `LexGraphData` for the S3 CORS rule that lets a browser upload straight to the bucket.
+  Deploying only Auth leaves uploads failing CORS, which looks like a broken button.
 
-```bash
-# take the LexGraphWeb.WebUrl output from the deploy, then:
-#   cdk/cdk.json -> "webOrigin": "https://dxxxxx.cloudfront.net"
-npx cdk deploy LexGraphAuth
-```
+It also refuses to start if Bedrock access is missing, by invoking both models for real
+rather than asking whether they exist in the region. Those are different questions, and
+only the first one predicts whether a document upload will work.
 
-### 6. Create the first user
+Everything it changes is `cdk.json` context, so re-running is safe and `cdk diff` shows
+what a change would actually do.
+
+### 4. Create the first user
 
 No user exists yet, and the tenant a user belongs to is fixed at creation.
 
@@ -313,7 +303,7 @@ aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL" \
 Cognito emails a temporary password. `demo-firm` is the home tenant, whose admins may
 create and delete other tenants; change it with `homeTenant` in `cdk.json`.
 
-### 7. Check it came up
+### 5. Check it came up
 
 ```bash
 curl -s https://dxxxxx.cloudfront.net/api/health

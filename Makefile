@@ -1,4 +1,4 @@
-.PHONY: help setup test lint fmt run up down logs synth diff deploy destroy clean
+.PHONY: help setup test lint fmt run up down logs synth diff deploy install destroy clean
 
 VENV := .venv
 PY := $(VENV)/bin/python
@@ -54,6 +54,9 @@ diff: ## Show what a deploy would change
 
 deploy: ## Deploy everything. Read cdk/README.md first — this bills continuously.
 	cd $(CDK_DIR) && npx cdk deploy --all
+
+install: ## First deploy into a fresh account, non-interactive. REGION=eu-west-1 to override.
+	./scripts/deploy.sh
 
 destroy: ## Tear down. The document bucket, its KMS key, and two tables SURVIVE by design.
 	cd $(CDK_DIR) && npx cdk destroy --all
