@@ -1,6 +1,14 @@
-# LexGraph infrastructure
+# Groundwork infrastructure
 
-Six CDK stacks, split by **deploy cadence and blast radius** rather than by feature.
+An operator's reference: what each stack holds, what it costs, what to tune, and what
+survives a teardown.
+
+**Installing is not here.** `../README.md` covers a fresh account, and
+`../scripts/deploy.sh` does it in one non-interactive command, including the two things
+this file used to document as manual steps: resolving availability zones, and the
+two-pass `webOrigin` that closes the circular callback requirement. Duplicating them here
+is how this file came to describe a second pass that redeployed only `LexGraphAuth`,
+leaving the S3 CORS rule unset and browser uploads failing.
 
 | Stack | Holds | Redeployed |
 |---|---|---|
@@ -11,69 +19,33 @@ Six CDK stacks, split by **deploy cadence and blast radius** rather than by feat
 | `LexGraphMcp` | MCP server on Bedrock AgentCore Runtime | often |
 | `LexGraphWeb` | CloudFront + S3 for the React UI | often |
 
-The split is by **deploy cadence and blast radius**, not by feature. `data` is
-separate because Neptune takes ~15 minutes to create and holds the only state that
-cannot be rebuilt; `app` is separate because it is redeployed several times a day
-and a rollback there must not take a CloudFormation lock on the graph.
+The split is by **deploy cadence and blast radius**, not by feature. `data` is separate
+because Neptune takes about 15 minutes to create and holds the only state that cannot be
+rebuilt; `app` is separate because it is redeployed several times a day and a rollback
+there must not take a CloudFormation lock on the graph.
 
-## Prerequisites
-
-- Node 20+, an AWS account, credentials with admin-ish rights for the first deploy
-- Docker running — `app` builds an ARM64 image, and `web` bundles the UI in a container
-- Bedrock model access enabled in the target region for the models in `.env.example`
-- CDK bootstrapped: `npx cdk bootstrap aws://<account>/us-east-1`
-
-## Deploy
+## Everyday commands
 
 ```bash
-cd cdk && npm install
-npx cdk synth --quiet              # all six stacks, no AWS calls
-npx cdk deploy --all               # ~25-30 min, most of it Neptune
+npx cdk synth --quiet    # all six stacks, no AWS calls
+npx cdk diff             # what a deploy would change
+npx cdk deploy --all     # 25-30 min from cold, most of it Neptune
 ```
 
-`synth` and `diff` operate on every stack by default and reject `--all`; `deploy`
-and `destroy` require it. `make synth` / `make deploy` wrap both correctly.
+`synth` and `diff` operate on every stack by default and reject `--all`; `deploy` and
+`destroy` require it. `make synth` and `make deploy` wrap both correctly.
 
-### The two-pass callback URL
+## Availability zones
 
-There is one genuinely circular requirement: the Cognito hosted UI needs the
-CloudFront domain as a callback URL, and CloudFront sits behind the ALB, which needs
-Cognito's issuer. It is broken with context rather than a custom resource:
-
-```bash
-npx cdk deploy --all
-# read the LexGraphWeb.WebUrl output, then:
-#   cdk.json → "webOrigin": "https://dxxxxx.cloudfront.net"
-npx cdk deploy LexGraphAuth
-```
-
-Two passes, but no Lambda whose failure mode is a half-configured login page.
-
-### Availability Zones — read this before touching the network stack
-
-`SUPPORTED_AZ_IDS` in `lib/network-stack.ts` is the intersection of the AZs that
+`SUPPORTED_AZ_IDS` in `lib/network-stack.ts` is the intersection of the zones
 **AgentCore Runtime** supports for VPC connectivity and those the **OpenSearch
-Serverless** data-plane endpoint is offered in. The intersection is smaller than
-either list. In `us-east-1` AgentCore supports only `use1-az1`, `use1-az2` and
-`use1-az4` — put a subnet in `use1-az3` and `LexGraphMcp` fails to create with an
-error naming the *subnet*, not the zone.
+Serverless** data-plane endpoint is offered in. The intersection is smaller than either
+list, and a subnet in the wrong zone fails `LexGraphMcp` with an error naming the
+*subnet* rather than the zone.
 
-Those are AZ **IDs**. AZ *names* are shuffled per account, so `us-east-1a` is a
-different physical zone in your account than in mine. Resolve the mapping once:
-
-```bash
-aws ec2 describe-availability-zones \
-  --query 'AvailabilityZones[].[ZoneName,ZoneId]' --output text
-```
-
-then set the matching names in `cdk.json`:
-
-```json
-"availabilityZones": ["us-east-1a", "us-east-1b"]
-```
-
-Until you do, CDK picks the first two AZs, which works for `network` and `data` and
-is the first thing to check if `mcp` will not deploy.
+`deploy.sh` resolves this per account. Add a region to that map before deploying
+somewhere new: those are zone **IDs**, and AZ *names* are shuffled per account, so
+`us-east-1a` is a different physical zone in every account.
 
 ## Tunable context
 
