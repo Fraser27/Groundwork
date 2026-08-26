@@ -1949,13 +1949,23 @@ code, pre { font-family: var(--mono); }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
   gap: 16px;
+  /* Matches the gap and the margin every sibling card carries. Without it the block after the grid
+     sat flush against it while every other seam on the page had 16px, which is the uneven spacing
+     between sections. */
+  margin-bottom: 16px;
 }
 .admin-grid > .card {
   display: flex;
   flex-direction: column;
-  /* Tall enough for the longest card that is worth showing whole, short enough that a row does
-     not become a wall. Past this the card scrolls rather than stretching its neighbours. */
-  max-height: 420px;
+  /* `.card + .card` adds a top margin for cards stacked down a page. In a grid the gap already
+     does that, so the rule applied to every card except the first: it pushed the second and third
+     of each row down 16px and left them 16px shorter, which is the misalignment that made the row
+     look broken even after the heights were capped. */
+  margin-top: 0;
+  /* Above the tallest card on this page, measured at 640px, so nothing is clipped in practice and
+     the scroll is a backstop for a pack with more entity kinds rather than the normal case. Capped
+     at all because one very long card would otherwise stretch its whole row. */
+  max-height: 660px;
   overflow-y: auto;
   /* Thin and inset, so the track sits inside the rounded corner instead of being drawn over the
      border, which made a scrollable card read as a clipped one. */
