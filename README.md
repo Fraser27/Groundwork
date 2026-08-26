@@ -274,7 +274,7 @@ in `cdk/cdk.json`:
 ### 4. Bootstrap and deploy
 
 ```bash
-git clone https://github.com/Fraser27/lexgraph.git && cd lexgraph
+git clone https://github.com/Fraser27/Groundwork.git && cd Groundwork
 make setup                                  # venv, dependencies, CDK node modules
 cd cdk && npx cdk bootstrap aws://<account-id>/us-east-1
 npx cdk deploy --all                        # 25-30 min, most of it Neptune
