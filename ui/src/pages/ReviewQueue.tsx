@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   api,
   type Assertion,
@@ -59,6 +60,7 @@ export default function ReviewQueue() {
   const [reasoning, setReasoning] = useState(false)
   const [report, setReport] = useState<ReasonerReport | null>(null)
   const [reportError, setReportError] = useState('')
+  const [catalogPending, setCatalogPending] = useState(0)
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
@@ -67,12 +69,13 @@ export default function ReviewQueue() {
 
   useEffect(() => {
     Promise.all([
-      api.listAssertions(tenant, { review_state: 'PENDING', limit: 200 }),
+      api.listAssertionsWithCounts(tenant, { review_state: 'PENDING', limit: 200 }),
       api.listMatters(tenant),
       api.getSettings(tenant),
     ])
       .then(([a, m, s]) => {
-        setPending(a)
+        setPending(a.assertions ?? [])
+        setCatalogPending(a.catalog_pending ?? 0)
         setMatters(m.matters)
         setFloor(s.min_confidence)
         setError('')
@@ -297,6 +300,23 @@ export default function ReviewQueue() {
           detail={error}
           onRetry={retry}
         />
+      )}
+
+      {/* Said rather than silently filtered. These are claims about what a column means, decided by
+          whoever knows the warehouse, and one enrichment run makes enough of them to bury the
+          conclusions this page is for. Hiding them without a word would look like nothing is
+          waiting. */}
+      {catalogPending > 0 && (
+        <div className="banner banner-info">
+          <span>
+            <strong>
+              {catalogPending} catalog {catalogPending === 1 ? 'description' : 'descriptions'} are
+              also waiting.
+            </strong>{' '}
+            They describe tables and columns rather than your documents, so they are reviewed on the
+            table they belong to. <Link to="/tables">Open structured sources</Link>.
+          </span>
+        </div>
       )}
 
       {reportError && (

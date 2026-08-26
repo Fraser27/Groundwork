@@ -1669,6 +1669,8 @@ export const api = {
       min_confidence?: number
       as_of?: string
       limit?: number
+      /** Catalog descriptions are excluded by default; they are reviewed on their own table. */
+      include_catalog?: boolean
     } = {},
   ) =>
     // The endpoint returns {assertions, total, confidence_floor}. Typing it as a bare array
@@ -1677,13 +1679,29 @@ export const api = {
     // 'ALL' becomes an explicitly empty `review_state=`, which is how the API says "every state":
     // it filters only when the parameter is truthy. It has to be sent rather than omitted, because
     // omitting it lets the server apply its PENDING default.
-    request<{ assertions: Assertion[] }>(
+    request<{ assertions: Assertion[]; catalog_pending?: number }>(
       `/tenants/${tenant}/assertions${q({
         ...opts,
         review_state: opts.review_state === 'ALL' ? EMPTY : opts.review_state,
       })}`,
-    ).then(
-      (r) => r.assertions ?? [],
+    ).then((r) => r.assertions ?? []),
+
+  /**
+   * The same read, keeping the envelope.
+   *
+   * `listAssertions` unwraps to the array because almost every caller wants the rows. The review
+   * queue also needs `catalog_pending`, which says how many descriptions are waiting on the Tables
+   * page: filtering them out of the queue and then not saying so would look like nothing is there.
+   */
+  listAssertionsWithCounts: (
+    tenant: string,
+    opts: { review_state?: ReviewState | 'ALL'; limit?: number; include_catalog?: boolean } = {},
+  ) =>
+    request<{ assertions: Assertion[]; total: number; catalog_pending?: number }>(
+      `/tenants/${tenant}/assertions${q({
+        ...opts,
+        review_state: opts.review_state === 'ALL' ? EMPTY : opts.review_state,
+      })}`,
     ),
 
   approveAssertion: (tenant: string, id: string, note?: string) =>

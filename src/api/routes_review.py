@@ -27,6 +27,7 @@ from src.api.deps import (
     require_reviewer,
     scope_violation_to_http,
 )
+from src.discovery.enrichment import is_catalog_claim
 from src.documents.review import AssertionNotFound, ReviewError
 from src.documents.storage import (
     DEFAULT_EXPIRY_SECONDS,
@@ -151,7 +152,9 @@ def _infer_after_review(services: Any, ctx: AuthContext) -> int:
     from src.reasoning.engine import infer_and_stage
 
     try:
-        return infer_and_stage(services.ontology_for(ctx.tenant_id), services.review_queue, ctx).count
+        return infer_and_stage(
+            services.ontology_for(ctx.tenant_id), services.review_queue, ctx
+        ).count
     except Exception as e:  # noqa: BLE001
         logger.warning("inference after approval failed for %s: %s", ctx.tenant_id, e)
         return 0
@@ -194,11 +197,17 @@ async def list_assertions(
     epistemic_class: Annotated[str | None, Query()] = None,
     matter_id: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    include_catalog: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
     """Defaults to PENDING — this endpoint *is* the review queue.
 
     Ordered least-confident-first: the claims most likely to be wrong are the ones
     worth a human's attention first.
+
+    Catalog descriptions are left out unless asked for. They are claims about what a column means,
+    reviewed on the table they describe, and one enrichment run produces enough of them to bury the
+    claims that shape advice. `catalog_pending` still reports the count, so they are filtered rather
+    than hidden, and `include_catalog=true` returns them.
     """
     ctx, _ = principal
     floor = services.settings_for(ctx.tenant_id).min_confidence_floor
@@ -215,12 +224,19 @@ async def list_assertions(
     if matter_id:
         records = [r for r in records if r.assertion.matter_id == matter_id]
 
+    catalog_pending = sum(1 for r in records if is_catalog_claim(r.assertion))
+    if not include_catalog:
+        records = [r for r in records if not is_catalog_claim(r.assertion)]
+
     records.sort(key=lambda r: r.assertion.confidence)
 
     return {
         "assertions": [_to_out(r, floor) for r in records[:limit]],
         "total": len(records),
         "confidence_floor": floor,
+        # Reported whether or not they were returned, so a queue reading zero is not mistaken for a
+        # graph with nothing waiting on it.
+        "catalog_pending": catalog_pending,
     }
 
 

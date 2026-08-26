@@ -32,9 +32,11 @@ from src.discovery.catalog_overlay import (
 )
 from src.discovery.catalog_store import CatalogColumn, CatalogTable
 from src.discovery.enrichment import (
+    CONCERNS_TOPIC,
     DESCRIBED_AS,
     TableEnrichment,
     build_enrichment_assertions,
+    is_catalog_claim,
 )
 from src.discovery.glue_scanner import CatalogNode, column_node_id, table_node_id
 from src.discovery.graph_store import CatalogGraphStore, DescriptionText
@@ -511,3 +513,57 @@ class TestTheRunIsBounded:
         assert have[FULL_NAME] == "T."
         assert have[f"{FULL_NAME}.bal"] == "C."
         assert f"{FULL_NAME}.fac_id" not in have
+
+
+class TestCatalogClaimsStayOutOfTheReviewQueue:
+    """One enrichment run took demo-firm's queue to 21 pending rows, all catalog metadata, with zero
+    real claims left in it. That is verbatim the failure `AUTO_ASSERT_CLASSES` warns about: "a queue
+    nobody can clear gets rubber-stamped, which destroys the guarantee the queue exists to give"."""
+
+    def described(self, predicate=DESCRIBED_AS, table=FULL_NAME, column=None):
+        return build_assertion(
+            tenant_id=TENANT,
+            subject_id=table_node_id(SOURCE, FULL_NAME),
+            predicate=predicate,
+            object_id="description:abc",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:m1",
+            confidence=DESCRIPTIVE_CONFIDENCE,
+            source_locator=SourceLocator(source_id=SOURCE, table=table, column=column),
+        )
+
+    def from_a_document(self, predicate):
+        return build_assertion(
+            tenant_id=TENANT,
+            subject_id="document:d1",
+            predicate=predicate,
+            object_id="topic:shipping",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:m1",
+            confidence=DESCRIPTIVE_CONFIDENCE,
+            source_locator=SourceLocator(document_id="doc-1", page=3, quote="the parties agree"),
+        )
+
+    def test_a_description_is_a_catalog_claim(self):
+        assert is_catalog_claim(self.described())
+        assert is_catalog_claim(self.described(predicate="HAS_SYNONYM"))
+
+    def test_a_topic_tag_on_a_table_is_a_catalog_claim(self):
+        assert is_catalog_claim(self.described(predicate=CONCERNS_TOPIC, column="bal"))
+
+    def test_a_topic_tag_on_a_document_is_not(self):
+        """`CONCERNS_TOPIC` is the pack's general subject-matter tag, so document extraction writes
+        it too. Filtering on the predicate alone hid real claims -- three existing tests went red,
+        which is how this was caught."""
+        assert not is_catalog_claim(self.from_a_document(CONCERNS_TOPIC))
+
+    def test_a_document_claim_is_never_filtered(self):
+        for predicate in ("MENTIONS", "REPRESENTS", "ADVERSE_TO"):
+            assert not is_catalog_claim(self.from_a_document(predicate))
+
+    def test_the_predicate_set_excludes_the_shared_one(self):
+        """Pinned, because adding CONCERNS_TOPIC back here would silently hide document claims."""
+        from src.discovery.enrichment import CATALOG_PREDICATES
+
+        assert CONCERNS_TOPIC not in CATALOG_PREDICATES
+        assert CATALOG_PREDICATES == {DESCRIBED_AS, "HAS_SYNONYM"}

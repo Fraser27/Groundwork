@@ -27,6 +27,7 @@ import re
 import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from src.discovery.glue_scanner import (
     CatalogNode,
@@ -41,6 +42,37 @@ logger = logging.getLogger(__name__)
 DESCRIBED_AS = "DESCRIBED_AS"
 HAS_SYNONYM = "HAS_SYNONYM"
 CONCERNS_TOPIC = "CONCERNS_TOPIC"
+
+#: Claims about a *column*, not about the world. Reviewed on the table they describe rather than in
+#: the main review queue, which is for claims that shape advice.
+#:
+#: Not a matter of taste. One enrichment run over a modest catalog produced 21 pending claims and
+#: took the queue to 100% catalog metadata with zero real claims left in it, which is exactly what
+#: `assertions.AUTO_ASSERT_CLASSES` warns about: "a queue nobody can clear gets rubber-stamped,
+#: which destroys the guarantee the queue exists to give". A lawyer deciding whether a conflict is
+#: real and an engineer deciding what `mtr_stat_cd` means are different jobs, and mixing them costs
+#: the first its attention.
+#:
+#: `CONCERNS_TOPIC` is deliberately absent. Enrichment writes it, but so does document extraction --
+#: it is the pack's general subject-matter tag -- so filtering on the predicate alone would hide a
+#: claim about a document. Catalog rows are identified by predicate *and* by carrying a table in
+#: their source locator; see `is_catalog_claim`.
+CATALOG_PREDICATES = frozenset({DESCRIBED_AS, HAS_SYNONYM})
+
+
+def is_catalog_claim(assertion: Any) -> bool:
+    """Whether this claim is about a catalogued column rather than about the world.
+
+    Two conditions, because neither alone is sufficient. `DESCRIBED_AS` is only ever written about
+    a table or column, but `CONCERNS_TOPIC` is shared with document extraction, so a topic tag
+    counts only when its locator names a table.
+    """
+    predicate = getattr(assertion, "predicate", "")
+    if predicate in CATALOG_PREDICATES:
+        return True
+    locator = getattr(assertion, "source_locator", None)
+    return predicate == CONCERNS_TOPIC and bool(getattr(locator, "table", ""))
+
 
 #: Sits exactly on the retrieval floor (`scope.DEFAULT_MIN_CONFIDENCE`). Deliberate:
 #: an enrichment a human has approved should be usable immediately, so the thing
@@ -219,7 +251,9 @@ def _build_prompt(
     if needs_table:
         asks.append("a one-sentence business description of the table")
     if needs_columns:
-        asks.append(f"a one-sentence description for each of these columns: {', '.join(needs_columns)}")
+        asks.append(
+            f"a one-sentence description for each of these columns: {', '.join(needs_columns)}"
+        )
     asks.append("business synonyms a user might say instead of the table name")
     asks.append("subject-matter topics the table concerns")
 

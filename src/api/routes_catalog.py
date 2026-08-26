@@ -26,7 +26,7 @@ from src.api.deps import (
 )
 from src.constants import SELECTABLE_MODELS
 from src.discovery.catalog_store import CatalogTable
-from src.discovery.enrichment import DESCRIBED_AS, description_node
+from src.discovery.enrichment import DESCRIBED_AS, description_node, is_catalog_claim
 from src.discovery.enrichment_run import (
     MAX_TABLES_PER_RUN,
     STATE_RUNNING,
@@ -112,7 +112,23 @@ async def dashboard(services: ServicesDep, principal: TenantDep) -> dict[str, An
         "tenant_id": ctx.tenant_id,
         "assertions_by_class": {c.value: by_class.get(c.value, 0) for c in EpistemicClass},
         "assertions_by_review_state": {s.value: by_state.get(s.value, 0) for s in ReviewState},
-        "pending_review": by_state.get(ReviewState.PENDING.value, 0),
+        # Excludes catalog descriptions, so the sidebar badge matches what the review queue shows.
+        # A badge reading 39 against a queue holding 0 sends somebody looking for work that is not
+        # there, and the work that is there is on the Tables page.
+        "pending_review": sum(
+            1
+            for r in records
+            if r.is_current
+            and r.assertion.review_state is ReviewState.PENDING
+            and not is_catalog_claim(r.assertion)
+        ),
+        "catalog_pending": sum(
+            1
+            for r in records
+            if r.is_current
+            and r.assertion.review_state is ReviewState.PENDING
+            and is_catalog_claim(r.assertion)
+        ),
         "retracted": sum(1 for r in records if not r.is_current),
         "confidence_floor": settings.min_confidence_floor,
         "ontology_domain": settings.ontology_domain,
