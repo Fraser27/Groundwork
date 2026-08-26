@@ -325,11 +325,24 @@ gotchas. Several resources are `RETAIN`-on-delete by design and keep billing aft
 
 ## Trying it with the demo documents
 
-Five interlocking matters are committed as PDFs in
-[`sample/legal-demo.zip`](sample/legal-demo.zip). Download that file from GitHub, unzip it,
-and upload the PDFs through **Documents, then Upload** the way a lawyer would upload anything
-else. That is the point of shipping them as a plain zip rather than a fixture: the demo walks
-the same path a real user walks, so nothing about it is special-cased.
+One demo pack per ontology, committed as PDFs. Take the one matching the tenant's active
+pack, since a document read under the wrong vocabulary produces claims no rule matches:
+
+| Pack | Documents | Organising unit |
+|---|---|---|
+| [`sample/fintech-demo.zip`](sample/fintech-demo.zip) | 3 | Facility (`FAC-`) |
+| [`sample/legal-demo.zip`](sample/legal-demo.zip) | 5 | Matter (`NTL-`, `MBC-`, `HAL-`) |
+| [`sample/healthcare-demo.zip`](sample/healthcare-demo.zip) | 4 | Encounter (`ENC-`) |
+
+Download the zip from GitHub, unzip it, and upload the PDFs through **Documents, then
+Upload** the way a user would upload anything else. That is the point of shipping them as
+a plain zip rather than a fixture: the demo walks the same path a real user walks, so
+nothing about it is special-cased.
+
+The walkthrough below is the legal pack, which has the most interlocking documents. The
+fintech and healthcare packs work the same way with their own references and their own
+rules: `group_exposure_via_control` and `related_party_lending` for fintech,
+`contraindication_alert` for healthcare.
 
 Each filename starts with its matter reference, and that is what to put in **Attach to
 matter** — `NTL-2026-0114` for the three `NTL-` files, `MBC-2024-0431` for the facility
