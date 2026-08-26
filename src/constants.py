@@ -45,11 +45,24 @@ DEFAULT_CHUNK_OVERLAP_CHARS = 200
 DEFAULT_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 DEFAULT_EMBEDDING_DIMENSIONS = 1024
 
-#: Page transcription. A cheaper, faster model than extraction on purpose: reading
-#: words off a page is mechanical, whereas deciding what they mean is not. A vision
-#: model is used rather than Textract because a legal document carries meaning in
-#: charts, org charts, signature blocks and handwriting, which OCR returns nothing for.
-DEFAULT_OCR_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+#: Every default is Nova 2 Lite, so the system runs without access to Anthropic models. It is
+#: reachable in accounts where Claude is not enabled, which is what a workshop needs, and it is the
+#: cheapest thing on the list.
+#:
+#: The trade is real and worth stating: Nova is weaker at deciding what a passage *means*, which is
+#: extraction's whole job. Expect more claims a reviewer has to correct, and more that read as
+#: plausible rather than supported. Every model here is settable per tenant in Admin, and the
+#: `method` string on each assertion records which model produced it, so raising extraction back to
+#: Sonnet later does not orphan anything already extracted.
+#:
+#: Verified against the deployment account before switching: Nova 2 Lite returns clean JSON to a
+#: JSON-only instruction, and accepts an image block, which OCR depends on.
+DEFAULT_TEXT_MODEL = "global.amazon.nova-2-lite-v1:0"
+
+#: Page transcription. A vision model rather than Textract because a legal document carries meaning
+#: in charts, org charts, signature blocks and handwriting, which OCR returns nothing for. Reading
+#: words off a page is mechanical, so a small model is a better fit here than anywhere else.
+DEFAULT_OCR_MODEL = DEFAULT_TEXT_MODEL
 
 #: Pages per transcription batch, and how many vision calls may be in flight for one
 #: document. Batching is the unit of progress reporting and of a confined failure;
@@ -64,8 +77,8 @@ MAX_CONCURRENT_INGESTS = 4
 
 #: Extraction models. The versioned `method` string on each assertion records
 #: which one produced it, so these can change without orphaning past extractions.
-DEFAULT_EXTRACTION_MODEL = "global.anthropic.claude-sonnet-5"
-DEFAULT_SYNTHESIS_MODEL = "global.anthropic.claude-sonnet-5"
+DEFAULT_EXTRACTION_MODEL = DEFAULT_TEXT_MODEL
+DEFAULT_SYNTHESIS_MODEL = DEFAULT_TEXT_MODEL
 
 #: Text models an administrator may choose between, with what the trade-off is.
 #:
@@ -77,11 +90,23 @@ DEFAULT_SYNTHESIS_MODEL = "global.anthropic.claude-sonnet-5"
 #:
 #: `note` exists because "cheaper" is usually the reason to change this, and offering the choice
 #: without saying what it costs in quality asks for a decision nobody can make.
+#: Ordered default first, then by capability. The default leads because it is what a reader is
+#: comparing against, and the notes say what moving away from it buys.
 SELECTABLE_MODELS: tuple[tuple[str, str, str], ...] = (
+    (
+        DEFAULT_TEXT_MODEL,
+        "Amazon Nova 2 Lite",
+        (
+            "The default everywhere, and the cheapest. Needs no access to Anthropic models. "
+            "Weaker at judging what a passage means, so expect more extracted claims a reviewer "
+            "has to correct, and watch the Retrieval transcript: a small model calls tools with "
+            "wrong arguments more often."
+        ),
+    ),
     (
         "global.anthropic.claude-sonnet-5",
         "Claude Sonnet 5",
-        "Most capable. The default for extraction, synthesis and the retrieval agent.",
+        "Most capable. Worth it for extraction, where deciding what a passage means is the job.",
     ),
     (
         "global.anthropic.claude-sonnet-4-6",
@@ -92,16 +117,8 @@ SELECTABLE_MODELS: tuple[tuple[str, str, str], ...] = (
         "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "Claude Haiku 4.5",
         (
-            "Fast and much cheaper. Good for transcription and straightforward extraction, "
+            "Between Nova and Sonnet. Good for transcription and straightforward extraction, "
             "weaker at judging what a passage means."
-        ),
-    ),
-    (
-        "global.amazon.nova-2-lite-v1:0",
-        "Amazon Nova 2 Lite",
-        (
-            "Cheapest here. Worth testing for the retrieval agent, but watch the transcript: "
-            "a small model calls tools with wrong arguments more often."
         ),
     ),
 )

@@ -1,27 +1,33 @@
-# LexGraph
+# Groundwork
 
 A governed semantic layer over **both** structured and unstructured data, where
 every fact carries its own provenance.
 
-Domain-agnostic by construction; ships with a legal ontology as the default and a
-healthcare pack to keep that claim honest.
+Domain-agnostic by construction. Three ontology packs ship: `fintech` (the default),
+`legal` and `healthcare`. The extra two exist to keep the domain-agnostic claim
+honest rather than as demos.
+
+> The product is **Groundwork**. The repository, CDK stacks, Python package and
+> DynamoDB tables are still named `lexgraph`: renaming a CloudFormation stack replaces
+> it, and those ARNs are imported across six stacks.
 
 ## Why this exists
 
-Two existing systems each solve half the problem:
+Two kinds of system each solve half the problem.
 
-- **rosetta-sdl** governs *structured* data well — governed metrics compiled to
-  deterministic SQL, an AST-level SQL firewall, a kill switch for ungoverned
-  queries. But its graph is *declared*: it scans a Glue catalog and records what it
-  finds. There is nothing to be uncertain about.
-- **AWS context-ontology-accelerator (COA)** handles ontologies, OWL reasoning and
-  document ingestion, with a genuinely good Cedar authorization model. But it is
-  16 stacks, table-first, and its graph build is not configurable.
+A **semantic layer over a warehouse** governs structured data well: metrics compiled
+to deterministic SQL, an AST-level SQL firewall, a kill switch for ungoverned queries.
+But its graph is *declared*: it scans a catalog and records what it finds. There is
+nothing to be uncertain about.
+
+A **document knowledge graph** handles ontologies, reasoning and ingestion, and can
+tell you that two parties are related. But the claim arrives without a way to check
+it: no page, no quote, no record of whether a person ever agreed with the model.
 
 Neither answers the question a regulated customer actually asks: **"why does the
 system believe this, and can you prove it?"**
 
-LexGraph's answer is the assertion contract.
+Groundwork's answer is the assertion contract.
 
 ## The core idea
 
@@ -30,7 +36,7 @@ Every edge in the graph is an **Assertion** carrying:
 | Field | Why |
 |---|---|
 | `epistemic_class` | How we came to believe it — the axis that makes the graph defensible |
-| `method` | Versioned and specific: `vision:claude-haiku-4-5@v1`, `llm:opus-5+verify:quote@v1` |
+| `method` | Versioned and specific: `llm:nova-2-lite`, `cms:export@v1`, `admin:you@firm.example` |
 | `confidence` | Trust floor for retrieval |
 | `source_locator` | File + page + verbatim quote, or source + table + column |
 | `premises[]` | For inferences — unwinds into a proof tree |
@@ -143,10 +149,19 @@ not screened, so the wall is checked after the role, never before it.
 
 ### Creating a tenant
 
-There is no "create tenant" API, deliberately. A tenant is not a row to be created — it
-is the value of a user's `custom:tenant_id` claim, and everything else (the S3 prefix,
-the graph property filter, the vector index name) derives from it. Creating a tenant is
-therefore creating its first user.
+Admins of the **home tenant** (`demo-firm` by default, set by `homeTenant` in
+`cdk.json`) create and delete other tenants from the **Platform** page. Not any
+platform-admin: that is a role within a firm, so letting it reach across tenants would
+let one customer delete another's data.
+
+Creating a tenant **requires inviting its admin user by email**, because a tenant with no
+user who can sign in is a namespace nobody can reach. Deletion cascades in a fixed order
+across identity, settings, graph, vectors, jobs, audit and finally S3, then leaves a
+tombstone: the row survives with `deleted_at` set, so an id cannot be silently reused.
+Reusing one is how one firm's people end up looking at a graph built by another.
+
+The first tenant of all is different, because no admin exists yet to create it. That one
+is created by making its first Cognito user directly, as in the installation steps above.
 
 ### Creating a user
 
@@ -204,6 +219,119 @@ aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username <username>
 Symptom to recognise: the API returns 401 for a tenant the user never chose — the UI
 falls back to a default tenant id when the claim is absent, and the token then does not
 match it.
+
+## Installing into a brand-new AWS account
+
+Start to finish this is about **40 minutes**, most of it Neptune creating itself. The
+order matters: three of these steps fail in ways that name the wrong cause if you skip
+them, and each is called out below.
+
+### 1. What you need locally
+
+```bash
+node --version     # 20 or newer
+python3 --version  # 3.11 or newer
+docker ps          # must be running: the app image and the UI bundle build in containers
+aws sts get-caller-identity   # credentials with admin-ish rights for the first deploy
+```
+
+### 2. Enable Bedrock model access
+
+**Do this first.** It is a console action with no CLI equivalent, it can take a few
+minutes to take effect, and skipping it produces an `AccessDeniedException` at the first
+document upload rather than at deploy, which reads as a broken app.
+
+In the Bedrock console, under **Model access**, enable:
+
+| Model | Used for |
+|---|---|
+| `amazon.nova-2-lite-v1:0` | Every text and vision role, by default |
+| `amazon.titan-embed-text-v2:0` | Embeddings, and there is no alternative |
+
+That is the whole list. Every default is Nova 2 Lite precisely so a workshop account
+needs no Anthropic access; if you want stronger extraction, enable Claude Sonnet as well
+and change it per tenant in **Admin**.
+
+### 3. Resolve your availability zones
+
+**Do this second, and do not skip it.** AZ *names* are shuffled per account, so
+`us-east-1a` is a different physical zone in your account than in anyone else's.
+AgentCore Runtime supports only three zones in `us-east-1`, and putting a subnet in the
+wrong one fails `LexGraphMcp` with an error that names the *subnet* rather than the zone.
+
+```bash
+aws ec2 describe-availability-zones \
+  --query 'AvailabilityZones[].[ZoneName,ZoneId]' --output text
+```
+
+Pick the two names whose IDs are among `use1-az1`, `use1-az2`, `use1-az4`, and set them
+in `cdk/cdk.json`:
+
+```json
+"availabilityZones": ["us-east-1a", "us-east-1b"]
+```
+
+### 4. Bootstrap and deploy
+
+```bash
+git clone https://github.com/Fraser27/lexgraph.git && cd lexgraph
+make setup                                  # venv, dependencies, CDK node modules
+cd cdk && npx cdk bootstrap aws://<account-id>/us-east-1
+npx cdk deploy --all                        # 25-30 min, most of it Neptune
+```
+
+### 5. Close the login loop
+
+There is one genuinely circular requirement: the Cognito hosted UI needs the CloudFront
+domain as a callback URL, and CloudFront does not exist until the first deploy. So it is
+two passes, deliberately, rather than a custom resource whose failure mode is a
+half-configured login page.
+
+```bash
+# take the LexGraphWeb.WebUrl output from the deploy, then:
+#   cdk/cdk.json -> "webOrigin": "https://dxxxxx.cloudfront.net"
+npx cdk deploy LexGraphAuth
+```
+
+### 6. Create the first user
+
+No user exists yet, and the tenant a user belongs to is fixed at creation.
+
+```bash
+POOL=$(aws cognito-idp list-user-pools --max-results 10 \
+  --query "UserPools[?starts_with(Name,'LexGraph')].Id" --output text)
+
+aws cognito-idp admin-create-user --user-pool-id "$POOL" \
+  --username you@example.com \
+  --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true \
+                    Name=custom:tenant_id,Value=demo-firm
+
+aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL" \
+  --username you@example.com --group-name platform-admin
+```
+
+Cognito emails a temporary password. `demo-firm` is the home tenant, whose admins may
+create and delete other tenants; change it with `homeTenant` in `cdk.json`.
+
+### 7. Check it came up
+
+```bash
+curl -s https://dxxxxx.cloudfront.net/api/health
+# {"status":"ok","graph":"connected","vector":"enabled","ontology":"fintech", ...}
+```
+
+`graph: connected` is the field worth reading. A healthy container with
+`graph: degraded` means Neptune is unreachable, which is almost always the TLS or SigV4
+half of the Bolt handshake rather than the container.
+
+### What it costs while idle
+
+Roughly **$90-120/month** in `us-east-1` with nothing happening: Neptune is the largest
+line (free for the first 750 hours, then about $50), the NAT gateway about $33, and the
+ALB about $16. Page transcription is one Bedrock call per page, so document volume is a
+real usage-driven cost on top. `cdk/README.md` has the breakdown and the teardown
+gotchas. Several resources are `RETAIN`-on-delete by design and keep billing after
+`cdk destroy`.
 
 ## Trying it with the demo documents
 
@@ -307,37 +435,55 @@ are queried in place at read time.
 Step 2 is the differentiator: retrieval that expands along assertions you can
 defend, rather than just nearest neighbours.
 
+The lanes run in **sequence, not in parallel**, and the order is load-bearing: passages
+are retrieved first and the graph walks out from them, so a fact reported with `hops` was
+reached *because* a passage cited it. Findings about the evidence, meaning conflicts, stale
+authority and ethical screens, are applied by the graph before any model sees it, so a
+model never reasons over something the wall refused.
+
+Two surfaces read this:
+
+- **Retrieval** drives it through an agent loop over the MCP server and shows the whole
+  transcript: each tool call, its raw result, the lane trace, the evidence chain from
+  document to passage to fact to finding, and the wall.
+- **The MCP server** exposes the same tools to a third-party agent, on the caller's own
+  token. An agent has no identity of its own and sees exactly what the person driving it
+  would see.
+
 ## Status
 
-Deployed to a real AWS account across six stacks, with 1,168 tests passing. The
+Deployed to a real AWS account across six stacks, with **2,127 tests passing**. The
 document path works end to end there: a presigned browser upload lands in S3, an S3
 notification starts ingestion, and pages are transcribed by a vision model, chunked
-with offsets kept, embedded, and read for claims that land in the review queue.
+with offsets kept, embedded, and read for claims that land in the review queue. Rules
+fire over what is approved, conclusions carry their premises, and the ethical wall is
+applied by the graph before any model sees the evidence.
+
+**Working end to end:**
+
+- **All three tiers answer.** A governed metric compiles to Athena SQL and runs; graph
+  traversal reads approved facts; hybrid retrieves passages and walks out from them.
+- **Retrieval agent.** A tool-calling loop over the MCP server, with the whole
+  transcript as the answer: every call, every raw result, the lane trace and the wall.
+- **Catalog enrichment.** A model proposes plain-language descriptions for tables and
+  columns; approved ones are given to the model that writes SQL for ungoverned
+  questions.
+- **Tenant lifecycle.** Create a tenant with an admin user, and delete one with a
+  cascade across identity, settings, graph, vectors and S3.
+- **Every read is audited**, with the surface it came in on and the basis it rested on.
 
 **What is not yet true**, because a README that overstates is worse than one that
 admits:
 
-- **Tier 1 compiles SQL that nothing runs.** The Athena executor exists and is
-  tested; it is not wired to the metric path. This is now the largest gap.
-- **Tier 4 has no SQL generator**, so it always declines. Its firewall is real.
-- **One task only.** Live ingest events and the ingest work itself both live in a
-  single container; the 30-second poll is the correctness guarantee.
-- **Nothing has been load tested.** The reasoner joins in Python over a tenant's
-  live facts, which is fine for thousands and unexamined beyond that.
-
-Recently closed, in this order deliberately — an inference over facts that do not
-survive a restart produces a proof tree pointing at premises that no longer exist:
-
-- **Assertions persist to Neptune**, so an approval survives a deploy.
-- **The rules fire.** One generic engine evaluates the `when`/`then` patterns in
-  whichever pack a tenant runs, so the legal conflict check and the healthcare
-  contraindication alert are the same code path. Conclusions are staged for review,
-  not published, and carry their premises.
-- **Vectors go to OpenSearch**, with the matter wall as a pre-filter inside the
-  k-NN query rather than applied afterwards.
-- **Governance settings persist** to DynamoDB — most important for the
-  ungoverned-query kill switch, since losing that on a deploy meant a firm believing
-  questions were refused while they were being answered.
+- **One task only.** Live ingest and retrieval events and the work itself share a
+  single container, so websockets need `appDesiredCount: 1` and a background task dies
+  with the container. The poll behind ingest is the correctness guarantee.
+- **Nothing has been load tested.** The reasoner joins in Python over a tenant's live
+  facts, which is fine for thousands and unexamined beyond that.
+- **`CatalogStore` is in-memory.** A restart loses the catalogued table list until the
+  next scan, which is also what tier 3's SQL lane reads.
+- **Neptune runs on `db.t4g.medium`**, which is memory-starved enough that a read can be
+  killed under concurrency. Reads retry once; the instance is the real fix.
 
 ## Development
 

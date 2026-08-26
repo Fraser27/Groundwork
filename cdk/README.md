@@ -1,8 +1,6 @@
 # LexGraph infrastructure
 
-Six CDK stacks. This is a deliberate reduction of AWS's context-ontology-accelerator,
-which needs 16 — we dropped DataZone/SMUS, Ontop VKG, Smithy codegen, and the
-separate metric service.
+Six CDK stacks, split by **deploy cadence and blast radius** rather than by feature.
 
 | Stack | Holds | Redeployed |
 |---|---|---|
@@ -92,7 +90,7 @@ it until deploy.
 | `vectorMaxOcu` | `4` | Spend ceiling |
 | `appCpu` / `appMemoryMiB` | `512` / `1024` | Fargate task size |
 | `appDesiredCount` | `1` | No redundancy at 1 |
-| `defaultOntology` | `legal` | Pack from `ontologies/` |
+| `defaultOntology` | `fintech` | Pack from `ontologies/`, must match `constants.DEFAULT_ONTOLOGY_PACK` |
 | `availabilityZones` | unset | See above |
 | `webOrigin` | unset | Set after the first deploy |
 
