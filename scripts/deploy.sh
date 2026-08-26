@@ -189,11 +189,11 @@ say "Installing CDK dependencies"
 
 say "Bootstrapping CDK in $REGION"
 # Idempotent: re-bootstrapping an already-bootstrapped account is a no-op.
-(cd "$CDK_DIR" && npx cdk bootstrap "aws://$ACCOUNT/$REGION" --require-approval never)
+(cd "$CDK_DIR" && npx cdk bootstrap "aws://$ACCOUNT/$REGION" --requireApproval never)
 
 # ── 6. First pass ───────────────────────────────────────────────────────────────
 say "Deploying all stacks (25-30 minutes, most of it Neptune)"
-(cd "$CDK_DIR" && CDK_DEFAULT_REGION="$REGION" npx cdk deploy --all --require-approval never)
+(cd "$CDK_DIR" && CDK_DEFAULT_REGION="$REGION" npx cdk deploy --all --requireApproval never)
 
 WEB_URL="$(aws cloudformation describe-stacks --stack-name LexGraphWeb --region "$REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='WebUrl'].OutputValue" --output text)"
@@ -212,7 +212,7 @@ say "Setting webOrigin and redeploying Auth and Data"
 set_context webOrigin "\"${WEB_URL%/}\""
 
 (cd "$CDK_DIR" && CDK_DEFAULT_REGION="$REGION" \
-  npx cdk deploy LexGraphAuth LexGraphData --require-approval never)
+  npx cdk deploy LexGraphAuth LexGraphData --requireApproval never)
 
 # ── 8. Verify ───────────────────────────────────────────────────────────────────
 say "Checking the deployment"
