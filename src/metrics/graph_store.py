@@ -70,6 +70,11 @@ def _to_params(
         "time_grains_json": json.dumps(list(metric.time_grains)),
         "time_grain_column": metric.time_grain_column,
         "aggregation": metric.aggregation,
+        # `unit` is not decoration: the compiler's unit-mismatch warning reads it off each base
+        # metric, so dropping it here silently disables that check for anything stored.
+        "value_type": metric.value_type,
+        "unit": metric.unit,
+        "format": metric.format,
         "status": status,
         "owner": metric.owner,
         "updated_by": updated_by,
@@ -120,6 +125,9 @@ def _from_row(row: dict[str, Any]) -> MetricDefinition:
         time_grains=_json_list(row, "time_grains"),
         time_grain_column=row.get("time_grain_column") or "",
         aggregation=row.get("aggregation") or "additive",
+        value_type=row.get("value_type") or "number",
+        unit=row.get("unit") or "",
+        format=row.get("format") or "",
         owner=row.get("owner") or "",
         joins=joins,
         parameters=parameters,

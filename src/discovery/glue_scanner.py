@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from src.graph.assertions import Assertion, EpistemicClass, SourceLocator, build_assertion
@@ -94,6 +95,55 @@ def source_node_id(source_id: str) -> str:
     return f"source:{source_id}"
 
 
+CATALOG_KINDS = ("source", "table", "column")
+"""The id prefixes minted above. Listed so a reader can be shown a catalog node without
+guessing, and so `parse_catalog_node_id` refuses everything else."""
+
+
+@dataclass(frozen=True)
+class CatalogRef:
+    """What a catalog node id refers to, in parts."""
+
+    kind: str
+    source_id: str
+    database: str = ""
+    table: str = ""
+    column: str = ""
+
+    @property
+    def label(self) -> str:
+        """What a reader should see. `demo-glue:anycorp.returns` is not a table name."""
+        return self.column or self.table or self.source_id
+
+
+def parse_catalog_node_id(entity_id: str) -> CatalogRef | None:
+    """The parts a catalog node id names, or None when it is not one.
+
+    The only parser of this format anywhere, which is why it lives beside the builders:
+    `full_name` contains a dot and `source_id` may contain a colon, so the split order is
+    load-bearing and a second implementation would drift from it. See `catalog_overlay` for
+    why nothing else may parse one.
+    """
+    kind, sep, rest = entity_id.partition(":")
+    if not sep or not rest or kind not in CATALOG_KINDS:
+        return None
+    if kind == "source":
+        return CatalogRef(kind=kind, source_id=rest)
+    source_id, sep, name = rest.rpartition(":")
+    if not sep:
+        return None
+    parts = name.split(".")
+    if kind == "table" and len(parts) == 2:
+        return CatalogRef(kind=kind, source_id=source_id, database=parts[0], table=parts[1])
+    if kind == "column" and len(parts) == 3:
+        return CatalogRef(
+            kind=kind, source_id=source_id, database=parts[0], table=parts[1], column=parts[2]
+        )
+    # A name that does not split cleanly: better to say nothing about it than to report a
+    # database that is really half a column name.
+    return None
+
+
 def scan_catalog(
     glue_client,
     *,
@@ -112,7 +162,14 @@ def scan_catalog(
         CatalogNode(
             node_id=source_node_id(source_id),
             labels=("DataSource",),
-            props={"source_id": source_id, "tenant_id": tenant_id, "type": "glue"},
+            props={
+                "source_id": source_id,
+                "tenant_id": tenant_id,
+                "type": "glue",
+                # The node had no timestamp, so a catalog cache rebuilt from the graph could not
+                # say when the source was last scanned and every source read NOT_SCANNED.
+                "last_scanned_at": datetime.now(UTC).isoformat(),
+            },
         )
     )
 

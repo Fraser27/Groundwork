@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 
 from src.discovery.catalog_store import CatalogColumn, CatalogTable
+from src.discovery.glue_scanner import table_node_id
 from src.graph.scope import AuthContext
 from src.metrics.models import MetricDefinition
 from src.ontology.loader import load_ontology
@@ -596,3 +597,66 @@ class TestTheTextBuilders:
 class TestTheReport:
     def test_an_empty_rebuild_totals_zero(self):
         assert RoutingRebuildReport().total_indexed == 0
+
+
+class TestTheIndexerReadsApprovedDescriptions:
+    """The table layer is where an approved description earns its keep.
+
+    `build_services` constructs the indexer with the raw `CatalogStore`, which carries only whatever
+    comment Glue happened to hold. So an approved description reached the SQL prompt and the Tables
+    page but never the words a question is matched against, and a table stayed unfindable by the
+    only text anybody had reviewed.
+    """
+
+    def bare_table(self) -> CatalogTable:
+        return CatalogTable(
+            full_name="legal_ops.invoices",
+            name="invoices",
+            database="legal_ops",
+            source_id="glue-main",
+            description="",
+            columns=(CatalogColumn(name="invoice_id", data_type="string"),),
+        )
+
+    def services(self, embedder: FakeEmbedder | None = None) -> Any:
+        from src.api.deps import build_services
+        from src.config import AuthConfig, GraphConfig, GroundworkConfig
+
+        cfg = GroundworkConfig(
+            environment="local",
+            auth=AuthConfig(dev_bypass_tenant=TENANT),
+            graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
+        )
+        services = build_services(cfg)
+        services.catalog._tables[TENANT] = {"legal_ops.invoices": self.bare_table()}
+        services.graph = FakeGraph(
+            rows=[
+                {
+                    "subject_id": table_node_id("glue-main", "legal_ops.invoices"),
+                    "text": "Issued client invoices, one row each.",
+                    "epistemic_class": "EXTRACTED_MODEL",
+                    "confidence": 0.8,
+                    "method": "llm:m1",
+                }
+            ]
+        )
+        services.router_indexer = indexer(embedder=embedder, catalog=services.catalog)
+        return services
+
+    def test_the_table_layer_gets_the_approved_text(self):
+        from src.api.deps import build_router_indexer
+
+        services = self.services()
+        built = build_router_indexer(services)
+
+        assert [t.description for t in built.catalog.tables(TENANT)] == [
+            "Issued client invoices, one row each."
+        ]
+
+    def test_and_it_is_what_gets_embedded(self, ctx):
+        from src.api.deps import build_router_indexer
+
+        embedder = FakeEmbedder()
+        build_router_indexer(self.services(embedder)).reindex_tables(ctx)
+
+        assert "Issued client invoices, one row each." in embedder.texts[0]

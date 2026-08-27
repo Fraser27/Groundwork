@@ -98,6 +98,12 @@ export default function TableDetail() {
       </>
     )
 
+  // Not defaulted, unlike the two below: "no metric reads this table" and "nobody asked" must not
+  // render the same, so an absent key renders nothing rather than an assertion about coverage.
+  const metrics = table.metrics
+  const synonyms = table.synonyms ?? []
+  const topics = table.topics ?? []
+
   return (
     <>
       <Link to="/tables" className="back-link">
@@ -167,6 +173,36 @@ export default function TableDetail() {
             <div className="label">Last scanned</div>
             <div className="value">{fmtDateTime(table.scanned_at)}</div>
           </div>
+          {synonyms.length > 0 && (
+            <div className="detail-field">
+              <div className="label">
+                Other names
+                <FieldHelp text="What people call this table when they are not using its catalogue name. A question asked in these words still reaches it, so the list is part of how the table is found rather than decoration." />
+              </div>
+              <div className="value" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {synonyms.map((s) => (
+                  <span key={s} className="tag tag-neutral">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {topics.length > 0 && (
+            <div className="detail-field">
+              <div className="label">
+                Topics
+                <FieldHelp text="Subject matter this table concerns, used to narrow where a question is searched before anything is read." />
+              </div>
+              <div className="value" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {topics.map((t) => (
+                  <span key={t} className="tag tag-teal">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <p className="card-note" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
           Rows are not copied into Groundwork. Only this metadata is recorded, and a query reads the
@@ -174,6 +210,62 @@ export default function TableDetail() {
           source.
         </p>
       </div>
+
+      {metrics && (
+        <div className="card">
+          <div className="card-header">
+            <h3>
+              Governed metrics ({metrics.length})
+              <FieldHelp text={HELP.governedMetric} />
+            </h3>
+            <div className="card-header-actions">
+              <Link to="/metrics" className="btn btn-ghost btn-sm">
+                Define a metric on this table
+              </Link>
+            </div>
+          </div>
+          {metrics.length > 0 ? (
+            <>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Definition</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {metrics.map((m) => (
+                    <tr key={m.metric_id}>
+                      <td>
+                        <strong>{m.name}</strong>
+                        <div className="dim" style={{ fontSize: 11.5 }}>
+                          <code>{m.metric_id}</code>
+                        </div>
+                      </td>
+                      <td className="dim">{m.definition || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p
+                className="card-note"
+                style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}
+              >
+                Each of these compiles to SQL from its own definition, against the columns below.
+                Renaming, retyping or dropping a column one of them reads changes the number it
+                returns, so read this list before changing the table.
+              </p>
+            </>
+          ) : (
+            <p className="card-note">
+              No approved metric reads this table. A question it can answer is answered by SQL a
+              model wrote for that question, grounded in the schema and descriptions below but not
+              compiled from a definition anybody signed off. Defining a metric is what moves a
+              number here from generated to governed.
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="card">
         <div className="card-header">
@@ -193,9 +285,6 @@ export default function TableDetail() {
                 Generate descriptions
               </button>
             )}
-            <Link to="/metrics" className="btn btn-ghost btn-sm">
-              Define a metric on this table
-            </Link>
           </div>
         </div>
         <table className="data-table">

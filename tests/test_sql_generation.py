@@ -9,6 +9,8 @@ The properties worth more than the rest of this file:
 - **a refused query never reaches Athena**, asserted on the injected client
 - **an error is carried, never flattened to an empty result**, because an empty result reads as
   "no data" for a query that never ran
+- **an approved synonym reaches table selection**, so a question that shares no word with a table
+  is not answered with silence, which is the failure class this repo exists to prevent
 
 No Bedrock and no AWS. Both clients are injected.
 """
@@ -16,11 +18,16 @@ No Bedrock and no AWS. Both clients are injected.
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 
 from src.discovery.catalog_store import CatalogColumn, CatalogTable
+from src.governance import GovernanceSettings
+from src.graph.scope import AuthContext
 from src.query.firewall import SQLFirewall
+from src.query.planner import Lane, Planner
+from src.query.resolver import Resolver
 from src.query.sql_generation import (
     MAX_TABLES,
     SqlGenerator,
@@ -59,6 +66,28 @@ TIME_ENTRIES = _table(
 )
 
 PAYROLL = _table("payroll", CatalogColumn("salary", "double"), description="Staff compensation")
+
+RETURNS = CatalogTable(
+    full_name="anycorp.returns",
+    name="returns",
+    database="anycorp",
+    source_id="glue",
+    description="Return requests and refund decisions",
+    columns=(CatalogColumn("order_id", "string"), CatalogColumn("refunded", "double")),
+)
+"""The retail case that motivated synonyms: "how many items did shoppers send back" shares not one
+word with this table's name or description, so word overlap alone generated no SQL at all."""
+
+SHIPMENTS = CatalogTable(
+    full_name="anycorp.shipments",
+    name="shipments",
+    database="anycorp",
+    source_id="glue",
+    description="Outbound parcels",
+    columns=(CatalogColumn("order_id", "string"),),
+)
+
+SENT_BACK = {"anycorp.returns": ["send back", "items returned"]}
 
 
 class FakeBedrock:
@@ -318,3 +347,172 @@ class TestWhichTablesAQuestionReaches:
         assert relevant_tables("how many hours recorded", [MATTERS, TIME_ENTRIES]) == [
             TIME_ENTRIES
         ]
+
+
+QUESTION = "how many items did shoppers send back"
+
+
+class TestAnApprovedSynonymReachesTableSelection:
+    """`approved_synonyms` existed with no callers, so approving one changed nothing. The cost of
+    that was a silent empty: no candidate tables, no prompt, no SQL, and no reason given."""
+
+    def test_a_question_sharing_no_word_with_a_table_finds_it_by_synonym(self):
+        assert relevant_tables(QUESTION, [RETURNS], synonyms=SENT_BACK) == [RETURNS]
+
+    def test_the_same_question_finds_nothing_without_the_synonym(self):
+        """The bug, asserted so the fix cannot regress into looking like a coincidence."""
+        assert relevant_tables(QUESTION, [RETURNS]) == []
+
+    def test_the_lane_generates_sql_it_previously_declined_to(self):
+        bedrock = FakeBedrock("SELECT COUNT(*) FROM anycorp.returns LIMIT 10")
+        lane = SqlLane(generator=SqlGenerator(model_id="m", bedrock=bedrock))
+        assert lane.run(QUESTION, tables=[RETURNS], synonyms=SENT_BACK) is not None
+        assert lane.run(QUESTION, tables=[RETURNS]) is None
+
+    def test_a_synonym_is_keyed_by_full_name_not_by_graph_id(self):
+        """Catalog ids are built and never parsed, so this module must not learn their format. A
+        mapping keyed the graph's way silently matches nothing."""
+        by_graph_id = {"table:glue:anycorp.returns": ["send back"]}
+        assert relevant_tables(QUESTION, [RETURNS], synonyms=by_graph_id) == []
+
+    def test_a_synonym_does_not_drag_in_an_unrelated_table(self):
+        """Widening selection is the point; widening it to everything would put the tenant's whole
+        catalog in the prompt."""
+        synonyms = {"groundwork_legal.payroll": ["wages", "salaries"]}
+        assert relevant_tables(
+            "how many hours recorded", [MATTERS, TIME_ENTRIES, PAYROLL], synonyms=synonyms
+        ) == [TIME_ENTRIES]
+
+
+class TestAnExactNameStillWins:
+    """Someone naming a table explicitly must never lose the window to a synonym match."""
+
+    def test_a_name_match_is_ordered_ahead_of_a_synonym_match(self):
+        synonyms = {"anycorp.shipments": ["returns", "sent back"]}
+        assert relevant_tables(
+            "how many returns did we take", [SHIPMENTS, RETURNS], synonyms=synonyms
+        ) == [RETURNS, SHIPMENTS]
+
+    def test_the_strongest_match_survives_the_cap_whatever_the_catalog_order(self):
+        """Unranked selection made "which 20" a matter of catalog order, so an unrelated database
+        scanned first could push the table the question named out of the prompt."""
+        filler = [_table(f"t{i}", description="opened by staff") for i in range(MAX_TABLES + 4)]
+        lane = SqlLane(generator=SqlGenerator(model_id="m", bedrock=FakeBedrock()))
+        result = lane.run("how many matters opened", tables=[*filler, MATTERS])
+        assert result is not None
+        assert result.generated.tables_offered[0] == "groundwork_legal.matters"
+
+    def test_synonyms_none_leaves_the_selected_set_unchanged(self):
+        tables = [MATTERS, TIME_ENTRIES, PAYROLL, RETURNS]
+        question = "how many hours recorded against matters"
+        assert relevant_tables(question, tables, synonyms=None) == relevant_tables(
+            question, tables
+        )
+        assert set(relevant_tables(question, tables)) == {MATTERS, TIME_ENTRIES}
+
+
+class TestTheCapIsNeverSilent:
+    def test_dropping_tables_is_logged_with_the_count(self, caplog):
+        """A silent cap reads as "covered everything", so a question the dropped tables would have
+        answered looks like a question the schema could not answer."""
+        many = [_table(f"t{i}", description="opened by staff") for i in range(MAX_TABLES + 4)]
+        lane = SqlLane(generator=SqlGenerator(model_id="m", bedrock=FakeBedrock()))
+        with caplog.at_level(logging.WARNING, logger="src.query.sql_generation"):
+            result = lane.run("how many matters opened", tables=many)
+        assert result is not None
+        assert len(result.generated.tables_offered) == MAX_TABLES
+        assert "4 dropped" in caplog.text
+        assert "groundwork_legal.t23" in caplog.text
+
+    def test_nothing_is_logged_when_everything_fits(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="src.query.sql_generation"):
+            SqlGenerator(model_id="m", bedrock=FakeBedrock()).generate("q", tables=[MATTERS])
+        assert caplog.text == ""
+
+
+class FakeGraph:
+    def search(self, ctx, question, **kw):
+        return []
+
+    def expand(self, ctx, seeds, **kw):
+        return [{"assertion_id": "a1", "subject_id": "matter:m1", "epistemic_class": "DECLARED"}]
+
+    def blocking_facts(self, ctx, seeds, **kw):
+        return []
+
+
+class FakeVectors:
+    def search(self, ctx, question, **kw):
+        return [{"document_id": "d1", "page": 2, "char_start": 0, "char_end": 40}]
+
+
+class Catalog:
+    def __init__(self, *tables) -> None:
+        self._tables = list(tables)
+
+    def tables(self, tenant_id: str):
+        return self._tables
+
+
+def _ctx() -> AuthContext:
+    return AuthContext(tenant_id=TENANT, user_id="alice")
+
+
+def _wired(kind: str, *, catalog, synonyms_for=None):
+    build = Resolver if kind == "resolver" else Planner
+    return build(
+        graph_reader=FakeGraph(),
+        vector_search=FakeVectors(),
+        catalog=catalog,
+        sql_lane=SqlLane(generator=SqlGenerator(model_id="m", bedrock=FakeBedrock())),
+        synonyms_for=synonyms_for,
+    )
+
+
+class TestBothEndpointsGetTheSynonyms:
+    """Injected, not looked up: neither the resolver nor the planner may learn where approved
+    synonyms live. And both must get them, or a question is answerable on one endpoint only."""
+
+    def test_the_resolver_passes_them_to_the_lane(self):
+        resolver = _wired("resolver", catalog=Catalog(RETURNS), synonyms_for=lambda ctx: SENT_BACK)
+        res = resolver.resolve(_ctx(), QUESTION, GovernanceSettings())
+        assert res.generated_sql is not None
+
+    def test_the_resolver_without_them_declines_as_it_did_before(self):
+        resolver = _wired("resolver", catalog=Catalog(RETURNS))
+        res = resolver.resolve(_ctx(), QUESTION, GovernanceSettings())
+        assert res.generated_sql is None
+
+    def test_the_planner_runs_both_schema_lanes_on_the_same_selection(self):
+        """The catalog lane shows the reader what the SQL lane was given. One lane widened by a
+        synonym and the other not would show schema a query was not written over."""
+        planner = _wired("planner", catalog=Catalog(RETURNS), synonyms_for=lambda ctx: SENT_BACK)
+        answer = planner.plan(_ctx(), QUESTION, GovernanceSettings(), allow_synthesis=False)
+        assert Lane.CATALOG in answer.lanes_run
+        assert Lane.SQL in answer.lanes_run
+
+
+class TestASynonymOutageNeverCostsAnAnswer:
+    """Synonyms widen table selection. A graph that cannot be reached must cost the widening and
+    nothing else -- turning an answer word overlap already found into an error would be worse than
+    the gap synonyms were added to close."""
+
+    def _broken(self, ctx):
+        raise RuntimeError("no route to the graph")
+
+    def test_the_resolver_still_generates_sql(self, caplog):
+        resolver = _wired("resolver", catalog=Catalog(MATTERS), synonyms_for=self._broken)
+        with caplog.at_level(logging.WARNING, logger="src.query.resolver"):
+            res = resolver.resolve(_ctx(), "how many matters", GovernanceSettings())
+        assert res.generated_sql is not None
+        assert "no approved synonyms" in caplog.text
+
+    def test_the_planner_still_runs_both_schema_lanes(self, caplog):
+        planner = _wired("planner", catalog=Catalog(MATTERS), synonyms_for=self._broken)
+        with caplog.at_level(logging.WARNING, logger="src.query.planner"):
+            answer = planner.plan(
+                _ctx(), "how many matters", GovernanceSettings(), allow_synthesis=False
+            )
+        assert Lane.CATALOG in answer.lanes_run
+        assert Lane.SQL in answer.lanes_run
+        assert "no approved synonyms" in caplog.text

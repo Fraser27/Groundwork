@@ -26,7 +26,7 @@ answers depending on which one you asked.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import IntEnum
@@ -265,6 +265,7 @@ class Resolver:
         catalog: Any | None = None,
         sql_lane: Any | None = None,
         router: Any | None = None,
+        synonyms_for: Callable[[AuthContext], Mapping[str, Sequence[str]]] | None = None,
     ) -> None:
         self._metrics = metric_matcher
         self._graph = graph_reader
@@ -274,6 +275,9 @@ class Resolver:
         self._catalog = catalog
         # The `SqlLane` from `sql_generation`, shared with `Planner`.
         self._sql = sql_lane
+        # Injected so this layer never learns where approved synonyms live. Absent means table
+        # selection is word overlap alone, which is what it was before synonyms were readable.
+        self._synonyms_for = synonyms_for
         # Optional, and absent means the previous behaviour: try every permitted tier in order.
         self._router = router
         self.blocked: list[BlockedQuery] = []
@@ -564,4 +568,21 @@ class Resolver:
         except Exception as e:  # noqa: BLE001
             logger.debug("SQL lane unavailable, no catalog: %s", e)
             return None
-        return self._sql.run(question, tables=tables) if tables else None
+        if not tables:
+            return None
+        return self._sql.run(question, tables=tables, synonyms=self._synonyms(ctx))
+
+    def _synonyms(self, ctx: AuthContext) -> Mapping[str, Sequence[str]] | None:
+        """Approved synonyms per table `full_name`, or None.
+
+        Degrades rather than raises: synonyms widen table selection, so a graph that cannot be
+        reached must cost the widening and nothing else. Failing the question instead would let an
+        unrelated outage turn an answer word overlap already found into an error.
+        """
+        if self._synonyms_for is None:
+            return None
+        try:
+            return self._synonyms_for(ctx)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("no approved synonyms for table selection: %s", e)
+            return None

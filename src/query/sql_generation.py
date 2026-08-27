@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -99,6 +99,23 @@ def _column(column: Any) -> str:
     return "  " + " ".join(parts)
 
 
+def _offered(tables: Sequence[Any]) -> Sequence[Any]:
+    """The window, and a warning naming what fell outside it.
+
+    A silent cap reads as "covered everything", so a question the dropped tables would have
+    answered looks like a question the schema could not answer.
+    """
+    if len(tables) > MAX_TABLES:
+        logger.warning(
+            "schema window full: offering %d of %d matched tables, %d dropped (%s)",
+            MAX_TABLES,
+            len(tables),
+            len(tables) - MAX_TABLES,
+            ", ".join(str(getattr(t, "full_name", "")) for t in tables[MAX_TABLES:]),
+        )
+    return tables[:MAX_TABLES]
+
+
 def build_prompt(question: str, *, tables: Sequence[Any]) -> str:
     """The user turn: the question, and the schema it may use. Nothing else is retrievable."""
     blocks = []
@@ -160,6 +177,7 @@ class SqlGenerator:
         """
         if not tables:
             return None
+        offered = _offered(tables)
 
         # Converse, not InvokeModel: the model is admin-selectable across Nova and Anthropic,
         # and their native request bodies are mutually invalid.
@@ -172,7 +190,7 @@ class SqlGenerator:
                 modelId=self.model_id,
                 system=[{"text": SYSTEM_PROMPT}],
                 messages=[
-                    {"role": "user", "content": [{"text": build_prompt(question, tables=tables)}]}
+                    {"role": "user", "content": [{"text": build_prompt(question, tables=offered)}]}
                 ],
                 inferenceConfig=inference,
             )
@@ -189,9 +207,7 @@ class SqlGenerator:
 
         return GeneratedSQL(
             sql=sql,
-            tables_offered=tuple(
-                str(getattr(t, "full_name", "")) for t in tables[:MAX_TABLES]
-            ),
+            tables_offered=tuple(str(getattr(t, "full_name", "")) for t in offered),
             model_id=self.model_id,
         )
 
@@ -213,8 +229,27 @@ def _terms(text: str) -> set[str]:
     return words | {w.rstrip("s") for w in words}
 
 
-def relevant_tables(question: str, tables: Sequence[Any]) -> list[Any]:
-    """Which catalogued tables a question is about, by word overlap on name and description.
+def _match(terms: set[str], table: Any, synonyms: Sequence[str]) -> tuple[int, int, int]:
+    """How strongly a question reaches one table, split by where the words were found.
+
+    Split rather than summed so the ordering is defensible: a question naming the table beats one
+    that only reached it through an approved synonym, whatever the counts.
+    """
+    return (
+        len(terms & _terms(str(getattr(table, "name", "")))),
+        len(terms & _terms(str(getattr(table, "description", "")))),
+        len(terms & _terms(" ".join(synonyms))) if synonyms else 0,
+    )
+
+
+def relevant_tables(
+    question: str,
+    tables: Sequence[Any],
+    *,
+    synonyms: Mapping[str, Sequence[str]] | None = None,
+) -> list[Any]:
+    """Which catalogued tables a question is about, by word overlap on name, description and any
+    approved synonym.
 
     Crude, and shared with the planner's catalog lane on purpose: the schema a reader is shown and
     the schema the generator was given must be the same list, or the trace explains a query that
@@ -225,15 +260,27 @@ def relevant_tables(question: str, tables: Sequence[Any]) -> list[Any]:
     Matched on `name` and `description` rather than `full_name`: the database name is the same for
     every table in it, so `groundwork_legal` would match any question mentioning legal work and offer
     the model everything.
+
+    `synonyms` is what closes the gap word overlap alone leaves open: "how many items did shoppers
+    send back" shares nothing with `returns  -- return requests and refund decisions`, so the lane
+    returned no candidates and generated no SQL at all -- a silent empty. An approved `HAS_SYNONYM`
+    claim is a human saying those are the same thing, so it counts for matching exactly as a name or
+    description word does. Keyed by `full_name`, never by graph entity id: ids are built and never
+    parsed, and this module must not learn their format.
+
+    Ordered strongest first, so `MAX_TABLES` drops the weakest matches rather than whichever the
+    catalog happened to list last. Ties keep catalog order.
     """
     terms = _terms(question)
     if not terms:
         return []
-    return [
-        t
-        for t in tables
-        if terms & _terms(f"{getattr(t, 'name', '')} {getattr(t, 'description', '')}")
-    ]
+    scored = []
+    for t in tables:
+        score = _match(terms, t, (synonyms or {}).get(str(getattr(t, "full_name", "")), ()))
+        if any(score):
+            scored.append((score, t))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [t for _, t in scored]
 
 
 @dataclass(frozen=True)
@@ -267,8 +314,14 @@ class SqlLane:
     factory returning None, generates the SQL and does not run it -- which is still the reviewable
     artefact, the same way a compiled metric with no executor is."""
 
-    def run(self, question: str, *, tables: Sequence[Any]) -> SqlLaneResult | None:
-        candidates = relevant_tables(question, tables)
+    def run(
+        self,
+        question: str,
+        *,
+        tables: Sequence[Any],
+        synonyms: Mapping[str, Sequence[str]] | None = None,
+    ) -> SqlLaneResult | None:
+        candidates = relevant_tables(question, tables, synonyms=synonyms)
         if not candidates:
             return None
         generated = self.generator.generate(question, tables=candidates)

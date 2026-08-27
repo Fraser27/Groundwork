@@ -15,6 +15,14 @@ from fastapi.testclient import TestClient
 from src.api.app import create_app
 from src.api.deps import get_services
 from src.config import AuthConfig, GraphConfig, GroundworkConfig
+from src.discovery.glue_scanner import (
+    HAS_COLUMN,
+    HAS_TABLE,
+    PARTITIONED_BY,
+    column_node_id,
+    source_node_id,
+    table_node_id,
+)
 from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
 from src.graph.scope import AuthContext
 from src.ontology.loader import load_ontology
@@ -405,6 +413,251 @@ class TestGraphNeighbourhood:
         body = r.json()
         assert body["truncated"] is True
         assert body["total_edges"] >= 3
+
+
+SOURCE_ID = "glue-main"
+TABLES = ("anycorp.returns", "anycorp.orders", "otherco.ledger")
+
+
+def _stage(assertions: list) -> None:
+    services = get_services()
+    ctx = AuthContext(user_id="dev@localhost", tenant_id=TENANT)
+    services.review_queue.stage(ctx, assertions)
+
+
+def _declared(subject_id: str, predicate: str, object_id: str, table: str):
+    return build_assertion(
+        tenant_id=TENANT,
+        subject_id=subject_id,
+        predicate=predicate,
+        object_id=object_id,
+        epistemic_class=EpistemicClass.DECLARED,
+        method="glue:catalog_scan",
+        confidence=1.0,
+        source_locator=SourceLocator(source_id=SOURCE_ID, table=table),
+    )
+
+
+def _stage_catalog(columns: int = 2) -> None:
+    """Catalog edges in the shape the Glue scanner writes them.
+
+    Ids come from the scanner's own builders rather than being spelt out, so a change to the
+    format breaks the scanner's tests rather than silently making these pass against a shape the
+    route no longer sees.
+    """
+    out = []
+    for full_name in TABLES:
+        table_id = table_node_id(SOURCE_ID, full_name)
+        out.append(_declared(source_node_id(SOURCE_ID), HAS_TABLE, table_id, full_name))
+        for i in range(columns):
+            out.append(
+                _declared(
+                    table_id,
+                    HAS_COLUMN,
+                    column_node_id(SOURCE_ID, full_name, f"col_{i}"),
+                    full_name,
+                )
+            )
+    _stage(out)
+
+
+def _stage_governing(count: int) -> None:
+    """Governing edges, which outrank everything else in the cap's ordering."""
+    _stage(
+        [
+            build_assertion(
+                tenant_id=TENANT,
+                subject_id=f"party:acme-{i}",
+                predicate="ADVERSE_TO",
+                object_id=f"party:calder-{i}",
+                epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+                method="llm:test@v1",
+                confidence=0.7,
+                source_locator=SourceLocator(
+                    document_id=f"doc-{i}", filename="f.pdf", page=1, quote="a quote"
+                ),
+            )
+            for i in range(count)
+        ]
+    )
+
+
+def _overview(client, **params) -> dict:
+    r = client.get(f"/api/tenants/{TENANT}/graph/neighbourhood", params=params)
+    assert r.status_code == 200
+    return r.json()
+
+
+class TestGraphOverviewByLayer:
+    """The cap and the layer filter have to be the same operation.
+
+    Every catalog edge is descriptive, so a cap sorted governing-first over the whole graph
+    truncated a firm's schema away before any client-side filter could see it -- and isolating the
+    catalog then showed an empty or arbitrary slice of it.
+    """
+
+    def test_a_layer_request_keeps_edges_the_whole_graph_cap_drops(self, client):
+        _stage_governing(20)
+        _stage_catalog()
+
+        plain = _overview(client, limit=5)
+        assert all(e["governing"] for e in plain["edges"]), "governing-first ordering changed"
+
+        catalog = _overview(client, limit=5, layer="catalog")
+        assert catalog["edges"]
+        assert {e["predicate"] for e in catalog["edges"]} <= {HAS_TABLE, HAS_COLUMN}
+
+    def test_counts_describe_the_filtered_set(self, client):
+        """A truncated catalog view must not report the whole graph's total, or it claims to be
+        complete when most of what it filtered was cut."""
+        _stage_governing(20)
+        _stage_catalog()
+
+        whole = _overview(client, limit=2000)
+        catalog = _overview(client, limit=2000, layer="catalog")
+
+        assert catalog["layer"] == "catalog"
+        assert catalog["total_edges"] == len(catalog["edges"])
+        assert catalog["truncated"] is False
+        assert catalog["total_edges"] < whole["total_edges"]
+
+    def test_truncation_is_counted_within_the_layer(self, client):
+        _stage_governing(20)
+        _stage_catalog()
+        expected = len(_overview(client, limit=2000, layer="catalog")["edges"])
+
+        capped = _overview(client, limit=2, layer="catalog")
+        assert capped["truncated"] is True
+        assert capped["total_edges"] == expected
+        assert len(capped["edges"]) == 2
+
+    def test_an_edge_joining_the_two_layers_is_in_both(self, client):
+        """Either endpoint, not both. That join is what makes this one graph rather than two, so
+        dropping it from each view would hide the only thing tying schema to facts."""
+        _stage_catalog()
+        table_id = table_node_id(SOURCE_ID, TABLES[0])
+        _stage(
+            [
+                build_assertion(
+                    tenant_id=TENANT,
+                    subject_id="matter:M-9",
+                    predicate="MENTIONS",
+                    object_id=table_id,
+                    epistemic_class=EpistemicClass.EXTRACTED_DET,
+                    method="llm:test@v1",
+                    confidence=0.8,
+                    source_locator=SourceLocator(
+                        document_id="doc-9", filename="f.pdf", page=1, quote="the returns table"
+                    ),
+                )
+            ]
+        )
+
+        def joins(body: dict) -> bool:
+            return any(e["predicate"] == "MENTIONS" for e in body["edges"])
+
+        assert joins(_overview(client, limit=2000, layer="catalog"))
+        assert joins(_overview(client, limit=2000, layer="domain"))
+
+    def test_an_unknown_layer_is_empty_rather_than_unfiltered(self, client):
+        """Silently ignoring it would draw the whole graph under a heading naming one layer."""
+        _stage_catalog()
+        assert _overview(client, layer="not-a-layer")["edges"] == []
+
+
+class TestTheCatalogCapKeepsTheSpine:
+    """Inside the catalog layer every edge is non-governing at 1.0, so governing-then-confidence
+    cannot tell `HAS_TABLE` from `HAS_COLUMN`. On a wide schema the cap filled with column edges and
+    left the database and table level -- the default view -- sparse or empty.
+    """
+
+    def test_the_spine_order_the_depth_is_derived_from_is_pinned(self):
+        """`_spine_depth` reads a position out of this tuple rather than hardcoding a predicate
+        list, so reordering it would silently invert the cap's ranking."""
+        from src.discovery.glue_scanner import CATALOG_KINDS
+
+        assert CATALOG_KINDS == ("source", "table", "column")
+
+    def test_the_source_to_table_edges_survive_a_cap_smaller_than_the_columns(self, client):
+        _stage_catalog(columns=5)
+
+        capped = _overview(client, limit=3, layer="catalog")
+        assert {e["predicate"] for e in capped["edges"]} == {HAS_TABLE}
+        assert len(capped["edges"]) == len(TABLES)
+
+    def test_a_partition_edge_ranks_with_the_columns_and_the_leaves_rank_last(self, client):
+        """`PARTITIONED_BY` reaches a column, so it is at the column level. A topic or a synonym
+        hangs off the spine rather than extending it."""
+        # Leaves first, so insertion order alone would have kept them: the old key could not
+        # separate these from the spine, and a test that agreed with it would prove nothing.
+        table_id = table_node_id(SOURCE_ID, TABLES[0])
+        _stage(
+            [
+                _declared(table_id, "CONCERNS_TOPIC", "topic:returns", TABLES[0]),
+                _declared(table_id, "HAS_SYNONYM", "synonym:refunds", TABLES[0]),
+                _declared(
+                    table_id,
+                    PARTITIONED_BY,
+                    column_node_id(SOURCE_ID, TABLES[0], "col_0"),
+                    TABLES[0],
+                ),
+            ]
+        )
+        _stage_catalog(columns=1)
+        total = len(_overview(client, limit=2000, layer="catalog")["edges"])
+        assert total == 2 * len(TABLES) + 3
+
+        capped = _overview(client, limit=total - 2, layer="catalog")
+        kept = {e["predicate"] for e in capped["edges"]}
+        assert kept == {HAS_TABLE, HAS_COLUMN, PARTITIONED_BY}
+        assert capped["truncated"] is True
+        assert capped["total_edges"] == total
+
+    def test_a_named_layer_other_than_catalog_still_leads_with_governing(self, client):
+        """Depth ordering is the catalog layer's alone. Elsewhere the edges worth keeping when the
+        cap bites are the ones that drive a consequence, whatever their confidence."""
+        _stage_governing(1)
+        _stage(
+            [
+                build_assertion(
+                    tenant_id=TENANT,
+                    subject_id="matter:M-4",
+                    predicate="MENTIONS",
+                    object_id="party:acme-0",
+                    epistemic_class=EpistemicClass.EXTRACTED_DET,
+                    method="llm:test@v1",
+                    confidence=0.9,
+                    source_locator=SourceLocator(
+                        document_id="doc-4", filename="f.pdf", page=1, quote="acme"
+                    ),
+                )
+            ]
+        )
+        edges = _overview(client, limit=1, layer="domain")["edges"]
+        assert [e["predicate"] for e in edges] == ["ADVERSE_TO"]
+
+
+class TestGraphNodeLabels:
+    def test_a_catalog_node_reads_as_its_own_name(self, client):
+        """`glue-main:anycorp.returns` is a node id, not a table name. The database comes back as
+        its own field so the explorer can filter on it without parsing an id."""
+        _stage_catalog()
+        nodes = {n["id"]: n for n in _overview(client, limit=2000, layer="catalog")["nodes"]}
+
+        table = nodes[table_node_id(SOURCE_ID, "anycorp.returns")]
+        assert table["label"] == "returns"
+        assert table["database"] == "anycorp"
+
+        column = nodes[column_node_id(SOURCE_ID, "anycorp.returns", "col_0")]
+        assert column["label"] == "col_0"
+        assert column["database"] == "anycorp"
+
+    def test_a_fact_node_carries_no_database(self, client):
+        """Only a catalogued thing belongs to one, and a database on a party would make the
+        explorer's database filter hide facts it knows nothing about."""
+        _stage_governing(1)
+        nodes = {n["id"]: n for n in _overview(client)["nodes"]}
+        assert "database" not in nodes["party:acme-0"]
 
 
 SCREEN_REASON = "acted for the opposing party in 2024"

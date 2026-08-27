@@ -534,6 +534,8 @@ code, pre { font-family: var(--mono); }
 .form-group input,
 .form-group select,
 .form-group textarea,
+.form-section input,
+.form-section select,
 .input {
   width: 100%;
   padding: 7px 11px;
@@ -548,6 +550,8 @@ code, pre { font-family: var(--mono); }
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus,
+.form-section input:focus,
+.form-section select:focus,
 .input:focus {
   outline: none;
   border-color: var(--accent);
@@ -590,6 +594,67 @@ code, pre { font-family: var(--mono); }
 .desc-edit textarea:focus { outline: none; border-color: var(--accent); }
 .desc-actions { display: flex; gap: 7px; }
 .desc-error { font-size: 11.5px; color: var(--red); }
+/* Metric authoring: a field beside its picker, repeating join and parameter rows, and the two
+   sections that stay folded so the modal is not a wall for a metric that has neither. */
+.field-row { display: flex; gap: 6px; align-items: center; }
+.field-row > input, .field-row > select { min-width: 0; }
+.metric-rows { display: flex; flex-direction: column; gap: 6px; }
+.metric-row { display: flex; gap: 6px; align-items: center; }
+.metric-row > * { min-width: 0; }
+.metric-row .op { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+.metric-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.metric-row input[type="checkbox"] { width: auto; }
+
+.base-metric-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 190px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 5px;
+}
+/* Scoped through .form-group, which styles every label it contains as a field caption. */
+.form-group .base-metric-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text);
+  margin-bottom: 0;
+  cursor: pointer;
+}
+.form-group .base-metric-option:hover { background: var(--bg-hover); }
+.form-group .base-metric-option input[type="checkbox"] { width: auto; flex-shrink: 0; }
+.base-metric-option .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.form-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  margin-bottom: 14px;
+}
+.form-section > summary {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.form-section[open] > summary { margin-bottom: 10px; }
+.form-section .hint { font-size: 11px; color: var(--text-dim); margin-top: 6px; line-height: 1.5; }
+
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
 .input-mono { font-family: var(--mono); font-size: 12.5px; }
@@ -1914,6 +1979,7 @@ code, pre { font-family: var(--mono); }
   border-color: var(--chip-colour, var(--accent));
   color: var(--text);
 }
+.chip-toggle-count { font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
 /* ── Misc ──────────────────────────────────────────────────────────────── */
 

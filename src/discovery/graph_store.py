@@ -7,6 +7,10 @@ The read half is the other end of enrichment. A model proposes a description, a 
 and this is what puts the approved text in front of the query planner -- via
 `src/discovery/catalog_overlay.py`, which merges it onto the scanned schema rather than into it.
 Glue stays authoritative for the shape of a table; the graph is authoritative for what it means.
+
+Since the nodes are written, the graph is also the durable copy of the scan itself, which is what
+`source_rows`/`table_rows`/`column_rows` are for: the catalog cache is process-local, so a second
+task or a redeploy would otherwise report "no scan has been run" over a graph holding every table.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from typing import Any
 
 from src.graph import catalog_queries as q
 from src.graph.catalog_queries import UPSERT_BATCH_SIZE
-from src.graph.scope import AuthContext, edge_scope
+from src.graph.scope import AuthContext, edge_scope, node_scope
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +121,21 @@ class CatalogGraphStore:
                 best[subject] = found
         return best
 
+    def source_rows(self, ctx: AuthContext) -> list[dict[str, Any]]:
+        """The tenant's sources as plain rows.
+
+        Rows rather than `SourceRecord`, here and below: `catalog_store` imports the scanner and
+        this module, so building its types here would close a cycle. `catalog_hydrate` owns that
+        assembly.
+        """
+        return list(self.graph.read_scoped(q.SOURCES_FOR_TENANT, node_scope(ctx, node_var="s")))
+
+    def table_rows(self, ctx: AuthContext) -> list[dict[str, Any]]:
+        return list(self.graph.read_scoped(q.TABLES_FOR_TENANT, edge_scope(ctx)))
+
+    def column_rows(self, ctx: AuthContext) -> list[dict[str, Any]]:
+        return list(self.graph.read_scoped(q.COLUMNS_FOR_TENANT, edge_scope(ctx)))
+
     def approved_synonyms(self, ctx: AuthContext) -> dict[str, list[str]]:
         """Approved synonyms per subject id, in a stable order."""
         rows = self.graph.read_scoped(q.APPROVED_SYNONYMS, edge_scope(ctx))
@@ -126,6 +145,21 @@ class CatalogGraphStore:
             name = str(row.get("name") or "").strip()
             if subject and name:
                 out.setdefault(subject, set()).add(name)
+        return {k: sorted(v) for k, v in out.items()}
+
+    def approved_topics(self, ctx: AuthContext) -> dict[str, list[str]]:
+        """Approved topics per table `full_name`, in a stable order.
+
+        Keyed by `full_name` rather than by subject id, unlike the synonyms: the traversal already
+        reaches the `:Table` node, and that name is what a caller asking about one table holds.
+        """
+        rows = self.graph.read_scoped(q.APPROVED_TOPICS, edge_scope(ctx))
+        out: dict[str, set[str]] = {}
+        for row in rows:
+            full_name = str(row.get("full_name") or "")
+            name = str(row.get("name") or "").strip()
+            if full_name and name:
+                out.setdefault(full_name, set()).add(name)
         return {k: sorted(v) for k, v in out.items()}
 
 

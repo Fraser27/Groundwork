@@ -178,6 +178,17 @@ class TestTheNodesActuallyGetWritten:
             CatalogGraphStore(graph).persist([CatalogNode("x:1", (), {"tenant_id": TENANT})]) == 0
         )
 
+    def test_topics_group_under_the_table_name_and_are_deduped(self):
+        """Two enrichment runs can propose the same topic, and the read is what collapses them."""
+        rows = [
+            {"full_name": FULL_NAME, "name": "credit risk"},
+            {"full_name": FULL_NAME, "name": "credit risk"},
+            {"full_name": FULL_NAME, "name": "collateral"},
+            {"full_name": "fin.other", "name": "shipping"},
+        ]
+        found = CatalogGraphStore(FakeGraph(rows)).approved_topics(ctx())
+        assert found == {FULL_NAME: ["collateral", "credit risk"], "fin.other": ["shipping"]}
+
 
 class TestTheOverlayPrecedence:
     """Three sources can describe a column and they are not equally authoritative."""
@@ -377,6 +388,30 @@ class TestTheCypherShape:
     def test_every_read_is_scoped(self, name):
         assert "{scope}" in q.ALL_CATALOG_QUERIES[name]
 
+    def test_the_catalog_reads_reach_a_column_through_its_edge(self):
+        """`c.table` is a convenience copy of the parent name. Reading it instead of walking
+        `HAS_COLUMN` would return columns no assertion ever attached to a table."""
+        assert "-[r:HAS_COLUMN]->" in q.COLUMNS_FOR_TENANT
+        assert "c.table" not in q.COLUMNS_FOR_TENANT
+        assert "-[r:HAS_TABLE]->" in q.TABLES_FOR_TENANT
+
+    def test_the_topics_read_is_anchored_on_a_table(self):
+        """The one thing keeping a case file's subject matter off a table page. `CONCERNS_TOPIC` is
+        shared with document extraction, so a match on the predicate alone would list every
+        filing's topics as properties of a table."""
+        assert "(s:Table)-[r:CONCERNS_TOPIC]->(t:Topic)" in q.APPROVED_TOPICS
+
+    def test_the_topics_read_returns_the_topic_nodes_own_name(self):
+        """Not the slug in `topic:credit-risk`. Ids are built, never parsed, and un-slugging one is
+        reverse-engineering a display label out of a key."""
+        assert "t.name AS name" in q.APPROVED_TOPICS
+        assert "s.full_name AS full_name" in q.APPROVED_TOPICS
+
+    def test_the_columns_read_names_its_parent_table(self):
+        """Without `full_name` the rows cannot be grouped and every table hydrates with no
+        columns, which looks like a scan that found empty tables."""
+        assert "t.full_name AS full_name" in q.COLUMNS_FOR_TENANT
+
     def test_the_node_write_is_tenant_keyed(self):
         cypher = q.upsert_node("Table")
         assert "item.tenant_id" in cypher
@@ -567,3 +602,434 @@ class TestCatalogClaimsStayOutOfTheReviewQueue:
 
         assert CONCERNS_TOPIC not in CATALOG_PREDICATES
         assert CATALOG_PREDICATES == {DESCRIBED_AS, "HAS_SYNONYM"}
+
+
+class RouteGraph:
+    """A graph for the table detail route: synonyms and topics through the scope, metrics through
+    `query`.
+
+    The synonym and topic rows carry a review state and this honours the scope's filter, so "only
+    approved reaches the page" is tested rather than assumed. A fake that returned every row would
+    pass whatever the route did.
+    """
+
+    def __init__(
+        self,
+        *,
+        synonyms: list[dict[str, Any]] | None = None,
+        topics: list[dict[str, Any]] | None = None,
+        approved_metrics: list[dict[str, Any]] | None = None,
+        measuring: list[dict[str, Any]] | None = None,
+        fail: bool = False,
+    ) -> None:
+        self.synonyms = synonyms or []
+        self.topics = topics or []
+        self.approved_metrics = approved_metrics or []
+        self.measuring = measuring or []
+        self.fail = fail
+        self.batches: list[tuple[str, list[dict[str, Any]]]] = []
+        self.reads: list[str] = []
+
+    def write_batch(self, cypher: str, batch: list[dict[str, Any]]) -> None:
+        self.batches.append((cypher, batch))
+
+    def read_scoped(self, template: str, scope: Any, params: Any = None) -> list[dict[str, Any]]:
+        assert "{scope}" in template, "a scoped read must carry the token"
+        states = scope.params.get("scope_states")
+        if template == q.APPROVED_SYNONYMS:
+            self.reads.append("synonyms")
+            return [
+                {"subject_id": r["subject_id"], "name": r["name"]}
+                for r in self.synonyms
+                if states is None or r["review_state"] in states
+            ]
+        if template == q.APPROVED_TOPICS:
+            self.reads.append("topics")
+            return [
+                {"full_name": r["full_name"], "name": r["name"]}
+                for r in self.topics
+                if states is None or r["review_state"] in states
+            ]
+        return []
+
+    def query(self, cypher: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        from src.graph import metric_queries as mq
+
+        if self.fail:
+            raise RuntimeError("neptune is unreachable")
+        if cypher == mq.LIST_APPROVED_METRICS:
+            return list(self.approved_metrics)
+        if cypher == mq.METRICS_MEASURING_TABLE:
+            assert params["full_name"] == FULL_NAME
+            return list(self.measuring)
+        return []
+
+
+def metric_row(metric_id: str = "utilisation") -> dict[str, Any]:
+    return {
+        "metric_id": metric_id,
+        "name": metric_id,
+        "definition": "Share of available hours billed.",
+        "expression": "SUM(billed) / SUM(available)",
+        "source_table": FULL_NAME,
+    }
+
+
+def topic_row(
+    name: str = "credit risk",
+    *,
+    full_name: str = FULL_NAME,
+    review_state: str = "APPROVED",
+) -> dict[str, Any]:
+    """One `APPROVED_TOPICS` row. The `:Topic` node's own name, never a slug to be un-parsed."""
+    return {"full_name": full_name, "name": name, "review_state": review_state}
+
+
+class TestTheTableDetailContract:
+    """What the table page renders about a table beyond its columns.
+
+    The `metrics` key is the one to be careful with. Present and empty means "the lineage was read
+    and nothing measures this table", which the page states as a fact about coverage. Absent means
+    nobody could look. An empty list standing in for an unanswered question would tell a reader a
+    table is unvetted on the strength of a graph timeout.
+    """
+
+    def api(self, graph: Any) -> tuple[Any, Any]:
+        from fastapi.testclient import TestClient
+
+        from src.api.app import create_app
+        from src.api.deps import get_services
+        from src.config import AuthConfig, GraphConfig, GroundworkConfig
+
+        cfg = GroundworkConfig(
+            environment="local",
+            auth=AuthConfig(dev_bypass_tenant=TENANT),
+            graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
+        )
+        cfg.validate()
+        app = create_app(cfg)
+        services = get_services()
+        services.catalog._tables[TENANT] = {FULL_NAME: table()}
+        services.graph = graph
+        return TestClient(app), services
+
+    def detail(self, graph: Any, staged: list[Any] | None = None) -> dict[str, Any]:
+        client, services = self.api(graph)
+        for assertion in staged or []:
+            services.review_queue.stage(ctx(), [assertion], job_id="enrich")
+        return client.get(f"/api/tenants/{TENANT}/tables/{FULL_NAME}").json()
+
+    def test_an_unmeasured_table_says_so_rather_than_saying_nothing(self):
+        body = self.detail(RouteGraph())
+        assert body["metrics"] == []
+
+    def test_a_metric_that_reads_the_table_is_named(self):
+        body = self.detail(RouteGraph(approved_metrics=[metric_row()], measuring=[metric_row()]))
+        assert body["metrics"] == [
+            {
+                "metric_id": "utilisation",
+                "name": "utilisation",
+                "definition": "Share of available hours billed.",
+            }
+        ]
+
+    def test_a_draft_metric_is_not_coverage(self):
+        """The page says no *approved* metric reads this table, and `metrics_measuring` filters on
+        no status at all, so a draft counted here would make that claim false."""
+        body = self.detail(RouteGraph(approved_metrics=[], measuring=[metric_row()]))
+        assert body["metrics"] == []
+
+    def test_unreadable_lineage_omits_the_key_rather_than_sending_none(self):
+        body = self.detail(RouteGraph(fail=True))
+        assert "metrics" not in body
+
+    def test_no_graph_omits_the_key_too(self):
+        body = self.detail(None)
+        assert "metrics" not in body
+
+    def test_an_approved_synonym_is_shown(self):
+        graph = RouteGraph(
+            synonyms=[
+                {
+                    "subject_id": table_node_id(SOURCE, FULL_NAME),
+                    "name": "credit lines",
+                    "review_state": "APPROVED",
+                }
+            ]
+        )
+        assert self.detail(graph)["synonyms"] == ["credit lines"]
+
+    def test_a_pending_synonym_is_not(self):
+        """A model's guess must not widen what a table is called until somebody agrees with it."""
+        graph = RouteGraph(
+            synonyms=[
+                {
+                    "subject_id": table_node_id(SOURCE, FULL_NAME),
+                    "name": "revolvers",
+                    "review_state": "PENDING",
+                }
+            ]
+        )
+        assert self.detail(graph)["synonyms"] == []
+
+    def test_another_tables_synonym_does_not_leak(self):
+        graph = RouteGraph(
+            synonyms=[
+                {
+                    "subject_id": table_node_id(SOURCE, "fin.other"),
+                    "name": "elsewhere",
+                    "review_state": "APPROVED",
+                }
+            ]
+        )
+        assert self.detail(graph)["synonyms"] == []
+
+    def test_an_approved_topic_is_shown_as_a_label(self):
+        assert self.detail(RouteGraph(topics=[topic_row()]))["topics"] == ["credit risk"]
+
+    def test_a_pending_topic_is_not(self):
+        """The page claims nothing about review state, so a model's guess must not reach it."""
+        graph = RouteGraph(topics=[topic_row("leverage", review_state="PENDING")])
+        assert self.detail(graph)["topics"] == []
+
+    def test_another_tables_topic_does_not_leak(self):
+        graph = RouteGraph(topics=[topic_row("shipping", full_name="fin.other")])
+        assert self.detail(graph)["topics"] == []
+
+    def test_the_three_fields_are_always_sent_when_the_graph_answers(self):
+        """The UI reads `metrics` undefaulted and the other two with `?? []`. A field that is
+        sometimes absent renders as an assertion about the table rather than about the API."""
+        body = self.detail(RouteGraph())
+        for field in ("metrics", "synonyms", "topics"):
+            assert field in body
+
+
+class Recorder:
+    """An indexer that records what it was asked to rebuild. `catalog` is left unset so the
+    container does not swap it for the enriched one, which would say nothing here."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.calls: list[dict[str, bool]] = []
+        self.fail = fail
+        self.catalog = None
+        self.graph = None
+        self.metric_store = None
+
+    def rebuild(self, ctx: Any, *, metrics: bool, tables: bool, entities: bool) -> Any:
+        if self.fail:
+            raise RuntimeError("the embedding model timed out")
+        self.calls.append({"metrics": metrics, "tables": tables, "entities": entities})
+        return type("R", (), {"errors": [], "to_dict": lambda self: {}})()
+
+
+class TestApprovalRefreshesTheRoutingIndex:
+    """Approving a description changed nothing a question could reach until somebody pressed
+    Rebuild: the routing index holds the words that were embedded, not the words now approved.
+
+    After the response, never inside it. An approval that fails because an embedding call is slow is
+    worse than an index that is a moment stale, and the approval is already durable by then.
+    """
+
+    def api(self, recorder: Recorder | None) -> tuple[Any, Any]:
+        client, services = TestTheTableDetailContract().api(RouteGraph())
+        services.router_indexer = recorder
+        return client, services
+
+    def pending(self, services: Any) -> None:
+        assertion = build_assertion(
+            tenant_id=TENANT,
+            subject_id=table_node_id(SOURCE, FULL_NAME),
+            predicate=DESCRIBED_AS,
+            object_id="description:abc",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:m1",
+            confidence=DESCRIPTIVE_CONFIDENCE,
+            source_locator=SourceLocator(source_id=SOURCE, table=FULL_NAME),
+        )
+        services.review_queue.stage(ctx(), [assertion], job_id="enrich")
+
+    def test_approving_refreshes_the_table_layer_only(self):
+        """A catalog approval cannot change a metric definition or a fact, and the entity layer is
+        the expensive one."""
+        recorder = Recorder()
+        client, services = self.api(recorder)
+        self.pending(services)
+
+        r = client.post(f"/api/tenants/{TENANT}/tables/{FULL_NAME}/enrichment/approve")
+
+        assert r.json()["approved"] == 1
+        assert recorder.calls == [{"metrics": False, "tables": True, "entities": False}]
+
+    def test_approving_nothing_reindexes_nothing(self):
+        recorder = Recorder()
+        client, _ = self.api(recorder)
+
+        r = client.post(f"/api/tenants/{TENANT}/tables/{FULL_NAME}/enrichment/approve")
+
+        assert r.json()["approved"] == 0
+        assert recorder.calls == []
+
+    def test_a_human_description_refreshes_it_too(self):
+        """It is live the moment it is written, so the index is the only thing left stale."""
+        recorder = Recorder()
+        client, _ = self.api(recorder)
+
+        r = client.patch(
+            f"/api/tenants/{TENANT}/tables/{FULL_NAME}/description",
+            json={"text": "Revolving credit facilities, one row each."},
+        )
+
+        assert r.json()["live"] is True
+        assert recorder.calls == [{"metrics": False, "tables": True, "entities": False}]
+
+    def test_an_index_that_cannot_be_refreshed_does_not_fail_the_approval(self):
+        client, services = self.api(Recorder(fail=True))
+        self.pending(services)
+
+        r = client.post(f"/api/tenants/{TENANT}/tables/{FULL_NAME}/enrichment/approve")
+
+        assert r.status_code == 200
+        assert r.json()["approved"] == 1
+
+    def test_no_routing_index_is_not_an_error_either(self):
+        """Vector search off is a supported deployment, so there is nothing to refresh."""
+        client, services = self.api(None)
+        self.pending(services)
+
+        r = client.post(f"/api/tenants/{TENANT}/tables/{FULL_NAME}/enrichment/approve")
+
+        assert r.status_code == 200
+        assert r.json()["approved"] == 1
+
+
+class TestTheReviewQueueRefreshesItToo:
+    """The same description can be approved from the Review Queue, which is a different route.
+
+    Hooking only the per-table action left the generic path silently stale: a reviewer clearing the
+    queue would approve wording that never reached tier selection, and nothing said so.
+    """
+
+    def api(self, recorder: Recorder | None) -> tuple[Any, Any, str]:
+        client, services = TestApprovalRefreshesTheRoutingIndex().api(recorder)
+        assertion = build_assertion(
+            tenant_id=TENANT,
+            subject_id=table_node_id(SOURCE, FULL_NAME),
+            predicate=DESCRIBED_AS,
+            object_id="description:abc",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:m1",
+            confidence=DESCRIPTIVE_CONFIDENCE,
+            source_locator=SourceLocator(source_id=SOURCE, table=FULL_NAME),
+        )
+        services.review_queue.stage(ctx(), [assertion], job_id="enrich")
+        return client, services, assertion.assertion_id
+
+    def test_approving_one_from_the_queue_refreshes_the_table_layer(self):
+        recorder = Recorder()
+        client, _, assertion_id = self.api(recorder)
+
+        r = client.post(f"/api/tenants/{TENANT}/assertions/{assertion_id}/approve")
+
+        assert r.status_code == 200
+        assert recorder.calls == [{"metrics": False, "tables": True, "entities": False}]
+
+    def test_approving_in_bulk_refreshes_it_once(self):
+        recorder = Recorder()
+        client, _, assertion_id = self.api(recorder)
+
+        r = client.post(
+            f"/api/tenants/{TENANT}/assertions/approve",
+            json={"assertion_ids": [assertion_id]},
+        )
+
+        assert r.status_code == 200
+        assert recorder.calls == [{"metrics": False, "tables": True, "entities": False}]
+
+    def test_approving_a_document_fact_does_not_reindex_the_catalog(self):
+        """Most of what a reviewer approves is a fact read off a page, and re-embedding the schema
+        for one of those would pay for the table layer on every approval in the product."""
+        recorder = Recorder()
+        client, services = TestApprovalRefreshesTheRoutingIndex().api(recorder)
+        fact = build_assertion(
+            tenant_id=TENANT,
+            subject_id="party:acme",
+            predicate="REPRESENTS",
+            object_id="party:beta",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:m1",
+            confidence=0.7,
+            matter_id="matter-1",
+            source_locator=SourceLocator(
+                document_id="doc-1",
+                page=1,
+                quote="Acme acts for Beta",
+                char_start=0,
+                char_end=18,
+            ),
+        )
+        services.review_queue.stage(ctx(), [fact], job_id="ingest")
+
+        client.post(f"/api/tenants/{TENANT}/assertions/{fact.assertion_id}/approve")
+
+        assert recorder.calls == []
+
+
+class TestTheSynonymProvider:
+    """What reaches table selection when a question uses the firm's own word for a table.
+
+    Keyed by `full_name`, never by graph id. `approved_synonyms` returns subject ids because that is
+    what the edge carries, and a mapping handed to `relevant_tables` in that shape matches nothing at
+    all: the id is built here with `table_node_id` rather than parsed anywhere, which is the rule
+    `catalog_overlay` states.
+    """
+
+    def rows(self, review_state: str = "APPROVED", full_name: str = FULL_NAME) -> list[dict]:
+        return [
+            {
+                "subject_id": table_node_id(SOURCE, full_name),
+                "name": "credit lines",
+                "review_state": review_state,
+            }
+        ]
+
+    def provider(self, graph: Any) -> tuple[Any, Any]:
+        _, services = TestTheTableDetailContract().api(graph)
+        return services.catalog_synonyms(), services
+
+    def test_the_mapping_is_keyed_by_the_table_name(self):
+        synonyms_for, _ = self.provider(RouteGraph(synonyms=self.rows()))
+        assert synonyms_for(ctx()) == {FULL_NAME: ["credit lines"]}
+
+    def test_no_graph_id_survives_into_the_query_layer(self):
+        synonyms_for, _ = self.provider(RouteGraph(synonyms=self.rows()))
+        assert not [k for k in synonyms_for(ctx()) if k.startswith("table:")]
+
+    def test_a_synonym_for_a_table_this_firm_has_not_scanned_is_dropped(self):
+        synonyms_for, _ = self.provider(RouteGraph(synonyms=self.rows(full_name="fin.elsewhere")))
+        assert synonyms_for(ctx()) == {}
+
+    def test_a_pending_synonym_is_not_offered(self):
+        """An unapproved guess must not widen what a question matches."""
+        synonyms_for, _ = self.provider(RouteGraph(synonyms=self.rows(review_state="PENDING")))
+        assert synonyms_for(ctx()) == {}
+
+    def test_the_graph_is_read_once_however_many_lanes_ask(self):
+        """`Planner` asks in the catalog part and again in the SQL part, so an uncached provider
+        costs two round trips for one composed answer."""
+        graph = RouteGraph(synonyms=self.rows())
+        synonyms_for, _ = self.provider(graph)
+
+        synonyms_for(ctx())
+        synonyms_for(ctx())
+
+        assert graph.reads == ["synonyms"]
+
+    def test_no_graph_means_no_provider_rather_than_an_error(self):
+        synonyms_for, _ = self.provider(None)
+        assert synonyms_for is None
+
+    def test_the_resolver_and_the_planner_both_get_one(self):
+        _, services = self.provider(RouteGraph(synonyms=self.rows()))
+
+        assert services.build_resolver(TENANT)._synonyms_for is not None
+        assert services.build_planner(TENANT)._synonyms_for is not None

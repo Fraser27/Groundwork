@@ -6,9 +6,14 @@ round trip on every page load, and the API needs somewhere to record *when* a so
 last scanned. That is what this holds.
 
 Deliberately a cache, not a source of truth. Glue is authoritative for schemas and S3 is
-authoritative for documents; everything here can be rebuilt by scanning again. So it is
-in-memory by default and losing it costs a re-scan, which is the same posture as the
-vector index.
+authoritative for documents; everything here can be rebuilt.
+
+It used to be rebuilt only by re-scanning, and this docstring said so. That was written when
+the scan's `Table` and `Column` nodes were being discarded, so the graph held nothing to reload
+from. They are persisted now, which makes the graph the durable copy: losing this cache costs
+one scoped read, not an operator noticing and pressing Scan. `catalog_hydrate` does that read,
+because a process-local cache is lost on every redeploy and is empty in the MCP sidecar from the
+moment it starts.
 
 Scoped by tenant throughout. Two firms may both have a `warehouse.matters` table and they
 are different tables.
@@ -18,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
@@ -138,6 +144,7 @@ class CatalogStore:
     def __init__(self) -> None:
         self._tables: dict[str, dict[str, CatalogTable]] = {}
         self._sources: dict[str, dict[str, SourceRecord]] = {}
+        self._hydrated: set[str] = set()
         # Scans run in a background task while pages read; both touch this.
         self._lock = threading.Lock()
 
@@ -176,6 +183,8 @@ class CatalogStore:
                 errors=list(result.errors),
             )
             self._sources.setdefault(tenant_id, {})[source_id] = record
+            # A scan just filled this tenant, so there is nothing left to load from the graph.
+            self._hydrated.add(tenant_id)
 
         logger.info(
             "recorded scan of %s for %s: %d tables, %d errors",
@@ -185,6 +194,56 @@ class CatalogStore:
             len(result.errors),
         )
         return record
+
+    def is_hydrated(self, tenant_id: str) -> bool:
+        """Whether this tenant has been reconciled against the graph in this process.
+
+        False and empty are different states, and conflating them is the bug: an empty cache
+        means either "never scanned" or "scanned by a process that has since been replaced",
+        and only the graph can say which.
+        """
+        with self._lock:
+            return tenant_id in self._hydrated
+
+    def mark_hydrated(self, tenant_id: str) -> None:
+        """Stop trying to load this tenant, even though nothing was loaded.
+
+        Set on a successful empty read, so a genuinely unscanned tenant costs one graph read
+        rather than one per page load. Deliberately not set when the read fails: a Neptune
+        outage must leave the cache retryable, not permanently declared complete.
+        """
+        with self._lock:
+            self._hydrated.add(tenant_id)
+
+    def hydrate(
+        self,
+        tenant_id: str,
+        tables: Sequence[CatalogTable],
+        sources: Sequence[SourceRecord],
+    ) -> int:
+        """Fill from the graph without overwriting anything a live scan produced.
+
+        Not `record_scan`: that replaces a source's tables wholesale, which is right for a scan
+        (a table dropped in Glue must disappear) and wrong here, where the graph may be behind a
+        scan running concurrently in this process. So an existing entry always wins, and a source
+        already carrying a scan timestamp is left alone rather than reverted to the graph's.
+        """
+        loaded = 0
+        with self._lock:
+            tables_for_tenant = self._tables.setdefault(tenant_id, {})
+            for table in tables:
+                if table.full_name and table.full_name not in tables_for_tenant:
+                    tables_for_tenant[table.full_name] = table
+                    loaded += 1
+
+            sources_for_tenant = self._sources.setdefault(tenant_id, {})
+            for source in sources:
+                found = sources_for_tenant.get(source.source_id)
+                if found is None or found.last_scanned_at is None:
+                    sources_for_tenant[source.source_id] = source
+
+            self._hydrated.add(tenant_id)
+        return loaded
 
     def tables(self, tenant_id: str) -> list[CatalogTable]:
         with self._lock:
@@ -235,3 +294,6 @@ class CatalogStore:
         with self._lock:
             self._tables.pop(tenant_id, None)
             self._sources.pop(tenant_id, None)
+            # Leaving the flag set would make a reset permanent: the next read would consider the
+            # tenant already loaded and never look at the graph again.
+            self._hydrated.discard(tenant_id)

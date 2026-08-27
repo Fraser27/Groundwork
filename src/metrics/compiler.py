@@ -21,6 +21,9 @@ The governance the compiler enforces, beyond producing valid SQL:
   ever have partial PK metadata.
 * **Filter surface.** If a metric declares `parameters`, those are the only
   columns a caller may filter on.
+* **Expression columns.** A column inside the expression body that the catalog does
+  not list is warned, not refused. An absent catalog means *unknown*, so refusing
+  would make an unscanned table an invalid metric.
 """
 
 from __future__ import annotations
@@ -343,6 +346,79 @@ def _detect_fanout_joins(
     return risky
 
 
+def _column_refs(expression: str) -> list[tuple[str, str]] | None:
+    """(qualifier, column) per column reference, or None when the expression will not parse.
+
+    None rather than a partial list: a guess drawn from a failed parse produces warnings
+    about columns that are fine, which is how a real warning stops being read.
+    """
+    try:
+        node = sqlglot.parse_one(expression, dialect=DIALECT)
+    except sqlglot.errors.ParseError:
+        return None
+    if node is None:
+        return None
+    refs: list[tuple[str, str]] = []
+    for col in node.find_all(exp.Column):
+        # A db- or catalog-qualified reference names a relation the compiler never emits, so
+        # there is nothing to resolve it against.
+        if col.args.get("db") or col.args.get("catalog"):
+            continue
+        refs.append((col.table, col.name))
+    return refs
+
+
+def _expression_column_warnings(
+    metric: MetricDefinition, catalog: SchemaCatalog, aliases: dict[str, str]
+) -> list[str]:
+    """Columns inside the expression body the catalog says are not there.
+
+    Warned, never refused. An empty catalog means *unknown*, not *no columns*, so a hard
+    rejection here would turn an unscanned table into "your metric is invalid". This fires
+    only on positive evidence: every table is known, the expression parsed, and the column
+    is absent from it.
+    """
+    refs = _column_refs(metric.expression)
+    if not refs:
+        return []
+
+    by_alias: dict[str, set[str]] = {}
+    for table, alias in aliases.items():
+        schema = catalog.table(table)
+        if schema and schema.columns:
+            by_alias[alias] = {c.lower() for c in schema.columns}
+    every_table_known = len(by_alias) == len(aliases)
+    known = {c for cols in by_alias.values() for c in cols}
+
+    absent: list[str] = []
+    misqualified: list[str] = []
+    for qualifier, column in refs:
+        if not qualifier:
+            if every_table_known and column.lower() not in known:
+                absent.append(column)
+        elif (cols := by_alias.get(qualifier)) is not None:
+            if column.lower() not in cols:
+                absent.append(f"{qualifier}.{column}")
+        elif every_table_known:
+            misqualified.append(f"{qualifier}.{column}")
+
+    warnings: list[str] = []
+    if absent:
+        warnings.append(
+            f"Metric '{metric.name}' expression references {sorted(set(absent))}, which the "
+            f"catalog does not list on {sorted(set(metric.tables))}. The SQL is still valid, "
+            f"so this fails when Athena runs it rather than here. Check the spelling."
+        )
+    if misqualified:
+        defined = ", ".join(f"{t} AS {a}" for t, a in aliases.items())
+        warnings.append(
+            f"Metric '{metric.name}' expression qualifies {sorted(set(misqualified))} with a "
+            f"table alias this query does not define; it aliases {defined}. Use one of those "
+            f"aliases, or leave the column unqualified."
+        )
+    return warnings
+
+
 # ── Compilation ───────────────────────────────────────────────────────────────
 
 
@@ -527,6 +603,7 @@ def compile_metric(
             f"that table's primary key: a one-to-many match duplicates source rows and "
             f"inflates the result. Verify the join is one-to-one, or pre-aggregate."
         )
+    warnings.extend(_expression_column_warnings(metric, catalog, aliases))
     if metric.aggregation == "non_additive":
         warnings.append(
             f"Metric '{name}' is non_additive: correct at the queried grain, but the "

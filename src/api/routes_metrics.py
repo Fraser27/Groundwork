@@ -27,7 +27,7 @@ import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from src.api.deps import (
     Services,
@@ -44,7 +44,13 @@ from src.metrics.graph_store import (
     VALID_STATUSES,
     GraphMetricStore,
 )
-from src.metrics.models import MetricDefinition, MetricJoin, MetricParameter, StaticCatalog
+from src.metrics.models import (
+    MetricDefinition,
+    MetricJoin,
+    MetricParameter,
+    MetricRegistry,
+    StaticCatalog,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +75,16 @@ def _catalog(services: Services, tenant_id: str) -> Any:
     Built from the catalog scan when there is one. An empty catalog is permissive rather
     than obstructive: `TableSchema` treats no columns as *unknown*, so a metric can be
     authored against a table nobody has scanned yet instead of being blocked on it.
+
+    Through `catalog_reader()` rather than `services.catalog`: the raw store starts empty in
+    every process, so reading it directly turns the column checks off in a cold container while
+    the Tables page still looks populated.
     """
     tables = {}
     try:
         from src.metrics.models import TableSchema
 
-        for table in services.catalog.tables(tenant_id):
+        for table in services.catalog_reader().tables(tenant_id):
             tables[table.full_name] = TableSchema(
                 full_name=table.full_name,
                 columns={c.name: c.data_type for c in table.columns},
@@ -83,6 +93,30 @@ def _catalog(services: Services, tenant_id: str) -> Any:
     except Exception as e:
         logger.debug("could not build a schema catalog: %s", e)
     return StaticCatalog(tables=tables)
+
+
+def _registry(services: Services, tenant_id: str, candidate: MetricDefinition) -> MetricRegistry:
+    """The metrics a derived definition may compose.
+
+    Every stored metric, not only the approved ones. An author writing a ratio has usually
+    just written both halves and neither is approved yet, and requiring an approved base would
+    make composition impossible in one sitting. Approval gates *serving*, not authoring:
+    `build_metric_matcher` still reads `approved_only=True`, so a draft base composed here
+    still cannot answer a question.
+
+    The submitted definition replaces its stored version, so a metric naming itself as a base
+    resolves to itself and the compiler refuses it for composing a derived metric.
+    """
+    stored: list[MetricDefinition] | None = None
+    if services.graph is not None:
+        try:
+            stored = GraphMetricStore(services.graph).list_metrics(tenant_id)
+        except Exception as e:
+            logger.warning("could not read metrics to resolve base metrics: %s", e)
+    if stored is None:
+        matcher = services.metric_matcher
+        stored = list(matcher.metrics) if matcher is not None else []
+    return MetricRegistry.from_list([*stored, candidate])
 
 
 class MetricParameterIn(BaseModel):
@@ -114,11 +148,23 @@ class MetricIn(BaseModel):
     time_grains: list[str] = Field(default_factory=list)
     time_grain_column: str = ""
     aggregation: str = "additive"
+    value_type: str = Field(default="number", max_length=32)
+    unit: str = Field(default="", max_length=32)
+    format: str = Field(default="", max_length=64)
     parameters: list[MetricParameterIn] = Field(default_factory=list)
     joins: list[MetricJoinIn] = Field(default_factory=list)
     base_metrics: list[str] = Field(default_factory=list)
     entity_columns: dict[str, str] = Field(default_factory=dict)
     owner: str = ""
+
+    @field_validator(
+        "definition", "source_table", "time_grain_column", "unit", "format", "owner", mode="before"
+    )
+    @classmethod
+    def _null_is_empty(cls, v: Any) -> Any:
+        """`_out` renders an unset field as null, so the API's own response body has to be a
+        valid request body: fetch-then-save is exactly what the edit form does."""
+        return "" if v is None else v
 
     def to_definition(self) -> MetricDefinition:
         return MetricDefinition(
@@ -134,6 +180,9 @@ class MetricIn(BaseModel):
             time_grains=list(self.time_grains),
             time_grain_column=self.time_grain_column,
             aggregation=self.aggregation,
+            value_type=self.value_type,
+            unit=self.unit,
+            format=self.format,
             parameters=[MetricParameter(**p.model_dump()) for p in self.parameters],
             joins=[MetricJoin(**j.model_dump()) for j in self.joins],
             base_metrics=list(self.base_metrics),
@@ -142,20 +191,45 @@ class MetricIn(BaseModel):
         )
 
 
-def _compile_or_422(services: Services, tenant_id: str, metric: MetricDefinition) -> Any:
+def _reason(e: Exception) -> str:
+    """Pydantic renders a type tag and a docs URL per error, which is noise in a toast."""
+    if isinstance(e, ValidationError):
+        return "; ".join(
+            (".".join(str(p) for p in err["loc"]) + ": " if err["loc"] else "") + err["msg"]
+            for err in e.errors()
+        )
+    return str(e)
+
+
+def _compile_or_422(
+    services: Services, tenant_id: str, metric: MetricIn | MetricDefinition
+) -> tuple[MetricDefinition, Any]:
+    """Model validation runs inside the same try as the compile.
+
+    A missing source_table, a name that is not an identifier and an unparseable expression are
+    all the same thing to an author -- a typo in the definition -- so all three have to read as
+    422. Building the `MetricDefinition` outside made the first two an opaque 500.
+
+    The registry is built only for a derived metric: a simple one resolves nothing through it,
+    and building it costs a graph read on every preview keystroke.
+    """
     try:
-        result = compile_metric(metric, _catalog(services, tenant_id))
+        definition = metric.to_definition() if isinstance(metric, MetricIn) else metric
+        registry = (
+            _registry(services, tenant_id, definition) if definition.type == "derived" else None
+        )
+        result = compile_metric(definition, _catalog(services, tenant_id), registry=registry)
     except Exception as e:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"this definition does not compile: {e}",
+            f"this definition does not compile: {_reason(e)}",
         ) from e
     if not result.is_valid:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "this definition does not compile: " + "; ".join(result.errors),
         )
-    return result
+    return definition, result
 
 
 def _out(metric: MetricDefinition, *, status_value: str = "", version: int = 0) -> dict[str, Any]:
@@ -172,6 +246,19 @@ def _out(metric: MetricDefinition, *, status_value: str = "", version: int = 0) 
         "time_grains": list(metric.time_grains),
         "time_grain_column": metric.time_grain_column or None,
         "aggregation": metric.aggregation,
+        "value_type": metric.value_type,
+        "unit": metric.unit,
+        "format": metric.format,
+        "base_metrics": list(metric.base_metrics),
+        "joins": [
+            {
+                "table": j.table,
+                "source_column": j.source_column,
+                "target_column": j.target_column,
+                "join_type": j.join_type,
+            }
+            for j in metric.joins
+        ],
         "parameters": [
             {
                 "column": p.column,
@@ -201,7 +288,7 @@ async def preview_metric(
     """
     require_admin(principal)
     ctx, _ = principal
-    result = _compile_or_422(services, ctx.tenant_id, body.to_definition())
+    _definition, result = _compile_or_422(services, ctx.tenant_id, body)
     return {
         "metric_id": body.metric_id,
         "sql": result.sql,
@@ -229,13 +316,16 @@ async def create_metric(
     ctx, _ = principal
     store = _require_store(services)
 
-    definition = body.to_definition()
-    result = _compile_or_422(services, ctx.tenant_id, definition)
+    definition, result = _compile_or_422(services, ctx.tenant_id, body)
     saved = store.save_metric(ctx.tenant_id, definition, updated_by=ctx.user_id)
 
     return {
         **_out(definition, status_value=STATUS_DRAFT, version=int(saved.get("version") or 1)),
         "sql": result.sql,
+        # Sent on the save as well as the preview: fan-out inflation and a unit mismatch are
+        # ways the figure can be wrong while the SQL is valid, so an author who skipped the
+        # preview still has to be told.
+        "warnings": result.warnings,
         "note": (
             "Saved as a draft. It will not answer questions until it is approved, and "
             "approving is a separate action so authoring alone cannot put it into service."
@@ -269,8 +359,7 @@ async def update_metric(
     if existing_status is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no metric {metric_id!r}")
 
-    definition = body.to_definition()
-    result = _compile_or_422(services, ctx.tenant_id, definition)
+    definition, result = _compile_or_422(services, ctx.tenant_id, body)
     saved = store.save_metric(
         ctx.tenant_id, definition, updated_by=ctx.user_id, status=existing_status
     )
@@ -278,6 +367,7 @@ async def update_metric(
     return {
         **_out(definition, status_value=existing_status, version=int(saved.get("version") or 1)),
         "sql": result.sql,
+        "warnings": result.warnings,
         "note": "The previous definition was snapshotted and can be restored.",
     }
 
@@ -512,7 +602,7 @@ async def compile_existing_metric(
     """
     ctx, _ = principal
     metric, _status = _find(services, ctx.tenant_id, metric_id)
-    result = _compile_or_422(services, ctx.tenant_id, metric)
+    _definition, result = _compile_or_422(services, ctx.tenant_id, metric)
     return {
         "metric_id": metric.metric_id,
         "sql": result.sql,
