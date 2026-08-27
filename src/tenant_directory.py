@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 #:
 #: The attribute is named `tenant_id` because that is the deployed table's partition key
 #: and it cannot be renamed in place — DynamoDB replaces the table, which changes the ARN
-#: that `LexGraphApp` imports. So the *name* is historical while the *value* is an entity
+#: that `GroundworkApp` imports. So the *name* is historical while the *value* is an entity
 #: key, and the `USER#` prefix is what keeps user records from colliding with anything else
 #: stored here later.
 KEY_ATTR = "tenant_id"

@@ -40,13 +40,13 @@ table schemas), the managed graph build is not configurable, and it uses
 DataZone/SMUS for tenancy which is enterprise-catalog governance rather than
 firm-level multi-tenancy.
 
-## What LexGraph takes from each
+## What Groundwork takes from each
 
 Structured governance from rosetta. Ontology/reasoning/Cedar ideas from COA.
 Per-edge provenance from the Semantica critique — but **stricter**, because
 Semantica's version is not sufficient for legal:
 
-| | Semantica | LexGraph |
+| | Semantica | Groundwork |
 |---|---|---|
 | confidence, source span, method | yes | yes |
 | `epistemic_class` | no | **yes — the key addition** |

@@ -1,4 +1,4 @@
-# LexGraph documentation
+# Groundwork documentation
 
 A static documentation site. No server, no build step required to read it, no framework
 and no dependencies. Open `docs/index.html` in any browser — including directly from

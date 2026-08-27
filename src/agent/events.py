@@ -34,7 +34,7 @@ DEFAULT_RESULT_KIND = "json"
 
 #: Set by `RetrievalAgent` on its MCP calls so the server knows the call is part of a run that
 #: records its own audit row. Carries no authority; see `RetrievalAgent._client`.
-RUN_ID_HEADER = "x-lexgraph-run-id"
+RUN_ID_HEADER = "x-groundwork-run-id"
 
 #: Every `kind` a client may receive. Listed so a reader knows the full set without grepping.
 KINDS = frozenset({"run_started", "tool_call", "tool_result", "text", "run_finished", "run_failed"})

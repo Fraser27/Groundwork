@@ -34,9 +34,9 @@ TENANT = "demo-firm"
 
 def _table(name: str, *columns: CatalogColumn, description: str = "") -> CatalogTable:
     return CatalogTable(
-        full_name=f"lexgraph_legal.{name}",
+        full_name=f"groundwork_legal.{name}",
         name=name,
-        database="lexgraph_legal",
+        database="groundwork_legal",
         source_id="glue",
         description=description,
         columns=columns,
@@ -72,7 +72,7 @@ class _Body:
 class FakeBedrock:
     """Returns the SQL it was told to, and records what it was asked."""
 
-    def __init__(self, text: str = "SELECT COUNT(*) FROM lexgraph_legal.matters LIMIT 10") -> None:
+    def __init__(self, text: str = "SELECT COUNT(*) FROM groundwork_legal.matters LIMIT 10") -> None:
         self.text = text
         self.request: dict | None = None
 
@@ -159,7 +159,7 @@ class TestTheGeneratorCannotReachACatalog:
 class TestThePromptCarriesTheSchema:
     def test_columns_types_and_descriptions_all_reach_the_model(self):
         prompt = build_prompt("how many hours", tables=[MATTERS])
-        assert "lexgraph_legal.matters" in prompt
+        assert "groundwork_legal.matters" in prompt
         assert "matter_id string" in prompt
         assert "The firm's matter reference" in prompt
         assert "One row per matter the firm has opened" in prompt
@@ -179,7 +179,7 @@ class TestThePromptCarriesTheSchema:
         the firm's own tables out of the window."""
         many = [_table(f"t{i}") for i in range(MAX_TABLES + 5)]
         prompt = build_prompt("q", tables=many)
-        assert f"lexgraph_legal.t{MAX_TABLES + 4}" not in prompt
+        assert f"groundwork_legal.t{MAX_TABLES + 4}" not in prompt
 
 
 class TestTemperatureIsNeverSent:
@@ -194,7 +194,7 @@ class TestTemperatureIsNeverSent:
 
 class TestTheModelsAnswerIsNormalised:
     def test_a_markdown_fence_is_stripped(self):
-        bedrock = FakeBedrock("```sql\nSELECT COUNT(*) FROM lexgraph_legal.matters LIMIT 5\n```")
+        bedrock = FakeBedrock("```sql\nSELECT COUNT(*) FROM groundwork_legal.matters LIMIT 5\n```")
         out = SqlGenerator(model_id="m", bedrock=bedrock).generate("q", tables=[MATTERS])
         assert out is not None
         assert out.sql.startswith("SELECT")
@@ -217,8 +217,8 @@ class TestTheModelsAnswerIsNormalised:
         )
         assert out is not None
         assert out.tables_offered == (
-            "lexgraph_legal.matters",
-            "lexgraph_legal.time_entries",
+            "groundwork_legal.matters",
+            "groundwork_legal.time_entries",
         )
 
 
@@ -230,7 +230,7 @@ class TestTheAllowlistIsWhatWasOffered:
         """`payroll` is a real scanned table for this tenant. The question does not mention it, so
         it never reaches the prompt, so it is not on the allowlist, so a query naming it cannot
         run -- and Athena is never called."""
-        bedrock = FakeBedrock("SELECT SUM(salary) FROM lexgraph_legal.payroll LIMIT 10")
+        bedrock = FakeBedrock("SELECT SUM(salary) FROM groundwork_legal.payroll LIMIT 10")
         client = FakeAthena()
         result = _lane(bedrock, client).run(
             "how many matters do we have", tables=[MATTERS, TIME_ENTRIES, PAYROLL]
@@ -261,7 +261,7 @@ class TestTheFirewallRulesAreEnforcedNotRequested:
     """A prompt instruction is a request. These assert on what happens when the model ignores it."""
 
     def test_a_row_wise_query_is_refused_and_never_reaches_athena(self):
-        bedrock = FakeBedrock("SELECT * FROM lexgraph_legal.matters LIMIT 10")
+        bedrock = FakeBedrock("SELECT * FROM groundwork_legal.matters LIMIT 10")
         client = FakeAthena()
         result = _lane(bedrock, client).run("how many matters", tables=[MATTERS])
         assert result is not None
@@ -270,7 +270,7 @@ class TestTheFirewallRulesAreEnforcedNotRequested:
         assert client.started == []
 
     def test_an_unbounded_query_is_refused_and_never_reaches_athena(self):
-        bedrock = FakeBedrock("SELECT COUNT(*) FROM lexgraph_legal.matters")
+        bedrock = FakeBedrock("SELECT COUNT(*) FROM groundwork_legal.matters")
         client = FakeAthena()
         result = _lane(bedrock, client).run("how many matters", tables=[MATTERS])
         assert result is not None
@@ -281,7 +281,7 @@ class TestTheFirewallRulesAreEnforcedNotRequested:
     def test_the_sql_is_still_reported_when_it_was_refused(self):
         """The reader needs to see what was refused. A blocked query with no SQL beside it is an
         unexplained refusal."""
-        bedrock = FakeBedrock("SELECT * FROM lexgraph_legal.matters LIMIT 10")
+        bedrock = FakeBedrock("SELECT * FROM groundwork_legal.matters LIMIT 10")
         result = _lane(bedrock, FakeAthena()).run("how many matters", tables=[MATTERS])
         assert result is not None
         assert result.generated.sql.startswith("SELECT *")
@@ -292,7 +292,7 @@ class TestAFailureIsNeverAnEmptyResult:
         """The firewall validates tables, not columns, so this reaches Athena and errors. Reporting
         it as an empty result would read as "no data" -- the silent failure scope.py exists to
         prevent."""
-        bedrock = FakeBedrock("SELECT COUNT(nonexistent) FROM lexgraph_legal.matters LIMIT 10")
+        bedrock = FakeBedrock("SELECT COUNT(nonexistent) FROM groundwork_legal.matters LIMIT 10")
         client = FakeAthena(state="FAILED")
         result = _lane(bedrock, client).run("how many matters", tables=[MATTERS])
         assert result is not None

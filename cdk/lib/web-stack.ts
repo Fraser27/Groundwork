@@ -100,7 +100,7 @@ function handler(event) {
     // change: exactly one of the two may own the prefix.
 
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
-      comment: 'LexGraph',
+      comment: 'Groundwork',
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(bucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,

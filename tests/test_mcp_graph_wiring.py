@@ -15,12 +15,12 @@ from __future__ import annotations
 from typing import Any
 
 from src.api.deps import build_services, connect_graph
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.documents.review import InMemoryAssertionStore
 
 
-def _config() -> LexGraphConfig:
-    cfg = LexGraphConfig(
+def _config() -> GroundworkConfig:
+    cfg = GroundworkConfig(
         environment="local",
         auth=AuthConfig(dev_bypass_tenant="demo-firm"),
         # Unreachable on purpose: the point is what happens either way, and a test must not

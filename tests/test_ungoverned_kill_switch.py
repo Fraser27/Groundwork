@@ -31,9 +31,9 @@ from src.query.sql_generation import SqlGenerator, SqlLane
 TENANT = "demo-firm"
 
 MATTERS = CatalogTable(
-    full_name="lexgraph_legal.matters",
+    full_name="groundwork_legal.matters",
     name="matters",
-    database="lexgraph_legal",
+    database="groundwork_legal",
     source_id="glue",
     description="One row per matter",
     columns=(CatalogColumn("matter_id", "string"), CatalogColumn("client_id", "string")),
@@ -59,7 +59,7 @@ class FakeBedrock:
 
     def invoke_model(self, **kwargs):
         self.calls += 1
-        payload = {"content": [{"text": "SELECT COUNT(*) FROM lexgraph_legal.matters LIMIT 10"}]}
+        payload = {"content": [{"text": "SELECT COUNT(*) FROM groundwork_legal.matters LIMIT 10"}]}
         return {"body": _Body(payload)}
 
 
@@ -246,9 +246,9 @@ class TestOverHttp:
 
         from src.api.app import create_app
         from src.api.deps import get_services
-        from src.config import AuthConfig, GraphConfig, LexGraphConfig
+        from src.config import AuthConfig, GraphConfig, GroundworkConfig
 
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             environment="local",
             auth=AuthConfig(dev_bypass_tenant=TENANT),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

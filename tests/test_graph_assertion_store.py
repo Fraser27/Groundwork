@@ -41,7 +41,7 @@ OTHER = "t-other-firm"
 
 GRAPH_URI = os.getenv("TEST_GRAPH_URI", "bolt://127.0.0.1:7687")
 GRAPH_USER = os.getenv("TEST_GRAPH_USER", "neo4j")
-GRAPH_PASSWORD = os.getenv("TEST_GRAPH_PASSWORD", "lexgraph-dev")
+GRAPH_PASSWORD = os.getenv("TEST_GRAPH_PASSWORD", "groundwork-dev")
 
 
 def _live_graph() -> GraphClient | None:

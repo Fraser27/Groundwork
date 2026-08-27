@@ -107,7 +107,7 @@ fi
 #
 # AZ *names* are shuffled per account, so us-east-1a is a different physical zone in every account.
 # AgentCore Runtime supports only a subset of zones, and putting a subnet in the wrong one fails
-# LexGraphMcp with an error naming the subnet rather than the zone. So the names are resolved from
+# GroundworkMcp with an error naming the subnet rather than the zone. So the names are resolved from
 # the zone IDs the network stack declares as supported.
 say "Resolving availability zones"
 
@@ -195,10 +195,10 @@ say "Bootstrapping CDK in $REGION"
 say "Deploying all stacks (25-30 minutes, most of it Neptune)"
 (cd "$CDK_DIR" && CDK_DEFAULT_REGION="$REGION" npx cdk deploy --all --require-approval never)
 
-WEB_URL="$(aws cloudformation describe-stacks --stack-name LexGraphWeb --region "$REGION" \
+WEB_URL="$(aws cloudformation describe-stacks --stack-name GroundworkWeb --region "$REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='WebUrl'].OutputValue" --output text)"
 
-[ -n "$WEB_URL" ] && [ "$WEB_URL" != "None" ] || die "LexGraphWeb produced no WebUrl output"
+[ -n "$WEB_URL" ] && [ "$WEB_URL" != "None" ] || die "GroundworkWeb produced no WebUrl output"
 note "web       $WEB_URL"
 
 # ── 7. Second pass, closing the circular requirement ────────────────────────────
@@ -212,7 +212,7 @@ say "Setting webOrigin and redeploying Auth and Data"
 set_context webOrigin "\"${WEB_URL%/}\""
 
 (cd "$CDK_DIR" && CDK_DEFAULT_REGION="$REGION" \
-  npx cdk deploy LexGraphAuth LexGraphData --require-approval never)
+  npx cdk deploy GroundworkAuth GroundworkData --require-approval never)
 
 # ── 8. Verify ───────────────────────────────────────────────────────────────────
 say "Checking the deployment"
@@ -225,11 +225,11 @@ else
   # `graph: connected` is the field worth reading. A healthy container with a degraded graph means
   # Neptune is unreachable, which is almost always the TLS or SigV4 half of the Bolt handshake.
   grep -q '"graph":"connected"' <<<"$health" \
-    || note "WARNING   the graph is not connected; check the LexGraphApp logs"
+    || note "WARNING   the graph is not connected; check the GroundworkApp logs"
 fi
 
 POOL_ID="$(aws cognito-idp list-user-pools --max-results 20 --region "$REGION" \
-  --query "UserPools[?starts_with(Name,'LexGraph')].Id | [0]" --output text 2>/dev/null || true)"
+  --query "UserPools[?starts_with(Name,'Groundwork')].Id | [0]" --output text 2>/dev/null || true)"
 
 cat <<EOF
 
@@ -242,20 +242,14 @@ $(printf '\033[1m%s\033[0m' "Deployed.")
 
 Nobody can sign in yet: the tenant a user belongs to is fixed at creation, so
 self-service signup produces a user with no tenant who authenticates and is then
-refused. Create the first user, which is the one step left to do by hand:
+refused. Create the first user with:
 
-  POOL=${POOL_ID:-<user-pool-id>}
-  EMAIL=you@example.com
+  REGION=$REGION HOME_TENANT=$HOME_TENANT ./scripts/create-admin-user.sh you@example.com
 
-  aws cognito-idp admin-create-user --region $REGION --user-pool-id "\$POOL" \\
-    --username "\$EMAIL" \\
-    --user-attributes Name=email,Value="\$EMAIL" Name=email_verified,Value=true \\
-                      Name=custom:tenant_id,Value=$HOME_TENANT
-
-  aws cognito-idp admin-add-user-to-group --region $REGION --user-pool-id "\$POOL" \\
-    --username "\$EMAIL" --group-name platform-admin
-
-Cognito emails a temporary password. $HOME_TENANT is the home tenant, whose admins may
-create and delete other tenants from the Platform page.
+That script sets the Cognito user's tenant attribute *and* writes the matching row in
+the tenant table -- the API resolves a caller's tenant from that table, not from the
+attribute, so a user created with only \`admin-create-user\` signs in fine and then gets
+401 on every request. Cognito emails a temporary password either way. $HOME_TENANT is the
+home tenant, whose admins may create and delete other tenants from the Platform page.
 
 EOF

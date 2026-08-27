@@ -108,7 +108,7 @@ is a CloudFormation stack cycle. The role is trusted by both `ecs-tasks` and
 
 Related trap: CDK attaches policy statements to the stack owning the *role*, so
 AgentCore grants written in `mcp-stack.ts` silently emit into the `app` template, and
-`cdk deploy LexGraphMcp` alone would not apply them. They live in `app-stack.ts` for
+`cdk deploy GroundworkMcp` alone would not apply them. They live in `app-stack.ts` for
 that reason.
 
 **`standbyReplicas: ENABLED` on the vector collection.** With min OCU 0 there is no

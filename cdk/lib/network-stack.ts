@@ -2,10 +2,10 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 
-import { APP_PORT, LexGraphConfig, NEPTUNE_PORT, tagStack } from './config';
+import { APP_PORT, GroundworkConfig, NEPTUNE_PORT, tagStack } from './config';
 
 export interface NetworkStackProps extends cdk.StackProps {
-  readonly config: LexGraphConfig;
+  readonly config: GroundworkConfig;
 }
 
 /**

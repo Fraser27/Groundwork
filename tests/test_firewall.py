@@ -362,7 +362,7 @@ class TestTierOneCanActuallyRun:
             name="fees_billed",
             definition="value invoiced",
             expression="SUM(amount_gbp)",
-            source_table="lexgraph_legal.time_entries",
+            source_table="groundwork_legal.time_entries",
         )
         return MetricMatch(
             metric=metric,
@@ -431,10 +431,10 @@ class TestTierOneCanActuallyRun:
 
 
 class TestTheExecutorIsBuiltFromConfig:
-    def _services(self, bucket="", tables=("lexgraph_legal.time_entries",)):
-        from src.config import AuthConfig, GraphConfig, LexGraphConfig, StructuredConfig
+    def _services(self, bucket="", tables=("groundwork_legal.time_entries",)):
+        from src.config import AuthConfig, GraphConfig, GroundworkConfig, StructuredConfig
 
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             environment="local",
             auth=AuthConfig(dev_bypass_tenant="demo-firm"),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="n", password="n"),
@@ -467,7 +467,7 @@ class TestTheExecutorIsBuiltFromConfig:
         from src.api.deps import build_athena_executor
 
         ex = build_athena_executor(self._services(bucket="b"), "demo-firm")
-        assert ex._firewall.validate("SELECT count(*) FROM lexgraph_legal.time_entries").allowed
+        assert ex._firewall.validate("SELECT count(*) FROM groundwork_legal.time_entries").allowed
         assert not ex._firewall.validate("SELECT count(*) FROM other.payroll").allowed
 
 

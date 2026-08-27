@@ -16,7 +16,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      NEO4J_AUTH: neo4j/${GRAPH_PASSWORD:-lexgraph-dev}  # dev-only default
+      NEO4J_AUTH: neo4j/${GRAPH_PASSWORD:-groundwork-dev}  # dev-only default
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_server_memory_heap_max__size: 1G
     volumes:
@@ -65,7 +65,7 @@ services:
       MCP_URL: http://mcp:8000/mcp
       GRAPH_URI: bolt://neo4j:7687
       GRAPH_USER: neo4j
-      GRAPH_PASSWORD: ${GRAPH_PASSWORD:-lexgraph-dev}
+      GRAPH_PASSWORD: ${GRAPH_PASSWORD:-groundwork-dev}
       GRAPH_IAM_AUTH: "false"
       ONTOLOGY_PACK: ${ONTOLOGY_PACK:-legal}
       # No JWT locally, so requests are served as this tenant. src/config.py
@@ -101,7 +101,7 @@ services:
       APP_MODULE: src.mcp.server:app
       GRAPH_URI: bolt://neo4j:7687
       GRAPH_USER: neo4j
-      GRAPH_PASSWORD: ${GRAPH_PASSWORD:-lexgraph-dev}
+      GRAPH_PASSWORD: ${GRAPH_PASSWORD:-groundwork-dev}
       GRAPH_IAM_AUTH: "false"
       ONTOLOGY_PACK: ${ONTOLOGY_PACK:-legal}
       AUTH_DEV_BYPASS_TENANT: ${AUTH_DEV_BYPASS_TENANT:-dev-tenant}

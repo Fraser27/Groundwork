@@ -46,7 +46,7 @@ MAX_TOKENS = 1000
 MAX_TABLES = 20
 """Tables offered in one prompt. Beyond this the schema crowds out the question, and a catalog
 scan takes every visible database -- so an unrelated `nyc-yellow_taxi` should not be able to push
-`lexgraph_legal.matters` out of the window."""
+`groundwork_legal.matters` out of the window."""
 
 SYSTEM_PROMPT = f"""You write a single Trino SQL query for a lawyer's question, against the \
 tables given to you. You are handed the schema; you cannot look anything up.
@@ -192,7 +192,7 @@ class SqlGenerator:
         )
 
 
-#: Word characters. `full_name` is `lexgraph_legal.matters`, which `str.split()` leaves as a single
+#: Word characters. `full_name` is `groundwork_legal.matters`, which `str.split()` leaves as a single
 #: token -- so a question asking about "matters" never matched its own table, and the catalog lane
 #: only ever fired on a description word. Splitting on the punctuation is the fix.
 _WORDS = re.compile(r"[^a-z0-9]+")
@@ -219,7 +219,7 @@ def relevant_tables(question: str, tables: Sequence[Any]) -> list[Any]:
     other projects, and a legal question shares no words with any of them.
 
     Matched on `name` and `description` rather than `full_name`: the database name is the same for
-    every table in it, so `lexgraph_legal` would match any question mentioning legal work and offer
+    every table in it, so `groundwork_legal` would match any question mentioning legal work and offer
     the model everything.
     """
     terms = _terms(question)

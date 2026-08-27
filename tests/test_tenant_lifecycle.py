@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from src.access import AccessManager, InMemoryAccessStore, MatterAssignment, MatterScreen
-from src.config import AuthConfig, LexGraphConfig
+from src.config import AuthConfig, GroundworkConfig
 from src.documents.review import InMemoryAssertionStore, ReviewQueue
 from src.governance_store import InMemoryGovernanceStore
 from src.graph.scope import AuthContext
@@ -179,7 +179,7 @@ def _services(monkeypatch, *, storage_raises: bool = False, existing_emails=None
     monkeypatch.setattr("src.documents.storage.storage_from_config", lambda cfg: storage)
 
     services = SimpleNamespace(
-        config=LexGraphConfig(environment="local", auth=AuthConfig(home_tenant=HOME)),
+        config=GroundworkConfig(environment="local", auth=AuthConfig(home_tenant=HOME)),
         ontology=load_ontology("legal"),
         tenant_registry=registry,
         tenant_directory=directory,

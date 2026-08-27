@@ -18,7 +18,7 @@ from fastapi import Depends, Header, HTTPException, Path, Query, status
 from src.access import AccessManager, AccessStore, InMemoryAccessStore
 from src.access_dynamo import DynamoAccessStore
 from src.auth import Authenticator, AuthError, Grants, bearer_from_header
-from src.config import LexGraphConfig, load_config
+from src.config import GroundworkConfig, load_config
 from src.discovery.catalog_store import CatalogStore
 from src.documents.embed import Embedder, InMemoryVectorStore
 from src.documents.job_store import DynamoJobStore, InMemoryJobStore
@@ -55,7 +55,7 @@ EXAMPLE_METRICS_PATH = FsPath(__file__).resolve().parents[2] / "sample" / "metri
 class Services:
     """Everything a route handler might need."""
 
-    config: LexGraphConfig
+    config: GroundworkConfig
     authenticator: Authenticator
     ontology: Ontology
     review_queue: ReviewQueue
@@ -156,7 +156,7 @@ class Services:
             settings = store.get(tenant_id) if store is not None else GovernanceSettings.from_env()
             # A tenant that has never chosen a pack inherits the one this process booted with,
             # rather than `GovernanceSettings`' own default. Two independent defaults meant
-            # `LEXGRAPH_ONTOLOGY_PACK` could be honoured at boot and then silently overridden per
+            # `GROUNDWORK_ONTOLOGY_PACK` could be honoured at boot and then silently overridden per
             # tenant, so the vocabulary a write was validated against was not the one the logs
             # and `/health` reported.
             if not settings.ontology_domain:
@@ -492,7 +492,7 @@ def build_router_indexer(services: Services) -> Any | None:
     return indexer
 
 
-def _build_parser(cfg: LexGraphConfig) -> VisionParser | None:
+def _build_parser(cfg: GroundworkConfig) -> VisionParser | None:
     """The page reader, or None when there is no way to reach a vision model.
 
     boto3's absence is checked here because it is knowable at boot; a missing credential
@@ -516,7 +516,7 @@ def _build_parser(cfg: LexGraphConfig) -> VisionParser | None:
     )
 
 
-def _build_access_store(cfg: LexGraphConfig) -> AccessStore:
+def _build_access_store(cfg: GroundworkConfig) -> AccessStore:
     """DynamoDB when a table is configured, in-memory otherwise.
 
     Degrading locally is the same pattern as the embedder, with one difference worth
@@ -530,7 +530,7 @@ def _build_access_store(cfg: LexGraphConfig) -> AccessStore:
 
 
 def _build_tenant_directory(
-    cfg: LexGraphConfig,
+    cfg: GroundworkConfig,
 ) -> TenantDirectory | StaticTenantDirectory | None:
     """Where a user's tenant comes from when the access token cannot carry it.
 
@@ -543,7 +543,7 @@ def _build_tenant_directory(
     return TenantDirectory(cfg.tables.tenants)
 
 
-def _build_tenant_registry(cfg: LexGraphConfig) -> Any:
+def _build_tenant_registry(cfg: GroundworkConfig) -> Any:
     """Which tenants exist. In-memory without a table, so local development still lists them."""
     from src.tenant_registry import InMemoryTenantRegistry, TenantRegistry
 
@@ -552,7 +552,7 @@ def _build_tenant_registry(cfg: LexGraphConfig) -> Any:
     return TenantRegistry(cfg.tables.tenants)
 
 
-def _build_job_store(cfg: LexGraphConfig) -> InMemoryJobStore | DynamoJobStore:
+def _build_job_store(cfg: GroundworkConfig) -> InMemoryJobStore | DynamoJobStore:
     """DynamoDB when a table is configured, in-memory otherwise.
 
     The fallback is not equivalent: an in-memory job store dies with the process, so a
@@ -565,7 +565,7 @@ def _build_job_store(cfg: LexGraphConfig) -> InMemoryJobStore | DynamoJobStore:
     return DynamoJobStore(cfg.tables.jobs)
 
 
-def _build_graph_audit(cfg: LexGraphConfig) -> object:
+def _build_graph_audit(cfg: GroundworkConfig) -> object:
     """The grants table, which already holds the compliance artifact and is already RETAIN.
 
     Falls back to memory rather than to nothing: a wipe that cannot be recorded still reports the
@@ -578,7 +578,7 @@ def _build_graph_audit(cfg: LexGraphConfig) -> object:
     return GraphAudit(cfg.tables.grants)
 
 
-def _build_query_audit(cfg: LexGraphConfig) -> object:
+def _build_query_audit(cfg: GroundworkConfig) -> object:
     """The same table as the graph log, in its own partition.
 
     Falls back to memory rather than to nothing, for the same reason: a question that cannot be
@@ -591,7 +591,7 @@ def _build_query_audit(cfg: LexGraphConfig) -> object:
     return QueryAudit(cfg.tables.grants)
 
 
-def _build_governance_store(cfg: LexGraphConfig) -> object:
+def _build_governance_store(cfg: GroundworkConfig) -> object:
     """DynamoDB when a tenant table is configured, memory otherwise.
 
     Shares the tenant table rather than adding one: settings are a single small item per tenant
@@ -604,7 +604,7 @@ def _build_governance_store(cfg: LexGraphConfig) -> object:
     return GovernanceStore(cfg.tables.tenants)
 
 
-def _build_vector_store(cfg: LexGraphConfig) -> object:
+def _build_vector_store(cfg: GroundworkConfig) -> object:
     """OpenSearch when an endpoint is configured, memory otherwise.
 
     This used to build the in-memory store unconditionally, so a deployed system with a
@@ -631,7 +631,7 @@ def _build_vector_store(cfg: LexGraphConfig) -> object:
         return InMemoryVectorStore()
 
 
-def _build_routing_index(cfg: LexGraphConfig) -> Any | None:
+def _build_routing_index(cfg: GroundworkConfig) -> Any | None:
     """The tier router's index, or None with no endpoint.
 
     None rather than an in-memory stand-in, unlike `_build_vector_store`. A routing index that
@@ -656,7 +656,7 @@ def _build_routing_index(cfg: LexGraphConfig) -> Any | None:
         return None
 
 
-def build_services(config: LexGraphConfig | None = None) -> Services:
+def build_services(config: GroundworkConfig | None = None) -> Services:
     cfg = config or load_config()
     ontology = load_ontology(cfg.ontology_pack)
     store = InMemoryAssertionStore()

@@ -3,7 +3,7 @@
 # load_firm_metadata.sh — create an Iceberg-backed Glue database of law-firm practice data
 # that corroborates the demo documents in sample/legal-demo.zip.
 #
-# Why it exists: LexGraph governs structured *and* unstructured data, and the interesting
+# Why it exists: Groundwork governs structured *and* unstructured data, and the interesting
 # behaviour is at the join. A conflict check that reads only documents is half the product; one
 # that can also answer "is this company a client of ours, and what have we billed them" needs
 # rows in a warehouse. Until now there was nothing to point Athena at.
@@ -31,7 +31,7 @@
 set -euo pipefail
 
 # ---- config (override via env) ---------------------------------------------
-GLUE_DB="${GLUE_DB:-lexgraph_legal}"
+GLUE_DB="${GLUE_DB:-groundwork_legal}"
 REGION="${REGION:-us-east-1}"
 ATHENA_WORKGROUP="${ATHENA_WORKGROUP:-primary}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -56,7 +56,7 @@ PYTHON="${PYTHON:-$REPO_ROOT/.venv/bin/python}"
 
 # ---- resolve the bucket ----------------------------------------------------
 if [[ -z "$ATHENA_BUCKET" ]]; then
-  ATHENA_BUCKET=$(aws cloudformation describe-stacks --stack-name LexGraphData --region "$REGION" \
+  ATHENA_BUCKET=$(aws cloudformation describe-stacks --stack-name GroundworkData --region "$REGION" \
     --query 'Stacks[0].Outputs[?OutputKey==`AthenaResultsBucketName`].OutputValue' \
     --output text 2>/dev/null || true)
 fi
@@ -109,7 +109,7 @@ if [[ "$DRY_RUN" != "1" ]]; then
     log "database $GLUE_DB already exists"
   else
     aws glue create-database --region "$REGION" \
-      --database-input "{\"Name\":\"$GLUE_DB\",\"Description\":\"LexGraph demo: Thorne Vaux LLP practice data, correlated with the sample documents\"}"
+      --database-input "{\"Name\":\"$GLUE_DB\",\"Description\":\"Groundwork demo: Thorne Vaux LLP practice data, correlated with the sample documents\"}"
     log "created database $GLUE_DB"
   fi
 fi
@@ -288,10 +288,10 @@ params['primary_key'] = '$pk'
 keep = {k: t[k] for k in ('Name','StorageDescriptor','PartitionKeys','TableType','Description') if k in t}
 keep['Parameters'] = params
 json.dump(keep, sys.stdout)
-" > /tmp/lexgraph-table-input.json || { log "  could not build table input for $table"; return 1; }
+" > /tmp/groundwork-table-input.json || { log "  could not build table input for $table"; return 1; }
 
   aws glue update-table --region "$REGION" --database-name "$GLUE_DB" \
-    --table-input "file:///tmp/lexgraph-table-input.json" \
+    --table-input "file:///tmp/groundwork-table-input.json" \
     && log "  ok: primary_key=$pk on $table"
 }
 
@@ -300,7 +300,7 @@ set_primary_key clients client_id || true
 set_primary_key time_entries entry_id || true
 
 log ""
-log "done. In LexGraph: Admin -> Scan catalog, then choose '$GLUE_DB'."
+log "done. In Groundwork: Admin -> Scan catalog, then choose '$GLUE_DB'."
 log ""
 log "Worth asking afterwards, because each one crosses the structured/unstructured boundary:"
 log "  \"what have we billed on NTL-2026-0114?\"        Athena, over time_entries"

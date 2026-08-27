@@ -1,4 +1,4 @@
-# LexGraph — working agreement
+# Groundwork — working agreement
 
 Read this first. It is the contract for how to work in this repo, not a description
 of what the code does (that is `README.md` and `.claude/ARCHITECTURE.md`).

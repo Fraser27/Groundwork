@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.deps import get_services
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.tenant_registry import InMemoryTenantRegistry, TenantRecord
 
 HOME = "demo-firm"
@@ -23,10 +23,10 @@ OTHER = "other-firm"
 LIST = "/api/platform/tenants"
 
 
-def _config(*, home: str = HOME, acting_as: str = HOME) -> LexGraphConfig:
+def _config(*, home: str = HOME, acting_as: str = HOME) -> GroundworkConfig:
     """`dev_bypass_tenant` is what the caller's token would say, so it is how a test acts as
     an admin of a tenant other than the operator one."""
-    cfg = LexGraphConfig(
+    cfg = GroundworkConfig(
         environment="local",
         auth=AuthConfig(dev_bypass_tenant=acting_as, home_tenant=home),
         graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

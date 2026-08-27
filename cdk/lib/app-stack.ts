@@ -19,18 +19,19 @@ import * as path from 'path';
 import {
   APP_PORT,
   MCP_PORT,
-  LexGraphConfig,
+  GroundworkConfig,
   MAX_CONCURRENT_INGESTS,
   NEPTUNE_PORT,
   PAGE_BATCH_SIZE,
   PAGE_CONCURRENCY,
   PROJECT,
+  PROJECT_SLUG,
   RAW_PREFIX,
   tagStack,
 } from './config';
 
 export interface AppStackProps extends cdk.StackProps {
-  readonly config: LexGraphConfig;
+  readonly config: GroundworkConfig;
   readonly vpc: ec2.IVpc;
   readonly appSg: ec2.ISecurityGroup;
   readonly albSg: ec2.ISecurityGroup;
@@ -125,7 +126,9 @@ export class AppStack extends cdk.Stack {
       environment: this.containerEnvironment,
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: PROJECT,
-        logRetention: logs.RetentionDays.ONE_MONTH,
+        logGroup: new logs.LogGroup(this, 'ApiLogGroup', {
+          retention: logs.RetentionDays.ONE_MONTH,
+        }),
       }),
       healthCheck: {
         command: ['CMD-SHELL', `python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:${APP_PORT}/health').status==200 else 1)"`],
@@ -156,7 +159,9 @@ export class AppStack extends cdk.Stack {
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: `${PROJECT}-mcp`,
-        logRetention: logs.RetentionDays.ONE_MONTH,
+        logGroup: new logs.LogGroup(this, 'McpLogGroup', {
+          retention: logs.RetentionDays.ONE_MONTH,
+        }),
       }),
       // No health check: the MCP protocol has no unauthenticated GET, and a failing probe
       // would restart a task whose API half is serving fine. The agent reports its own 503.
@@ -231,9 +236,9 @@ export class AppStack extends cdk.Stack {
     const collectionName = props.vectorCollection.name;
 
     new aoss.CfnAccessPolicy(this, 'VectorDataAccessPolicy', {
-      name: `${PROJECT}-vec-data`,
+      name: `${PROJECT_SLUG}-vec-data`,
       type: 'data',
-      description: 'LexGraph app task role - read/write chunk embeddings',
+      description: 'Groundwork app task role - read/write chunk embeddings',
       policy: JSON.stringify([
         {
           Rules: [
@@ -323,7 +328,7 @@ export class AppStack extends cdk.Stack {
    */
   private buildInternalSecret(): secretsmanager.Secret {
     return new secretsmanager.Secret(this, 'InternalApiSecret', {
-      description: 'LexGraph - shared secret for the internal ingest endpoint',
+      description: 'Groundwork - shared secret for the internal ingest endpoint',
       generateSecretString: {
         passwordLength: 48,
         // The value travels in an HTTP header, so keep it to characters that need no
@@ -345,7 +350,9 @@ export class AppStack extends cdk.Stack {
       vpc: props.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [props.appSg],
-      logRetention: logs.RetentionDays.ONE_MONTH,
+      logGroup: new logs.LogGroup(this, 'IngestTriggerLogGroup', {
+        retention: logs.RetentionDays.ONE_MONTH,
+      }),
       environment: {
         // HTTP, not HTTPS: the ALB listener is HTTP and this hop stays inside the VPC.
         // Put ACM on the ALB before this handles real matters.
@@ -401,7 +408,7 @@ export class AppStack extends cdk.Stack {
           },
         }),
       ),
-      description: 'LexGraph API, workers, and MCP tools',
+      description: 'Groundwork API, workers, and MCP tools',
     });
 
     // Neptune IAM auth: scoped to this cluster's resource id, so a compromised
@@ -451,7 +458,7 @@ export class AppStack extends cdk.Stack {
       }),
     );
 
-    // Read-only on the catalog. LexGraph records structured *metadata* in the
+    // Read-only on the catalog. Groundwork records structured *metadata* in the
     // graph and queries rows in place, so it never needs to mutate a table.
     role.addToPolicy(
       new iam.PolicyStatement({
@@ -520,7 +527,7 @@ export class AppStack extends cdk.Stack {
    *
    * Declared here rather than in `mcp` because CDK attaches a policy statement to
    * the stack owning the role. Writing it in `mcp` still emits it into the `app`
-   * template, so `cdk deploy LexGraphMcp` on its own would silently not apply it.
+   * template, so `cdk deploy GroundworkMcp` on its own would silently not apply it.
    */
   private grantAgentCoreRuntimeAccess(role: iam.Role): void {
     this.image.repository.grantPull(role);

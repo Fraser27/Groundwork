@@ -1,7 +1,7 @@
 [project]
-name = "lexgraph"
+name = "groundwork"
 version = "0.1.0"
-description = "LexGraph — a governed semantic layer over structured and unstructured data, with per-assertion provenance. Domain-agnostic; ships with a legal ontology."
+description = "Groundwork — a governed semantic layer over structured and unstructured data, with per-assertion provenance. Domain-agnostic; ships with a legal ontology."
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",

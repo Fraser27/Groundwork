@@ -60,7 +60,7 @@ def metrics() -> list[MetricDefinition]:
             synonyms=["fees", "fees billed", "billed", "billings", "invoiced", "charges"],
             definition="Value of recorded time at each fee earner's charge-out rate.",
             expression="SUM(amount_gbp)",
-            source_table="lexgraph_legal.time_entries",
+            source_table="groundwork_legal.time_entries",
             time_grain_column="entry_date",
             time_grains=["day", "month", "quarter", "year"],
         ),
@@ -70,7 +70,7 @@ def metrics() -> list[MetricDefinition]:
             synonyms=["hours", "hours recorded", "time recorded", "time spent"],
             definition="Hours of recorded time, by matter and fee earner.",
             expression="SUM(hours)",
-            source_table="lexgraph_legal.time_entries",
+            source_table="groundwork_legal.time_entries",
         ),
         MetricDefinition(
             metric_id="lg_matter_count",
@@ -78,7 +78,7 @@ def metrics() -> list[MetricDefinition]:
             synonyms=["matters", "open matters", "matter count", "caseload"],
             definition="Distinct matters, by practice area and status.",
             expression="COUNT(DISTINCT matter_id)",
-            source_table="lexgraph_legal.matters",
+            source_table="groundwork_legal.matters",
         ),
     ]
 

@@ -14,15 +14,15 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.deps import get_services
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
 from src.graph.scope import AuthContext
 
 TENANT = "dev-tenant"
 
 
-def _config(**over) -> LexGraphConfig:
-    cfg = LexGraphConfig(
+def _config(**over) -> GroundworkConfig:
+    cfg = GroundworkConfig(
         # Pinned rather than defaulted: this file asserts the legal pack's rules and
         # vocabulary, so it must not follow a change of default pack.
         ontology_pack="legal",

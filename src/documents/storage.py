@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-from src.config import LexGraphConfig
+from src.config import GroundworkConfig
 from src.documents.ingest import guess_media_type
 from src.documents.keys import (
     PROCESSED_PREFIX,
@@ -585,7 +585,7 @@ def set_document_storage(storage: DocumentStorage | None) -> None:
     _override = storage
 
 
-def storage_from_config(config: LexGraphConfig) -> DocumentStorage | None:
+def storage_from_config(config: GroundworkConfig) -> DocumentStorage | None:
     """None when no bucket is configured.
 
     Unconfigured storage degrades provenance to file/page/quote with no link, which is

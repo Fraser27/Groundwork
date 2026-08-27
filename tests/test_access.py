@@ -83,7 +83,7 @@ def table() -> FakeTable:
 
 @pytest.fixture
 def dynamo(table: FakeTable) -> DynamoAccessStore:
-    return DynamoAccessStore("lexgraph-grants", table=table)
+    return DynamoAccessStore("groundwork-grants", table=table)
 
 
 class TestDefaultIsClosed:

@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.deps import get_services
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.graph_audit import MAX_STORED_IDS
 from src.agent.loop import CAPPED_REASONS, RunResult
 from src.query.planner import ComposedAnswer, Lane, Part, Provenance
@@ -238,7 +238,7 @@ class TestOverHttp:
 
     @pytest.fixture
     def client(self) -> TestClient:
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             environment="local",
             auth=AuthConfig(dev_bypass_tenant=TENANT),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
@@ -558,7 +558,7 @@ class TestEverySurfaceLeavesARow:
 
     @pytest.fixture
     def client_for_compose(self) -> TestClient:
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             environment="local",
             auth=AuthConfig(dev_bypass_tenant=TENANT),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

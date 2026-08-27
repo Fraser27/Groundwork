@@ -40,7 +40,7 @@ def _trigger(key: str) -> int:
         data=json.dumps({"key": key}).encode(),
         headers={
             "Content-Type": "application/json",
-            "X-Lexgraph-Internal": INTERNAL_SECRET,
+            "X-Groundwork-Internal": INTERNAL_SECRET,
         },
         method="POST",
     )

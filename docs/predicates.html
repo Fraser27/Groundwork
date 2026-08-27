@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The predicate vocabulary — LexGraph documentation</title>
+<title>The predicate vocabulary — Groundwork documentation</title>
 <meta name="description" content="Governing relationships are a closed list; descriptive ones are open. The conflict-check failure the closed list prevents, and why grounding uses no language model.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="assets/docs.css">
 <script src="assets/nav.js"></script>
-<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+<script>window.__groundworkApplyTheme && window.__groundworkApplyTheme();</script>
 </head>
 <body>
 <div class="layout">
@@ -18,7 +18,7 @@
 <p class="eyebrow">How it works</p>
 <h1>The predicate vocabulary</h1>
 <p class="lede">A predicate is the middle of a fact: the relationship in "counsel <em>represents</em>
-party". LexGraph keeps two vocabularies of them, one closed and one open, and the test for which
+party". Groundwork keeps two vocabularies of them, one closed and one open, and the test for which
 list a relationship belongs in is a single question about consequences.</p>
 
 <p class="source-ref">src/ontology/loader.py · ontologies/legal.yaml</p>
@@ -102,7 +102,7 @@ vocabulary release for every new tag — to prevent it would be paying the wrong
 vocabulary knows. When a model returns <code>acts_on_behalf_of</code>, something has to decide
 whether that means <code>REPRESENTS</code>.</p>
 
-<p>In LexGraph that decision is made by exact matching and nothing else. The proposed name is
+<p>In Groundwork that decision is made by exact matching and nothing else. The proposed name is
 normalised — trimmed, upper-cased, spaces and hyphens turned into underscores — and compared against
 the vocabulary's identifiers and their display labels. A match returns the canonical name. No match
 returns nothing, and the claim is dropped.</p>

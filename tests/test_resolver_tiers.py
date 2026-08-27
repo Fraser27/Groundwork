@@ -164,7 +164,7 @@ def _catalog_heavy_reader(ctx: AuthContext) -> GraphReader:
             epistemic_class=EpistemicClass.DECLARED,
             method="glue:catalog_scan",
             confidence=1.0,
-            source_locator=SourceLocator(source_id="glue", table="lexgraph.matters"),
+            source_locator=SourceLocator(source_id="glue", table="groundwork.matters"),
         )
         for i in range(26)
     ]

@@ -158,7 +158,7 @@ def _require_storage(services: Services) -> DocumentStorage:
 
 async def require_internal_caller(
     services: ServicesDep,
-    x_lexgraph_internal: Annotated[str | None, Header()] = None,
+    x_groundwork_internal: Annotated[str | None, Header()] = None,
 ) -> None:
     """Gate the notification endpoint on a shared secret.
 
@@ -176,7 +176,7 @@ async def require_internal_caller(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "internal ingest endpoint is not configured (INTERNAL_API_SECRET unset)",
         )
-    if not x_lexgraph_internal or not secrets.compare_digest(x_lexgraph_internal, expected):
+    if not x_groundwork_internal or not secrets.compare_digest(x_groundwork_internal, expected):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid internal caller")
 
 

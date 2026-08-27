@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 from src.admin_ops import ResetScope, reset_derived
 from src.api.app import create_app
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.graph.scope import AuthContext
 
 TENANT = "demo-firm"
@@ -115,7 +115,7 @@ class TestTheNoteTellsTheTruth:
 class TestTheApiRequiresASecondConfirmation:
     @pytest.fixture
     def client(self) -> TestClient:
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             environment="local",
             auth=AuthConfig(dev_bypass_tenant=TENANT),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

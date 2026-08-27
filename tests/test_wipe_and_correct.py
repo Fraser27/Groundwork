@@ -284,9 +284,9 @@ class TestATypedIdIsCanonicalised:
         default pack happens to be.
         """
         from src.api.deps import build_services
-        from src.config import LexGraphConfig
+        from src.config import GroundworkConfig
 
-        services = build_services(LexGraphConfig(ontology_pack="legal"))
+        services = build_services(GroundworkConfig(ontology_pack="legal"))
         assert services.review_queue._canonical_entity_id is not None
         assert services.review_queue._canonical("Party: Calder Shipping AG") == (
             "party:calder-shipping-ag"
@@ -811,9 +811,9 @@ class TestOverHttp:
 
         from src.api.app import create_app
         from src.api.deps import get_services
-        from src.config import AuthConfig, GraphConfig, LexGraphConfig
+        from src.config import AuthConfig, GraphConfig, GroundworkConfig
 
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             # Pinned rather than defaulted: these assert the legal pack's rules and
             # vocabulary, so they must not follow a change of default pack.
             ontology_pack="legal",

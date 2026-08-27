@@ -5,7 +5,7 @@ nowhere else.** Not a header, not a query parameter, not the URL path. A path
 parameter is checked *against* the token and a mismatch is a 403 — it exists for
 routing and readable logs, not for authorization.
 
-The dev bypass is the obvious hole, so it is closed twice: `LexGraphConfig.validate`
+The dev bypass is the obvious hole, so it is closed twice: `GroundworkConfig.validate`
 refuses to start if it is set outside local, and `_dev_context` re-checks the
 environment at request time. One of those would be enough; both is cheap.
 
@@ -24,7 +24,7 @@ import jwt
 from jwt import PyJWKClient
 
 from src.access import AccessManager
-from src.config import LexGraphConfig
+from src.config import GroundworkConfig
 from src.graph.scope import AuthContext, ScopeViolation
 from src.tenant_directory import StaticTenantDirectory, TenantDirectory, UnknownUser
 
@@ -68,7 +68,7 @@ class TokenVerifier:
     them turns this into base64 decoding wearing a hat.
     """
 
-    def __init__(self, config: LexGraphConfig) -> None:
+    def __init__(self, config: GroundworkConfig) -> None:
         self._cfg = config
         self._jwks: PyJWKClient | None = None
 
@@ -125,7 +125,7 @@ def _roles_from_claims(claims: dict[str, Any]) -> frozenset[str]:
 DEV_USER = "dev@localhost"
 
 
-def _dev_grants(config: LexGraphConfig) -> Grants:
+def _dev_grants(config: GroundworkConfig) -> Grants:
     """Unauthenticated local development.
 
     Re-checks the environment even though `config.validate()` already did, because
@@ -145,7 +145,7 @@ class Authenticator:
 
     def __init__(
         self,
-        config: LexGraphConfig,
+        config: GroundworkConfig,
         access: AccessManager | None = None,
         tenants: TenantDirectory | StaticTenantDirectory | None = None,
     ) -> None:

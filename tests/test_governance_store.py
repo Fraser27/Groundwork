@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.deps import MAX_BLOCKED_PER_TENANT, get_services
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.governance import GovernanceError, GovernanceSettings
 from src.governance_store import (
     GOVERNANCE_PREFIX,
@@ -202,7 +202,7 @@ class TestTheReferenceStore:
 
 
 def _client():
-    cfg = LexGraphConfig(
+    cfg = GroundworkConfig(
         environment="local",
         auth=AuthConfig(dev_bypass_tenant=TENANT),
         graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

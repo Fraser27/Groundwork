@@ -28,8 +28,8 @@ from src.metrics.models import MetricDefinition, MetricRegistry, StaticCatalog
 TENANT = "demo-firm"
 AUTHOR = "author_metrics.py"
 
-TIME_ENTRIES = "lexgraph_legal.time_entries"
-MATTERS = "lexgraph_legal.matters"
+TIME_ENTRIES = "groundwork_legal.time_entries"
+MATTERS = "groundwork_legal.matters"
 
 #: Grain is what a question may slice by, and it is a restriction rather than a suggestion:
 #: `parameters` is the closed set of columns a caller may filter on, so a metric cannot be
@@ -142,7 +142,7 @@ def _catalog(graph: GraphClient) -> StaticCatalog:
         boto3.client("glue"),
         tenant_id=TENANT,
         source_id="glue-main",
-        databases=["lexgraph_legal"],
+        databases=["groundwork_legal"],
     )
     tables = {t.full_name: t for t in result.tables}
     print(f"catalog: {len(tables)} tables — {', '.join(sorted(tables))}")

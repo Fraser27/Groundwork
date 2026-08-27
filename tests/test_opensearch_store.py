@@ -379,17 +379,17 @@ class TestWiring:
         """The bug this closes: deps built the in-memory store even with an endpoint set, so a
         deployed system lost its embeddings on every deploy while the collection billed."""
         from src.api.deps import _build_vector_store
-        from src.config import LexGraphConfig, VectorConfig
+        from src.config import GroundworkConfig, VectorConfig
 
-        cfg = LexGraphConfig(vector=VectorConfig(endpoint="https://x.aoss.amazonaws.com"))
+        cfg = GroundworkConfig(vector=VectorConfig(endpoint="https://x.aoss.amazonaws.com"))
         assert isinstance(_build_vector_store(cfg), OpenSearchVectorStore)
 
     def test_no_endpoint_stays_in_memory(self):
         from src.api.deps import _build_vector_store
-        from src.config import LexGraphConfig, VectorConfig
+        from src.config import GroundworkConfig, VectorConfig
         from src.documents.embed import InMemoryVectorStore
 
-        cfg = LexGraphConfig(vector=VectorConfig(endpoint=""))
+        cfg = GroundworkConfig(vector=VectorConfig(endpoint=""))
         assert isinstance(_build_vector_store(cfg), InMemoryVectorStore)
 
 

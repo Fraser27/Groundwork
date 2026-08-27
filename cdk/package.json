@@ -1,8 +1,8 @@
 {
-  "name": "lexgraph-cdk",
+  "name": "groundwork-cdk",
   "version": "0.1.0",
   "private": true,
-  "bin": { "lexgraph": "bin/app.js" },
+  "bin": { "groundwork": "bin/app.js" },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",

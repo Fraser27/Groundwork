@@ -1,6 +1,6 @@
-# LexGraph UI
+# Groundwork UI
 
-React + TypeScript + Vite front end for LexGraph.
+React + TypeScript + Vite front end for Groundwork.
 
 ## Run it
 
@@ -43,7 +43,7 @@ In production, CDK writes `/runtime-config.json` and the app reads it at startup
   "cognitoUserPoolId": "...",
   "cognitoClientId": "...",
   "cognitoRegion": "eu-west-2",
-  "cognitoDomain": "lexgraph.auth.eu-west-2.amazoncognito.com",
+  "cognitoDomain": "groundwork-123456789012.auth.eu-west-2.amazoncognito.com",
   "defaultTenantId": "demo-firm"
 }
 ```

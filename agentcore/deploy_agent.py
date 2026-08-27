@@ -1,10 +1,10 @@
-"""Deploy the LexGraph MCP server to Bedrock AgentCore Runtime.
+"""Deploy the Groundwork MCP server to Bedrock AgentCore Runtime.
 
     python agentcore/deploy_agent.py --plan       # print what would change, call nothing
     python agentcore/deploy_agent.py              # create or update the runtime
     python agentcore/deploy_agent.py --cleanup    # delete the runtime and its endpoint
 
-`cdk deploy LexGraphMcp` does the same thing and is the supported path. This script
+`cdk deploy GroundworkMcp` does the same thing and is the supported path. This script
 exists for the case CloudFormation is bad at: iterating on the runtime alone against an
 already-deployed stack, where a `cdk deploy` is a five-minute changeset for a container
 image swap. It reads its configuration from the deployed stacks rather than taking
@@ -42,11 +42,11 @@ logger = logging.getLogger("deploy")
 
 REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 
-NETWORK_STACK = "LexGraphNetwork"
-AUTH_STACK = "LexGraphAuth"
-APP_STACK = "LexGraphApp"
+NETWORK_STACK = "GroundworkNetwork"
+AUTH_STACK = "GroundworkAuth"
+APP_STACK = "GroundworkApp"
 
-RUNTIME_NAME = "lexgraph_mcp"
+RUNTIME_NAME = "Groundwork_mcp"
 ENDPOINT_NAME = "live"
 
 #: What `Dockerfile` switches on. The only thing that differs from the API container.
@@ -246,7 +246,7 @@ def upsert_runtime(client: Any, config: dict[str, Any]) -> str:
         logger.info("creating runtime %s", RUNTIME_NAME)
         response = client.create_agent_runtime(
             agentRuntimeName=RUNTIME_NAME,
-            description="LexGraph governed semantic layer — MCP tools",
+            description="Groundwork governed semantic layer — MCP tools",
             **payload,
         )
     else:
@@ -330,7 +330,7 @@ def cleanup(client: Any) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Deploy the LexGraph MCP server to AgentCore")
+    parser = argparse.ArgumentParser(description="Deploy the Groundwork MCP server to AgentCore")
     parser.add_argument(
         "--plan", action="store_true", help="print the payload and exit without calling AgentCore"
     )

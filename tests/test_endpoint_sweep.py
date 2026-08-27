@@ -259,9 +259,9 @@ class TestOverHttp:
 
         from src.api.app import create_app
         from src.api.deps import get_services
-        from src.config import AuthConfig, GraphConfig, LexGraphConfig
+        from src.config import AuthConfig, GraphConfig, GroundworkConfig
 
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
 
             # Pinned rather than defaulted: this file asserts the legal pack's vocabulary, so it
 

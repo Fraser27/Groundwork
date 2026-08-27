@@ -29,7 +29,7 @@ from src.documents.storage import DocumentNotFound, DocumentStorage
 from src.graph.scope import AuthContext, ScopeViolation
 
 TENANT = "firm-acme"
-BUCKET = "lexgraph-docs"
+BUCKET = "groundwork-docs"
 TEXT = b"Held for the plaintiff. Costs reserved."
 PLAIN_TEXT_TYPES = frozenset({"text/plain", "text/markdown", "text/csv"})
 
@@ -96,7 +96,7 @@ def s3() -> FakeS3:
 
 @pytest.fixture
 def storage(s3: FakeS3) -> DocumentStorage:
-    return DocumentStorage(BUCKET, kms_key_id="alias/lexgraph-docs", s3=s3)
+    return DocumentStorage(BUCKET, kms_key_id="alias/groundwork-docs", s3=s3)
 
 
 @pytest.fixture

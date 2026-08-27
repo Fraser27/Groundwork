@@ -176,10 +176,10 @@ class GovernanceSettings:
     # ── Ontology ──────────────────────────────────────────────────────────────
     ontology_domain: str = ""
     """Which pack governs this tenant's writes. Empty means "whatever this process booted with",
-    resolved by `Services.settings_for` from `LexGraphConfig.ontology_pack`.
+    resolved by `Services.settings_for` from `GroundworkConfig.ontology_pack`.
 
     Empty rather than naming a pack here, because a default in this dataclass is a *second*
-    independent default: it silently outranked `LEXGRAPH_ONTOLOGY_PACK`, so a deployment could
+    independent default: it silently outranked `GROUNDWORK_ONTOLOGY_PACK`, so a deployment could
     boot one vocabulary, report it at `/health`, and validate every write against another."""
 
     enforce_closed_vocabulary: bool = True
@@ -256,35 +256,35 @@ class GovernanceSettings:
             raw = os.getenv(name)
             if not raw:
                 return default
-            # `[1-3]`, so a stale `LEXGRAPH_ALLOWED_TIERS=1,2,3,4` from before the fourth tier
+            # `[1-3]`, so a stale `GROUNDWORK_ALLOWED_TIERS=1,2,3,4` from before the fourth tier
             # was retired drops the 4 rather than resurrecting a tier that no longer exists.
             parsed = {int(p) for p in re.findall(r"[1-3]", raw)}
             return frozenset(parsed) if parsed else default
 
         return cls(
-            min_confidence_floor=_f("LEXGRAPH_MIN_CONFIDENCE", 0.8),
-            model_confidence_cap=_f("LEXGRAPH_MODEL_CONFIDENCE_CAP", 0.79),
-            auto_assert_deterministic=_b("LEXGRAPH_AUTO_ASSERT_DET", True),
-            require_review_for_governing=_b("LEXGRAPH_REVIEW_GOVERNING", True),
-            block_ungoverned_queries=_b("LEXGRAPH_BLOCK_UNGOVERNED", False),
-            allowed_tiers=_tiers("LEXGRAPH_ALLOWED_TIERS", frozenset({1, 2, 3})),
-            router_enabled=_b("LEXGRAPH_ROUTER_ENABLED", True),
-            router_min_similarity=_f("LEXGRAPH_ROUTER_MIN_SIMILARITY", 0.25),
-            router_margin=_f("LEXGRAPH_ROUTER_MARGIN", 0.35),
-            router_metric_boost=_f("LEXGRAPH_ROUTER_METRIC_BOOST", 0.05),
-            block_model_extraction=_b("LEXGRAPH_BLOCK_MODEL_EXTRACTION", False),
-            query_model=os.getenv("LEXGRAPH_QUERY_MODEL", DEFAULT_QUERY_MODEL),
-            retrieval_agent_model=os.getenv("LEXGRAPH_RETRIEVAL_AGENT_MODEL", DEFAULT_QUERY_MODEL),
-            ocr_model=os.getenv("LEXGRAPH_OCR_MODEL", DEFAULT_OCR_MODEL),
-            extraction_model=os.getenv("LEXGRAPH_EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),
-            enrichment_model=os.getenv("LEXGRAPH_ENRICHMENT_MODEL", DEFAULT_ENRICHMENT_MODEL),
-            embedding_model=os.getenv("LEXGRAPH_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
-            # No fallback pack: empty defers to the boot pack, which `LEXGRAPH_ONTOLOGY_PACK`
+            min_confidence_floor=_f("GROUNDWORK_MIN_CONFIDENCE", 0.8),
+            model_confidence_cap=_f("GROUNDWORK_MODEL_CONFIDENCE_CAP", 0.79),
+            auto_assert_deterministic=_b("GROUNDWORK_AUTO_ASSERT_DET", True),
+            require_review_for_governing=_b("GROUNDWORK_REVIEW_GOVERNING", True),
+            block_ungoverned_queries=_b("GROUNDWORK_BLOCK_UNGOVERNED", False),
+            allowed_tiers=_tiers("GROUNDWORK_ALLOWED_TIERS", frozenset({1, 2, 3})),
+            router_enabled=_b("GROUNDWORK_ROUTER_ENABLED", True),
+            router_min_similarity=_f("GROUNDWORK_ROUTER_MIN_SIMILARITY", 0.25),
+            router_margin=_f("GROUNDWORK_ROUTER_MARGIN", 0.35),
+            router_metric_boost=_f("GROUNDWORK_ROUTER_METRIC_BOOST", 0.05),
+            block_model_extraction=_b("GROUNDWORK_BLOCK_MODEL_EXTRACTION", False),
+            query_model=os.getenv("GROUNDWORK_QUERY_MODEL", DEFAULT_QUERY_MODEL),
+            retrieval_agent_model=os.getenv("GROUNDWORK_RETRIEVAL_AGENT_MODEL", DEFAULT_QUERY_MODEL),
+            ocr_model=os.getenv("GROUNDWORK_OCR_MODEL", DEFAULT_OCR_MODEL),
+            extraction_model=os.getenv("GROUNDWORK_EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),
+            enrichment_model=os.getenv("GROUNDWORK_ENRICHMENT_MODEL", DEFAULT_ENRICHMENT_MODEL),
+            embedding_model=os.getenv("GROUNDWORK_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+            # No fallback pack: empty defers to the boot pack, which `GROUNDWORK_ONTOLOGY_PACK`
             # already sets. This variable exists to override that for one tenant.
-            ontology_domain=os.getenv("LEXGRAPH_ONTOLOGY_DOMAIN", ""),
-            enforce_closed_vocabulary=_b("LEXGRAPH_CLOSED_VOCABULARY", True),
-            vector_top_k=int(os.getenv("LEXGRAPH_VECTOR_TOP_K", "20")),
-            graph_expand_depth=int(os.getenv("LEXGRAPH_GRAPH_DEPTH", "2")),
+            ontology_domain=os.getenv("GROUNDWORK_ONTOLOGY_DOMAIN", ""),
+            enforce_closed_vocabulary=_b("GROUNDWORK_CLOSED_VOCABULARY", True),
+            vector_top_k=int(os.getenv("GROUNDWORK_VECTOR_TOP_K", "20")),
+            graph_expand_depth=int(os.getenv("GROUNDWORK_GRAPH_DEPTH", "2")),
         )
 
     def apply(self, patch: dict[str, Any], *, updated_by: str) -> GovernanceSettings:

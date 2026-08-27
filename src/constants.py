@@ -6,7 +6,7 @@ may import from — can import it without a cycle.
 
 from __future__ import annotations
 
-PROJECT_NAME = "lexgraph"
+PROJECT_NAME = "groundwork"
 
 DEFAULT_AWS_REGION = "us-east-1"
 

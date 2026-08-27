@@ -14,12 +14,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import create_app
-from src.config import AuthConfig, DocumentConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, DocumentConfig, GraphConfig, GroundworkConfig
 from src.documents.keys import PROCESSED_PREFIX, raw_key
 from src.documents.storage import DocumentStorage, set_document_storage
 
 TENANT = "dev-tenant"
-BUCKET = "lexgraph-docs"
+BUCKET = "groundwork-docs"
 SECRET = "test-internal-secret"
 
 #: An upload must name a matter. No graph is reachable in these tests, so verification degrades to
@@ -40,8 +40,8 @@ class FakeS3:
         raise RuntimeError("404 Not Found")
 
 
-def _config(**over: Any) -> LexGraphConfig:
-    cfg = LexGraphConfig(
+def _config(**over: Any) -> GroundworkConfig:
+    cfg = GroundworkConfig(
         environment="local",
         auth=AuthConfig(dev_bypass_tenant=TENANT),
         graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
@@ -113,7 +113,7 @@ class TestInternalTriggerAuth:
         res = client.post(
             "/api/internal/ingest",
             json={"key": raw_key(TENANT, "u1", "a.pdf")},
-            headers={"X-Lexgraph-Internal": "not-it"},
+            headers={"X-Groundwork-Internal": "not-it"},
         )
         assert res.status_code == 401
 
@@ -126,7 +126,7 @@ class TestInternalTriggerAuth:
             res = unconfigured.post(
                 "/api/internal/ingest",
                 json={"key": raw_key(TENANT, "u1", "a.pdf")},
-                headers={"X-Lexgraph-Internal": "anything"},
+                headers={"X-Groundwork-Internal": "anything"},
             )
             assert res.status_code == 503
         finally:
@@ -136,7 +136,7 @@ class TestInternalTriggerAuth:
         res = client.post(
             "/api/internal/ingest",
             json={"key": raw_key(TENANT, "u1", "a.pdf")},
-            headers={"X-Lexgraph-Internal": SECRET},
+            headers={"X-Groundwork-Internal": SECRET},
         )
         assert res.status_code == 202
         assert res.json()["status"] == "accepted"
@@ -147,7 +147,7 @@ class TestInternalTriggerAuth:
         res = client.post(
             "/api/internal/ingest",
             json={"key": raw_key("firm-other", "u1", "a.pdf")},
-            headers={"X-Lexgraph-Internal": SECRET},
+            headers={"X-Groundwork-Internal": SECRET},
         )
         assert res.json()["tenant_id"] == "firm-other"
 
@@ -158,7 +158,7 @@ class TestInternalTriggerKeyHandling:
         res = client.post(
             "/api/internal/ingest",
             json={"key": f"{PROCESSED_PREFIX}{TENANT}/abc/a.pdf"},
-            headers={"X-Lexgraph-Internal": SECRET},
+            headers={"X-Groundwork-Internal": SECRET},
         )
         assert res.status_code == 202
         assert res.json()["status"] == "ignored"
@@ -167,7 +167,7 @@ class TestInternalTriggerKeyHandling:
         res = client.post(
             "/api/internal/ingest",
             json={"key": "raw/../other-firm/u1/a.pdf"},
-            headers={"X-Lexgraph-Internal": SECRET},
+            headers={"X-Groundwork-Internal": SECRET},
         )
         assert res.json()["status"] == "ignored"
 
@@ -178,7 +178,7 @@ class TestInternalTriggerKeyHandling:
             client.post(
                 "/api/internal/ingest",
                 json={"key": raw_key(TENANT, "u1", "a.pdf")},
-                headers={"X-Lexgraph-Internal": SECRET},
+                headers={"X-Groundwork-Internal": SECRET},
             ).status_code
             == 202
         )

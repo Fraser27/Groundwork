@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from src.config import DocumentConfig, LexGraphConfig
+from src.config import DocumentConfig, GroundworkConfig
 from src.documents.keys import PROCESSED_PREFIX, RAW_PREFIX, parse_raw_key, raw_key
 from src.documents.storage import (
     MAX_EXPIRY_SECONDS,
@@ -29,7 +29,7 @@ from src.graph.assertions import SourceLocator
 from src.graph.scope import AuthContext, ScopeViolation
 
 TENANT = "dev-tenant"
-BUCKET = "lexgraph-docs"
+BUCKET = "groundwork-docs"
 PDF = b"%PDF-1.7 fake bytes"
 
 
@@ -99,7 +99,7 @@ def s3() -> FakeS3:
 
 @pytest.fixture
 def storage(s3: FakeS3) -> DocumentStorage:
-    return DocumentStorage(BUCKET, kms_key_id="alias/lexgraph-docs", s3=s3)
+    return DocumentStorage(BUCKET, kms_key_id="alias/groundwork-docs", s3=s3)
 
 
 @pytest.fixture
@@ -195,7 +195,7 @@ class TestPutDocument:
         storage.put_document(ctx, filename="motion.pdf", body=PDF)
         put = s3.puts[0]
         assert put["ServerSideEncryption"] == "aws:kms"
-        assert put["SSEKMSKeyId"] == "alias/lexgraph-docs"
+        assert put["SSEKMSKeyId"] == "alias/groundwork-docs"
 
     def test_omits_encryption_headers_when_no_key_configured(self, s3, ctx):
         """Naming AES256 would silently downgrade a KMS bucket, so nothing is sent."""
@@ -370,12 +370,12 @@ class TestDroppingATenantErasesEveryVersion:
 
 class TestConfigWiring:
     def test_no_bucket_means_no_storage(self):
-        cfg = LexGraphConfig(documents=DocumentConfig(bucket=""))
+        cfg = GroundworkConfig(documents=DocumentConfig(bucket=""))
         assert storage_from_config(cfg) is None
 
     def test_bucket_yields_storage_without_touching_aws(self):
         """boto3 is reached lazily, so constructing this needs no credentials."""
-        cfg = LexGraphConfig(documents=DocumentConfig(bucket=BUCKET, kms_key_id="alias/k"))
+        cfg = GroundworkConfig(documents=DocumentConfig(bucket=BUCKET, kms_key_id="alias/k"))
         got = storage_from_config(cfg)
         assert got is not None
         assert got.bucket == BUCKET
@@ -383,7 +383,7 @@ class TestConfigWiring:
 
     def test_override_wins(self, storage: DocumentStorage):
         set_document_storage(storage)
-        cfg = LexGraphConfig(documents=DocumentConfig(bucket=""))
+        cfg = GroundworkConfig(documents=DocumentConfig(bucket=""))
         assert storage_from_config(cfg) is storage
 
 

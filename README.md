@@ -7,9 +7,10 @@ Domain-agnostic by construction. Three ontology packs ship: `fintech` (the defau
 `legal` and `healthcare`. The extra two exist to keep the domain-agnostic claim
 honest rather than as demos.
 
-> The product is **Groundwork**. The repository, CDK stacks, Python package and
-> DynamoDB tables are still named `lexgraph`: renaming a CloudFormation stack replaces
-> it, and those ARNs are imported across six stacks.
+> The product is **Groundwork**. The CDK stacks, Python package, and every identifier this
+> repo controls are named `groundwork`. The one thing left as `lexgraph` is the local
+> checkout's directory name — renaming that is a filesystem operation outside the repo's
+> own control, so it is left to whoever clones it.
 
 ## Why this exists
 
@@ -173,7 +174,7 @@ call is refused, and the UI bounces them back to the login page. Users must be c
 by an admin.
 
 ```bash
-POOL=$(aws cloudformation describe-stacks --stack-name LexGraphAuth \
+POOL=$(aws cloudformation describe-stacks --stack-name GroundworkAuth \
   --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' --output text)
 
 aws cognito-idp admin-create-user \
@@ -266,14 +267,14 @@ everything that was previously three manual steps:
 - **Resolves your availability zones.** AZ *names* are shuffled per account, so
   `us-east-1a` is a different physical zone in your account than in anyone else's.
   AgentCore Runtime supports only a subset, and a subnet in the wrong one fails
-  `LexGraphMcp` with an error that names the *subnet* rather than the zone. The script
+  `GroundworkMcp` with an error that names the *subnet* rather than the zone. The script
   maps the supported zone IDs to your account's names and writes them to `cdk.json`.
 - **Bootstraps and deploys** all six stacks.
 - **Closes the circular callback requirement.** The Cognito hosted UI needs the
   CloudFront domain as a callback URL, and CloudFront does not exist until the first
   deploy. The script reads the URL from the stack output, sets `webOrigin`, and
-  redeploys the two stacks that consume it: `LexGraphAuth` for the callback and
-  `LexGraphData` for the S3 CORS rule that lets a browser upload straight to the bucket.
+  redeploys the two stacks that consume it: `GroundworkAuth` for the callback and
+  `GroundworkData` for the S3 CORS rule that lets a browser upload straight to the bucket.
   Deploying only Auth leaves uploads failing CORS, which looks like a broken button.
 
 It also refuses to start if Bedrock access is missing, by invoking both models for real
@@ -289,7 +290,7 @@ No user exists yet, and the tenant a user belongs to is fixed at creation.
 
 ```bash
 POOL=$(aws cognito-idp list-user-pools --max-results 10 \
-  --query "UserPools[?starts_with(Name,'LexGraph')].Id" --output text)
+  --query "UserPools[?starts_with(Name,'Groundwork')].Id" --output text)
 
 aws cognito-idp admin-create-user --user-pool-id "$POOL" \
   --username you@example.com \

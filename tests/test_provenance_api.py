@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.deps import get_services
-from src.config import AuthConfig, DocumentConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, DocumentConfig, GraphConfig, GroundworkConfig
 from src.documents.chunk import chunk_document
 from src.documents.parse import ParseFailed, assemble
 from src.documents.storage import DocumentStorage, set_document_storage
@@ -24,7 +24,7 @@ from src.graph.scope import AuthContext
 from tests.test_storage import PDF, FakeS3
 
 TENANT = "dev-tenant"
-BUCKET = "lexgraph-docs"
+BUCKET = "groundwork-docs"
 QUOTE = "The court declined to follow Brown."
 
 
@@ -43,12 +43,12 @@ class _FakeParser:
         return assemble(document_id, self.pages, method="vision:fake@v1", filename=filename)
 
 
-def _config(bucket: str = BUCKET) -> LexGraphConfig:
-    cfg = LexGraphConfig(
+def _config(bucket: str = BUCKET) -> GroundworkConfig:
+    cfg = GroundworkConfig(
         environment="local",
         auth=AuthConfig(dev_bypass_tenant=TENANT),
         graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),
-        documents=DocumentConfig(bucket=bucket, kms_key_id="alias/lexgraph-docs"),
+        documents=DocumentConfig(bucket=bucket, kms_key_id="alias/groundwork-docs"),
     )
     cfg.validate()
     return cfg
@@ -61,7 +61,7 @@ def s3() -> FakeS3:
 
 @pytest.fixture
 def storage(s3: FakeS3) -> DocumentStorage:
-    return DocumentStorage(BUCKET, kms_key_id="alias/lexgraph-docs", s3=s3)
+    return DocumentStorage(BUCKET, kms_key_id="alias/groundwork-docs", s3=s3)
 
 
 @pytest.fixture

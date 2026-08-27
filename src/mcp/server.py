@@ -40,7 +40,7 @@ from src.api.deps import (
     set_services,
 )
 from src.auth import AuthError
-from src.config import LexGraphConfig
+from src.config import GroundworkConfig
 from src.documents.review import AssertionNotFound
 from src.graph.assertions import EpistemicClass, ReviewState
 from src.graph.scope import AuthContext, ScopeViolation
@@ -52,7 +52,7 @@ from src.query_audit import SURFACE_MCP, event_for, event_for_composed
 logger = logging.getLogger(__name__)
 
 INSTRUCTIONS = """
-# LexGraph — governed semantic layer for legal work
+# Groundwork — governed semantic layer for legal work
 
 Every fact this server returns carries provenance: a document page and the verbatim
 quote, or the proof tree of an inference. When a client asks "how do you know that?",
@@ -805,7 +805,7 @@ def build_server() -> FastMCP:
     be run once, so a second `create_app()` — which tests do — needs its own instance.
     """
     server: FastMCP = FastMCP(
-        name="lexgraph",
+        name="groundwork",
         instructions=INSTRUCTIONS,
         host="0.0.0.0",
         stateless_http=True,
@@ -815,7 +815,7 @@ def build_server() -> FastMCP:
     return server
 
 
-def create_app(config: LexGraphConfig | None = None):
+def create_app(config: GroundworkConfig | None = None):
     """Build the ASGI app, sharing the same service container the REST API uses.
 
     Services are built here rather than imported from `src.api.app` so that importing this

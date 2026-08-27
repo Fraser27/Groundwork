@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
 
-import { PROJECT, readConfig } from '../lib/config';
+import { PROJECT, PROJECT_SLUG, readConfig } from '../lib/config';
 import { NetworkStack } from '../lib/network-stack';
 import { DataStack } from '../lib/data-stack';
 import { AuthStack } from '../lib/auth-stack';
@@ -17,7 +17,7 @@ const env = {
   region: process.env.CDK_DEFAULT_REGION || 'us-east-1',
 };
 
-const prefix = 'LexGraph';
+const prefix = 'Groundwork';
 
 /**
  * Six stacks, split by deploy cadence and blast radius rather than by feature.
@@ -34,7 +34,7 @@ const prefix = 'LexGraph';
 const network = new NetworkStack(app, `${prefix}Network`, {
   env,
   config,
-  description: 'LexGraph — VPC, subnets, security groups, VPC endpoints',
+  description: 'Groundwork — VPC, subnets, security groups, VPC endpoints',
 });
 
 const data = new DataStack(app, `${prefix}Data`, {
@@ -42,7 +42,7 @@ const data = new DataStack(app, `${prefix}Data`, {
   config,
   vpc: network.vpc,
   neptuneSg: network.neptuneSg,
-  description: 'LexGraph — Neptune, OpenSearch Serverless, DynamoDB, S3',
+  description: 'Groundwork — Neptune, OpenSearch Serverless, DynamoDB, S3',
 });
 
 /**
@@ -58,7 +58,7 @@ const webOrigin = app.node.tryGetContext('webOrigin') as string | undefined;
 const auth = new AuthStack(app, `${prefix}Auth`, {
   env,
   extraCallbackUrls: webOrigin ? [`${webOrigin}/`] : [],
-  description: 'LexGraph — Cognito user pool, hosted UI, Cedar policy store',
+  description: 'Groundwork — Cognito user pool, hosted UI, Cedar policy store',
 });
 
 const appStack = new AppStack(app, `${prefix}App`, {
@@ -81,7 +81,7 @@ const appStack = new AppStack(app, `${prefix}App`, {
   userPoolClientId: auth.userPoolClient.userPoolClientId,
   issuerUrl: auth.issuerUrl,
   policyStoreId: auth.policyStore.attrPolicyStoreId,
-  description: 'LexGraph — FastAPI on Fargate behind an ALB',
+  description: 'Groundwork — FastAPI on Fargate behind an ALB',
 });
 
 new McpStack(app, `${prefix}Mcp`, {
@@ -93,7 +93,7 @@ new McpStack(app, `${prefix}Mcp`, {
   containerEnvironment: appStack.containerEnvironment,
   userPoolClientId: auth.userPoolClient.userPoolClientId,
   issuerUrl: auth.issuerUrl,
-  description: 'LexGraph — MCP server on Bedrock AgentCore Runtime',
+  description: 'Groundwork — MCP server on Bedrock AgentCore Runtime',
 });
 
 new WebStack(app, `${prefix}Web`, {
@@ -101,8 +101,8 @@ new WebStack(app, `${prefix}Web`, {
   loadBalancer: appStack.loadBalancer,
   userPoolId: auth.userPool.userPoolId,
   userPoolClientId: auth.userPoolClient.userPoolClientId,
-  hostedUiDomain: `${PROJECT}-${cdk.Aws.ACCOUNT_ID}.auth.${env.region}.amazoncognito.com`,
-  description: 'LexGraph — CloudFront + S3 for the React UI',
+  hostedUiDomain: `${PROJECT_SLUG}-${cdk.Aws.ACCOUNT_ID}.auth.${env.region}.amazoncognito.com`,
+  description: 'Groundwork — CloudFront + S3 for the React UI',
 });
 
 // Applied at the app level so it reaches every stack, including any added later

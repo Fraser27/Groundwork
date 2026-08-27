@@ -48,11 +48,11 @@ function currentFile() {
 // access is guarded. A page that cannot remember the theme still toggles.
 
 function readStoredTheme() {
-  try { return window.localStorage.getItem('lexgraph-docs-theme'); } catch (e) { return null; }
+  try { return window.localStorage.getItem('groundwork-docs-theme'); } catch (e) { return null; }
 }
 
 function storeTheme(theme) {
-  try { window.localStorage.setItem('lexgraph-docs-theme', theme); } catch (e) { /* ignore */ }
+  try { window.localStorage.setItem('groundwork-docs-theme', theme); } catch (e) { /* ignore */ }
 }
 
 function applyTheme(theme) {
@@ -74,7 +74,7 @@ function initialTheme() {
 
 // Applied before first paint by an inline call in each page's <head>, so the
 // page does not flash the wrong theme.
-window.__lexgraphApplyTheme = function () { applyTheme(initialTheme()); };
+window.__groundworkApplyTheme = function () { applyTheme(initialTheme()); };
 
 function toggleTheme() {
   var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';

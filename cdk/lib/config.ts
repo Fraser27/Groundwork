@@ -1,7 +1,20 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 
-export const PROJECT = 'lexgraph';
+export const PROJECT = 'Groundwork';
+
+/**
+ * Lowercase form of `PROJECT`, for the resource names that reject mixed case.
+ *
+ * Cognito's domain prefix and every OpenSearch Serverless name (collection, collection
+ * group, and each security/access policy) are validated against a lowercase-only
+ * pattern -- `^[a-z][a-z0-9-]{2,31}$` for OpenSearch, `^[a-z0-9-]+$` for the Cognito
+ * prefix. `PROJECT` itself stays PascalCase because it is also the stack-id prefix, a
+ * Cedar entity type name, and CloudWatch log stream prefixes -- none of which enforce
+ * this, and PascalCase reads better there. Use this constant instead of lower-casing
+ * `PROJECT` ad hoc at each call site, so the two never drift.
+ */
+export const PROJECT_SLUG = PROJECT.toLowerCase();
 
 /*
  * Two feature flags in cdk.json are load-bearing, and JSON cannot hold a comment
@@ -25,7 +38,7 @@ export const PROJECT = 'lexgraph';
  * because CDK resolves context at synth time, so `cdk diff` shows the real
  * consequence of a change. A CFN parameter would hide it until deploy.
  */
-export interface LexGraphConfig {
+export interface GroundworkConfig {
   /** Raise this off the burstable class before any load test — see cdk/README.md. */
   readonly neptuneInstanceClass: string;
   readonly neptuneInstanceCount: number;
@@ -56,7 +69,7 @@ export interface LexGraphConfig {
   readonly availabilityZones?: string[];
 }
 
-export function readConfig(scope: Construct): LexGraphConfig {
+export function readConfig(scope: Construct): GroundworkConfig {
   const ctx = <T>(key: string, fallback: T): T => {
     const v = scope.node.tryGetContext(key);
     return v === undefined || v === null ? fallback : (v as T);

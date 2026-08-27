@@ -139,9 +139,9 @@ class AuthConfig:
     dev_bypass_tenant: str = ""
     """Local development only: a tenant_id to assume when no JWT is present.
 
-    Refused outright unless `LexGraphConfig.environment == "local"`, because a
+    Refused outright unless `GroundworkConfig.environment == "local"`, because a
     production deployment that honoured this would accept unauthenticated requests
-    as a real tenant. See `LexGraphConfig.validate`."""
+    as a real tenant. See `GroundworkConfig.validate`."""
 
     home_tenant: str = ""
     """The one tenant whose platform-admins may create and delete other tenants.
@@ -170,7 +170,7 @@ class TableConfig:
 
 
 @dataclass
-class LexGraphConfig:
+class GroundworkConfig:
     environment: str = "local"
     port: int = APP_PORT
     log_level: str = "INFO"
@@ -255,10 +255,10 @@ class LexGraphConfig:
             raise ValueError("GRAPH_PASSWORD is required when GRAPH_IAM_AUTH is off")
 
 
-def load_config() -> LexGraphConfig:
+def load_config() -> GroundworkConfig:
     region = _env("AWS_DEFAULT_REGION") or _env("AWS_REGION") or DEFAULT_AWS_REGION
 
-    cfg = LexGraphConfig(
+    cfg = GroundworkConfig(
         environment=_env("ENVIRONMENT", "local"),
         port=_env_int("PORT", APP_PORT),
         log_level=_env("LOG_LEVEL", "INFO"),

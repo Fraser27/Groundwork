@@ -49,7 +49,7 @@ def principal_from_context(services: Services, ctx: Context) -> tuple[AuthContex
 
     Delegates to the REST API's `Authenticator` rather than re-deriving anything. That
     includes the local dev bypass, which `Authenticator._dev_context` re-checks the
-    environment for and `LexGraphConfig.validate` refuses to start with outside local —
+    environment for and `GroundworkConfig.validate` refuses to start with outside local —
     two independent gates, neither of which this transport may weaken.
 
     `include_suggestions` is not exposed. The REST API takes it as a query parameter for a

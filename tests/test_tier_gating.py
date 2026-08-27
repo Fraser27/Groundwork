@@ -143,17 +143,17 @@ class TestOverrideStillWorks:
 
 class TestEnvParsing:
     def test_a_comma_separated_cap_parses(self, monkeypatch):
-        monkeypatch.setenv("LEXGRAPH_ALLOWED_TIERS", "1,2")
+        monkeypatch.setenv("GROUNDWORK_ALLOWED_TIERS", "1,2")
         assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2})
 
     def test_an_unparseable_cap_falls_back_to_all_tiers(self, monkeypatch):
         """A typo in a cap must not stop the API starting, and must not silently forbid
         everything either, which would look like a total outage."""
-        monkeypatch.setenv("LEXGRAPH_ALLOWED_TIERS", "nonsense")
+        monkeypatch.setenv("GROUNDWORK_ALLOWED_TIERS", "nonsense")
         assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2, 3})
 
     def test_an_unset_cap_permits_all_tiers(self, monkeypatch):
-        monkeypatch.delenv("LEXGRAPH_ALLOWED_TIERS", raising=False)
+        monkeypatch.delenv("GROUNDWORK_ALLOWED_TIERS", raising=False)
         assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2, 3})
 
 
@@ -175,7 +175,7 @@ class TestTheFourthTierStaysRetired:
         assert set(TIER_EXPLANATION) == set(Tier)
 
     def test_a_stale_env_var_does_not_resurrect_it(self, monkeypatch):
-        monkeypatch.setenv("LEXGRAPH_ALLOWED_TIERS", "1,2,3,4")
+        monkeypatch.setenv("GROUNDWORK_ALLOWED_TIERS", "1,2,3,4")
         assert GovernanceSettings.from_env().allowed_tiers == frozenset({1, 2, 3})
 
     def test_a_persisted_row_does_not_resurrect_it(self):

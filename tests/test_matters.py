@@ -32,7 +32,7 @@ MBC = "MBC-2024-0431"
 
 GRAPH_URI = os.getenv("TEST_GRAPH_URI", "bolt://127.0.0.1:7687")
 GRAPH_USER = os.getenv("TEST_GRAPH_USER", "neo4j")
-GRAPH_PASSWORD = os.getenv("TEST_GRAPH_PASSWORD", "lexgraph-dev")
+GRAPH_PASSWORD = os.getenv("TEST_GRAPH_PASSWORD", "groundwork-dev")
 
 
 def _live_graph() -> GraphClient | None:
@@ -351,7 +351,7 @@ class TestTheUploadRequiresARealMatter:
         from fastapi.testclient import TestClient
 
         from src.api.app import create_app
-        from src.config import AuthConfig, DocumentConfig, GraphConfig, LexGraphConfig
+        from src.config import AuthConfig, DocumentConfig, GraphConfig, GroundworkConfig
         from src.documents.storage import DocumentStorage, set_document_storage
 
         class FakeS3:
@@ -361,7 +361,7 @@ class TestTheUploadRequiresARealMatter:
             def head_object(self, **kw):
                 raise RuntimeError("404")
 
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             environment="local",
             auth=AuthConfig(dev_bypass_tenant="demo-firm"),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

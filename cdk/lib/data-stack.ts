@@ -7,10 +7,16 @@ import * as aoss from 'aws-cdk-lib/aws-opensearchserverless';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
-import { LexGraphConfig, NEPTUNE_PORT, PROJECT, RAW_PREFIX, tagStack } from './config';
+import {
+  GroundworkConfig,
+  NEPTUNE_PORT,
+  PROJECT_SLUG,
+  RAW_PREFIX,
+  tagStack,
+} from './config';
 
 export interface DataStackProps extends cdk.StackProps {
-  readonly config: LexGraphConfig;
+  readonly config: GroundworkConfig;
   readonly vpc: ec2.IVpc;
   readonly neptuneSg: ec2.ISecurityGroup;
 }
@@ -66,7 +72,7 @@ export class DataStack extends cdk.Stack {
 
   private buildDocumentKey(): kms.Key {
     return new kms.Key(this, 'DocumentKey', {
-      description: 'LexGraph source documents - customer-managed so key access is auditable',
+      description: 'Groundwork source documents - customer-managed so key access is auditable',
       enableKeyRotation: true,
       // RETAIN, not DESTROY: destroying the key makes every object in a RETAINed
       // bucket permanently unreadable, which is a data-loss event dressed up as
@@ -164,12 +170,12 @@ export class DataStack extends cdk.Stack {
    * tenancy is a property filter, and `scope.py` is the only thing enforcing it.
    */
   private buildNeptune(
-    config: LexGraphConfig,
+    config: GroundworkConfig,
     vpc: ec2.IVpc,
     neptuneSg: ec2.ISecurityGroup,
   ): { cluster: neptune.CfnDBCluster; endpoint: string } {
     const subnetGroup = new neptune.CfnDBSubnetGroup(this, 'NeptuneSubnets', {
-      dbSubnetGroupDescription: 'LexGraph Neptune - isolated subnets',
+      dbSubnetGroupDescription: 'Groundwork Neptune - isolated subnets',
       subnetIds: vpc.selectSubnets({ subnetType: ec2.SubnetType.PRIVATE_ISOLATED }).subnetIds,
     });
 
@@ -180,7 +186,7 @@ export class DataStack extends cdk.Stack {
     // specific minor means this template breaks the day that minor is retired.
     const clusterParams = new neptune.CfnDBClusterParameterGroup(this, 'NeptuneClusterParams', {
       family: config.neptuneParameterGroupFamily,
-      description: 'LexGraph - audit logging on',
+      description: 'Groundwork - audit logging on',
       parameters: {
         // Every write to the graph is an assertion about a customer's legal
         // matter. Audit logs are how we answer "who wrote this edge" when the
@@ -240,12 +246,12 @@ export class DataStack extends cdk.Stack {
    * per month than the Neptune instance. Max OCU is capped to bound the downside.
    */
   private buildVectorStore(
-    config: LexGraphConfig,
+    config: GroundworkConfig,
   ): { collection: aoss.CfnCollection; endpoint: string } {
-    const collectionName = `${PROJECT}-vectors`;
+    const collectionName = `${PROJECT_SLUG}-vectors`;
 
     const group = new aoss.CfnCollectionGroup(this, 'VectorCollectionGroup', {
-      name: `${PROJECT}-vector-group`,
+      name: `${PROJECT_SLUG}-vector-group`,
       generation: 'NEXTGEN',
       // ENABLED even though this is a dev-sized deployment. Normally standby
       // replicas double the OCU floor, but with a minimum of 0 there is no floor
@@ -261,7 +267,7 @@ export class DataStack extends cdk.Stack {
     });
 
     const encryptionPolicy = new aoss.CfnSecurityPolicy(this, 'VectorEncryptionPolicy', {
-      name: `${PROJECT}-vec-enc`,
+      name: `${PROJECT_SLUG}-vec-enc`,
       type: 'encryption',
       policy: JSON.stringify({
         Rules: [{ ResourceType: 'collection', Resource: [`collection/${collectionName}`] }],
@@ -304,7 +310,7 @@ export class DataStack extends cdk.Stack {
     // than the design intended, and it should be revisited if the private zone ever covers
     // the NextGen domain.
     const networkPolicy = new aoss.CfnSecurityPolicy(this, 'VectorNetworkPolicy', {
-      name: `${PROJECT}-vec-net`,
+      name: `${PROJECT_SLUG}-vec-net`,
       type: 'network',
       policy: JSON.stringify([
         {
@@ -325,7 +331,7 @@ export class DataStack extends cdk.Stack {
       // outside a group falls back to the account-level minimum, which is not 0.
       collectionGroupName: group.name,
       standbyReplicas: 'ENABLED',
-      description: 'LexGraph document chunk embeddings',
+      description: 'Groundwork document chunk embeddings',
     });
     // Both policies must exist before the collection or creation fails with an
     // unhelpful "no matching security policy".
@@ -358,7 +364,7 @@ export class DataStack extends cdk.Stack {
     //
     // That naming is deliberate now rather than merely inherited: the key cannot be
     // changed in place. DynamoDB replaces a table whose schema changes, which changes its
-    // ARN, and `LexGraphApp` consumes that ARN through a strong cross-stack export — so
+    // ARN, and `GroundworkApp` consumes that ARN through a strong cross-stack export — so
     // renaming it takes two coordinated deploys and a table migration. Not worth it for a
     // column name. See the `defaultCrossStackReferences: strong` note in `config.ts`.
     //

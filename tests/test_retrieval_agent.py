@@ -28,7 +28,7 @@ from src.agent.events import (
 )
 from src.agent.loop import CAPPED_REASONS, RetrievalAgent
 from src.api.app import create_app
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 
 TENANT = "demo-firm"
 
@@ -285,7 +285,7 @@ class TestTheAgentHasNoIdentityOfItsOwn:
 class TestTheRoutesRefuseBeforeTheyPretend:
     @pytest.fixture
     def client(self) -> TestClient:
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             environment="local",
             auth=AuthConfig(dev_bypass_tenant=TENANT),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

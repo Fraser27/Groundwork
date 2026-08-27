@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Overview — LexGraph documentation</title>
-<meta name="description" content="LexGraph is a governed semantic layer over structured and unstructured data where every fact carries its own provenance.">
+<title>Overview — Groundwork documentation</title>
+<meta name="description" content="Groundwork is a governed semantic layer over structured and unstructured data where every fact carries its own provenance.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="assets/docs.css">
 <script src="assets/nav.js"></script>
-<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+<script>window.__groundworkApplyTheme && window.__groundworkApplyTheme();</script>
 </head>
 <body>
 <div class="layout">
@@ -17,13 +17,13 @@
 
 <p class="eyebrow">Overview</p>
 <h1>Why does the system believe this?</h1>
-<p class="lede">LexGraph is a governed semantic layer over both database tables and documents. Its
+<p class="lede">Groundwork is a governed semantic layer over both database tables and documents. Its
 single organising commitment is that every fact it holds carries a record of how it came to be
 believed — so that question always has a real answer, not a plausible one.</p>
 
 <h2 id="what-it-is">What it is</h2>
 
-<p>LexGraph sits between a firm's data and the people asking it questions. Underneath are two
+<p>Groundwork sits between a firm's data and the people asking it questions. Underneath are two
 kinds of source: <strong>structured</strong> data (database tables reached through AWS Glue and
 Athena) and <strong>unstructured</strong> data (documents — filings, contracts, opinions,
 correspondence). On top is a knowledge graph of entities and the relationships between them,
@@ -43,7 +43,7 @@ that unwinds to the documents and records at its base.</p>
 
 <h2 id="who-it-is-for">Who it is for</h2>
 
-<p>LexGraph is built as a whitelabel platform for legal AI products. Three audiences use it, and
+<p>Groundwork is built as a whitelabel platform for legal AI products. Three audiences use it, and
 the documentation tries to serve all three:</p>
 
 <div class="cards">
@@ -83,7 +83,7 @@ lawyer. What a regulated buyer needs, and what nothing on the market reliably pr
 ability to say <em>which</em> of its beliefs are mechanically checkable, which rest on a model's
 judgement, which were derived by a rule from other beliefs, and which are outright guesses —
 and to keep those categories apart at the moment a question is answered rather than in a
-report afterwards. LexGraph makes that distinction the primary key of its data model. A fact
+report afterwards. Groundwork makes that distinction the primary key of its data model. A fact
 that a string search confirmed is on page 7 is a different kind of object from a model's view
 that one holding undercuts another, and the system will not let them be mistaken for each other.
 Everything else — the review queue, the ethical walls, the trust thresholds, the three-tier read
@@ -219,9 +219,9 @@ ungoverned-query kill switch: losing that on a deploy meant a firm believing que
 being refused while they were quietly being answered.</li>
 </ul>
 
-<p>Deployment is no longer among them: all six stacks — <code>LexGraphNetwork</code>,
-<code>LexGraphData</code>, <code>LexGraphAuth</code>, <code>LexGraphApp</code>,
-<code>LexGraphMcp</code> and <code>LexGraphWeb</code> — are applied to a real account, and the
+<p>Deployment is no longer among them: all six stacks — <code>GroundworkNetwork</code>,
+<code>GroundworkData</code>, <code>GroundworkAuth</code>, <code>GroundworkApp</code>,
+<code>GroundworkMcp</code> and <code>GroundworkWeb</code> — are applied to a real account, and the
 document pipeline runs there end to end: a presigned browser upload lands in S3, a notification
 starts ingestion, and pages are transcribed, chunked, embedded and read by a model.</p>
 

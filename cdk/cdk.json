@@ -11,7 +11,7 @@
 
     "availabilityZones": ["us-east-1a", "us-east-1b"],
 
-    "webOrigin": "https://d6hndgv187j6s.cloudfront.net",
+    "webOrigin": "https://d2l98f4rm5i9ro.cloudfront.net",
 
     "neptuneInstanceClass": "db.t4g.medium",
     "neptuneInstanceCount": 1,

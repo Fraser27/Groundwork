@@ -28,7 +28,7 @@
   var MAX_RESULTS = 24;
   var SNIPPET_RADIUS = 62;
 
-  var docs = window.LEXGRAPH_SEARCH_INDEX || [];
+  var docs = window.GROUNDWORK_SEARCH_INDEX || [];
   var box = null;
   var overlay = null;
   var panel = null;

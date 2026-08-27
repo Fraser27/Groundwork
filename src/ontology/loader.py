@@ -722,7 +722,7 @@ def available_domains() -> list[str]:
 
 #: Not `constants.DEFAULT_ONTOLOGY_PACK`, deliberately: this module imports nothing from `src`, so
 #: an ontology can be loaded without dragging config in. Every real caller passes a domain, from
-#: `LexGraphConfig.ontology_pack` or the tenant's setting, so this only serves a bare call.
+#: `GroundworkConfig.ontology_pack` or the tenant's setting, so this only serves a bare call.
 @functools.lru_cache(maxsize=8)
 def load_ontology(domain: str = "legal") -> Ontology:
     path = ONTOLOGY_DIR / f"{domain}.yaml"

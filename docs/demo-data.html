@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Loading the demo data — LexGraph documentation</title>
+<title>Loading the demo data — Groundwork documentation</title>
 <meta name="description" content="Five interlocking matters that go through the real ingest pipeline, the Athena practice data that corroborates them, and how to wipe it all again.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="assets/docs.css">
 <script src="assets/nav.js"></script>
-<script>window.__lexgraphApplyTheme && window.__lexgraphApplyTheme();</script>
+<script>window.__groundworkApplyTheme && window.__groundworkApplyTheme();</script>
 </head>
 <body>
 <div class="layout">
@@ -17,7 +17,7 @@
 
 <p class="eyebrow">Using it</p>
 <h1>Loading the demo data</h1>
-<p class="lede">An empty LexGraph cannot demonstrate anything, because the whole point of the system is
+<p class="lede">An empty Groundwork cannot demonstrate anything, because the whole point of the system is
 what happens when facts from different documents meet. Five matters ship with it for that reason, and
 they are deliberately entangled.</p>
 
@@ -119,17 +119,17 @@ it.</p>
 
 <h2 id="structured">The other half: practice data in Athena</h2>
 
-<p>The documents are only half the demo. LexGraph governs structured data too, and the questions
+<p>The documents are only half the demo. Groundwork governs structured data too, and the questions
 worth asking are the ones that need both — <em>who is the adverse party</em> comes from a page,
 <em>what have we billed them</em> comes from a warehouse. Until there are rows somewhere, half the
 product has nothing to stand on.</p>
 
 <pre><code>./sample/glue/load_firm_metadata.sh</code></pre>
 
-<p>That creates a Glue database called <code>lexgraph_legal</code> with three Iceberg tables —
+<p>That creates a Glue database called <code>groundwork_legal</code> with three Iceberg tables —
 <code>clients</code>, <code>matters</code> and <code>time_entries</code> — holding ten clients, ten
 matters and twenty-four time entries. Then in <strong>Admin</strong>, <strong>Scan catalog</strong>,
-tick <code>lexgraph_legal</code>. Only the schema enters the graph; the rows stay in S3 and are
+tick <code>groundwork_legal</code>. Only the schema enters the graph; the rows stay in S3 and are
 queried in place.</p>
 
 <p>The data is not arbitrary. It uses the names, references, partners and charge-out rates the PDFs

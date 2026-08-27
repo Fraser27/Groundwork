@@ -10,13 +10,13 @@ person or an agent asked it. Nothing would fail; the answers would just differ.
 from __future__ import annotations
 
 from src.api.deps import build_services
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 
 TENANT = "demo-firm"
 
 
 def _services():
-    cfg = LexGraphConfig(
+    cfg = GroundworkConfig(
         environment="local",
         auth=AuthConfig(dev_bypass_tenant=TENANT),
         graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

@@ -7,17 +7,17 @@ survives a teardown.
 `../scripts/deploy.sh` does it in one non-interactive command, including the two things
 this file used to document as manual steps: resolving availability zones, and the
 two-pass `webOrigin` that closes the circular callback requirement. Duplicating them here
-is how this file came to describe a second pass that redeployed only `LexGraphAuth`,
+is how this file came to describe a second pass that redeployed only `GroundworkAuth`,
 leaving the S3 CORS rule unset and browser uploads failing.
 
 | Stack | Holds | Redeployed |
 |---|---|---|
-| `LexGraphNetwork` | VPC, subnets, security groups, VPC endpoints | rarely |
-| `LexGraphData` | Neptune, OpenSearch Serverless, DynamoDB, S3 | rarely |
-| `LexGraphAuth` | Cognito user pool + hosted UI, Cedar policy store | rarely |
-| `LexGraphApp` | ECS Fargate (FastAPI) behind an ALB | constantly |
-| `LexGraphMcp` | MCP server on Bedrock AgentCore Runtime | often |
-| `LexGraphWeb` | CloudFront + S3 for the React UI | often |
+| `GroundworkNetwork` | VPC, subnets, security groups, VPC endpoints | rarely |
+| `GroundworkData` | Neptune, OpenSearch Serverless, DynamoDB, S3 | rarely |
+| `GroundworkAuth` | Cognito user pool + hosted UI, Cedar policy store | rarely |
+| `GroundworkApp` | ECS Fargate (FastAPI) behind an ALB | constantly |
+| `GroundworkMcp` | MCP server on Bedrock AgentCore Runtime | often |
+| `GroundworkWeb` | CloudFront + S3 for the React UI | often |
 
 The split is by **deploy cadence and blast radius**, not by feature. `data` is separate
 because Neptune takes about 15 minutes to create and holds the only state that cannot be
@@ -40,7 +40,7 @@ npx cdk deploy --all     # 25-30 min from cold, most of it Neptune
 `SUPPORTED_AZ_IDS` in `lib/network-stack.ts` is the intersection of the zones
 **AgentCore Runtime** supports for VPC connectivity and those the **OpenSearch
 Serverless** data-plane endpoint is offered in. The intersection is smaller than either
-list, and a subnet in the wrong zone fails `LexGraphMcp` with an error naming the
+list, and a subnet in the wrong zone fails `GroundworkMcp` with an error naming the
 *subnet* rather than the zone.
 
 `deploy.sh` resolves this per account. Add a region to that map before deploying
@@ -143,10 +143,10 @@ needed.
 
 - **Deletion order.** Destroy stacks in reverse (`web`, `mcp`, `app`, `auth`,
   `data`, `network`), or the strong cross-stack exports refuse. `cdk destroy --all`
-  handles this; destroying `LexGraphData` alone will not.
+  handles this; destroying `GroundworkData` alone will not.
 - **The VPC will not delete** while the OpenSearch Serverless VPC endpoint's ENIs
   exist. It resolves on its own after a few minutes; retry rather than hand-deleting.
-- **The Cognito domain prefix** is `lexgraph-<account-id>` and is globally unique.
+- **The Cognito domain prefix** is `groundwork-<account-id>` and is globally unique.
   Recreating too soon after a destroy can collide while the old one drains.
 - **ECR images** from `DockerImageAsset` live in the CDK bootstrap asset repository
   and are not deleted with the stack. They accumulate; each is a few hundred MB.

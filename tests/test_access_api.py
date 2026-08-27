@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from src.api.app import create_app
 from src.api.deps import get_services
 from src.auth import Grants
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 
 TENANT = "dev-tenant"
 MATTER = "M-2291"
@@ -35,8 +35,8 @@ CONTACT = "risk@firm.com"
 BASE = f"/api/tenants/{TENANT}/access"
 
 
-def _config() -> LexGraphConfig:
-    cfg = LexGraphConfig(
+def _config() -> GroundworkConfig:
+    cfg = GroundworkConfig(
         environment="local",
         auth=AuthConfig(dev_bypass_tenant=TENANT),
         graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

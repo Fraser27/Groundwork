@@ -523,9 +523,9 @@ class TestOverHttp:
 
         from src.api.app import create_app
         from src.api.deps import get_services
-        from src.config import AuthConfig, GraphConfig, LexGraphConfig
+        from src.config import AuthConfig, GraphConfig, GroundworkConfig
 
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             environment="local",
             auth=AuthConfig(dev_bypass_tenant=TENANT),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

@@ -2,7 +2,7 @@
 
 A catalog is a system of record. When Glue says `matters.opened_date` is a
 timestamp, that is not an inference or an extraction — it is a declaration, so every
-edge here is `DECLARED` and auto-asserts. This is the one pipeline in LexGraph that
+edge here is `DECLARED` and auto-asserts. This is the one pipeline in Groundwork that
 needs no review queue, and saying why is worth more than the code that does it.
 
 Two things this module deliberately does *not* do:

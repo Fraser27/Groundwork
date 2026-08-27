@@ -131,7 +131,7 @@ Bolt), `Dockerfile`, `Dockerfile.ui`, `Makefile`, `.env.example`, `.gitignore`,
 ```bash
 docker-compose up -d neo4j          # NOTE: hyphenated. `docker compose` is not installed
 source deploy.env 2>/dev/null; ENVIRONMENT=local AUTH_DEV_BYPASS_TENANT=dev-tenant \
-  GRAPH_URI=bolt://localhost:7687 GRAPH_USER=neo4j GRAPH_PASSWORD=lexgraph-dev \
+  GRAPH_URI=bolt://localhost:7687 GRAPH_USER=neo4j GRAPH_PASSWORD=groundwork-dev \
   .venv/bin/python -m uvicorn src.api.app:app --port 8010
 ```
 

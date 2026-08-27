@@ -175,7 +175,7 @@ def collapse(text: str) -> str:
 
 
 def clean_title(raw: str) -> str:
-    """`Provenance — LexGraph documentation` -> `Provenance`.
+    """`Provenance — Groundwork documentation` -> `Provenance`.
 
     The suffix is useful in a browser tab and noise in a result list, where every hit
     would otherwise end with the same six words.
@@ -230,7 +230,7 @@ def main() -> int:
         " * from file:// cannot fetch a sibling file. Regenerate with:\n"
         " *     python3 docs/build-index.py\n"
         " */\n"
-        "window.LEXGRAPH_SEARCH_INDEX = " + payload + ";\n",
+        "window.GROUNDWORK_SEARCH_INDEX = " + payload + ";\n",
         encoding="utf-8",
     )
 

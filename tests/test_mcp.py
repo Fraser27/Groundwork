@@ -24,7 +24,7 @@ from mcp.client.streamable_http import streamable_http_client
 
 from src.api.deps import get_services
 from src.auth import AuthError
-from src.config import AuthConfig, GraphConfig, LexGraphConfig
+from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
 from src.graph.scope import AuthContext
 from src.mcp.server import build_server, create_app
@@ -73,8 +73,8 @@ class _FakeVerifier:
         return claims
 
 
-def _config(environment: str = "local", *, dev_bypass: str = "") -> LexGraphConfig:
-    cfg = LexGraphConfig(
+def _config(environment: str = "local", *, dev_bypass: str = "") -> GroundworkConfig:
+    cfg = GroundworkConfig(
         # Pinned rather than defaulted: this file asserts the legal pack's rules and
         # vocabulary, so it must not follow a change of default pack.
         ontology_pack="legal",
@@ -125,7 +125,7 @@ def _stage(
     return a.assertion_id
 
 
-def _install(config: LexGraphConfig) -> None:
+def _install(config: GroundworkConfig) -> None:
     """Install a service container, with Cognito stubbed and one screened user.
 
     Reaching into `_verifier` is the smallest possible seam: `Authenticator` builds it from
@@ -558,7 +558,7 @@ class TestEthicalWalls:
 
 class TestDevBypass:
     def test_config_refuses_the_bypass_outside_local(self):
-        """First of two gates. `LexGraphConfig.validate` will not let the process start."""
+        """First of two gates. `GroundworkConfig.validate` will not let the process start."""
         with pytest.raises(ValueError, match="AUTH_DEV_BYPASS_TENANT"):
             _config("production", dev_bypass="dev-tenant")
 

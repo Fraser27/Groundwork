@@ -41,12 +41,12 @@ from src.api.deps import (
     set_services,
 )
 from src.auth import AuthError
-from src.config import LexGraphConfig
+from src.config import GroundworkConfig
 from src.graph.assertions import AssertionError_
 from src.graph.scope import ScopeViolation
 from src.ontology.loader import load_ontology
 
-logger = logging.getLogger("lexgraph")
+logger = logging.getLogger("groundwork")
 
 
 def _configure_logging(level: str) -> None:
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
     _configure_logging(cfg.log_level)
 
     logger.info(
-        "starting lexgraph env=%s ontology=%s graph=%s",
+        "starting groundwork env=%s ontology=%s graph=%s",
         cfg.environment,
         cfg.ontology_pack,
         cfg.graph.uri,
@@ -89,12 +89,12 @@ async def lifespan(app: FastAPI):
             logger.debug("graph close failed", exc_info=True)
 
 
-def create_app(config: LexGraphConfig | None = None) -> FastAPI:
+def create_app(config: GroundworkConfig | None = None) -> FastAPI:
     services = build_services(config)
     set_services(services)
 
     app = FastAPI(
-        title="LexGraph",
+        title="Groundwork",
         description=(
             "A governed semantic layer over structured and unstructured data. Every "
             "fact carries its provenance."

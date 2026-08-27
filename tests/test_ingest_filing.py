@@ -27,7 +27,7 @@ from src.documents.storage import DocumentStorage
 from src.graph_audit import LINK_DOCUMENTS, InMemoryGraphAudit
 
 TENANT = "firm-acme"
-BUCKET = "lexgraph-docs"
+BUCKET = "groundwork-docs"
 TEXT = b"Held for the plaintiff. Costs reserved."
 HALVESTON = "HAL-2026-0001"
 OTHER = "NTL-2026-0114"
@@ -276,10 +276,10 @@ class TestSynchronousRoutes:
 
         from src.api.app import create_app
         from src.api.deps import get_services
-        from src.config import AuthConfig, DocumentConfig, GraphConfig, LexGraphConfig
+        from src.config import AuthConfig, DocumentConfig, GraphConfig, GroundworkConfig
         from src.documents.storage import set_document_storage
 
-        cfg = LexGraphConfig(
+        cfg = GroundworkConfig(
             environment="local",
             auth=AuthConfig(dev_bypass_tenant=self.TENANT_ID),
             graph=GraphConfig(uri="bolt://127.0.0.1:1", user="none", password="none"),

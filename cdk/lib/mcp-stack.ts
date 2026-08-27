@@ -52,12 +52,12 @@ export class McpStack extends cdk.Stack {
     // Note: the IAM grants this runtime needs are declared in `app`, next to the
     // role, not here. CDK attaches a policy statement to the stack that owns the
     // role regardless of where it is written, so declaring them here would put
-    // them in the `app` template anyway — and `cdk deploy LexGraphMcp` alone
+    // them in the `app` template anyway — and `cdk deploy GroundworkMcp` alone
     // would then not apply them. See buildTaskRole in app-stack.ts.
 
     this.runtime = new agentcore.CfnRuntime(this, 'McpRuntime', {
       agentRuntimeName: `${PROJECT}_mcp`,
-      description: 'LexGraph governed semantic layer - MCP tools',
+      description: 'Groundwork governed semantic layer - MCP tools',
       roleArn: taskRole.roleArn,
       agentRuntimeArtifact: {
         containerConfiguration: { containerUri: image.imageUri },

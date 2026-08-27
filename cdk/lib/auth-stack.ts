@@ -3,7 +3,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as avp from 'aws-cdk-lib/aws-verifiedpermissions';
 import { Construct } from 'constructs';
 
-import { PROJECT, tagStack } from './config';
+import { PROJECT, PROJECT_SLUG, tagStack } from './config';
 
 export interface AuthStackProps extends cdk.StackProps {
   /** Callback origins for the hosted UI. The CloudFront domain is added by `web`. */
@@ -66,7 +66,7 @@ export class AuthStack extends cdk.Stack {
     });
 
     this.userPoolDomain = this.userPool.addDomain('Domain', {
-      cognitoDomain: { domainPrefix: `${PROJECT}-${cdk.Aws.ACCOUNT_ID}` },
+      cognitoDomain: { domainPrefix: `${PROJECT_SLUG}-${cdk.Aws.ACCOUNT_ID}` },
     });
 
     /**
@@ -184,7 +184,7 @@ export class AuthStack extends cdk.Stack {
     };
 
     const store = new avp.CfnPolicyStore(this, 'PolicyStore', {
-      description: 'LexGraph matter-level authorisation',
+      description: 'Groundwork matter-level authorisation',
       validationSettings: { mode: 'STRICT' },
       schema: { cedarJson: JSON.stringify(schema) },
       deletionProtection: { mode: 'DISABLED' },

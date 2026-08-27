@@ -14,7 +14,7 @@ key attribute holds an *entity* key: `USER#{sub}` there, `TENANT#{id}` here.
 attribute, so all tenants sit in one partition of the existing `TenantIndex` and reading
 them is a single query. The alternative was a table scan, which this codebase refuses on
 principle -- and adding a second GSI would replace the table, which changes the ARN
-`LexGraphApp` imports.
+`GroundworkApp` imports.
 
 **A deleted tenant is tombstoned, not removed.** The row stays with `deleted_at` set. This
 is not an audit trail -- the tenant delete destroys those deliberately -- it is a namespace
