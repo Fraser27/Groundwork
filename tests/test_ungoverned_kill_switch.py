@@ -16,7 +16,6 @@ Two properties carry the file:
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
@@ -45,22 +44,14 @@ def ctx() -> AuthContext:
     return AuthContext(tenant_id=TENANT, user_id="alice")
 
 
-class _Body:
-    def __init__(self, payload: dict) -> None:
-        self._payload = payload
-
-    def read(self) -> str:
-        return json.dumps(self._payload)
-
-
 class FakeBedrock:
     def __init__(self) -> None:
         self.calls = 0
 
-    def invoke_model(self, **kwargs):
+    def converse(self, **kwargs):
         self.calls += 1
-        payload = {"content": [{"text": "SELECT COUNT(*) FROM groundwork_legal.matters LIMIT 10"}]}
-        return {"body": _Body(payload)}
+        sql = "SELECT COUNT(*) FROM groundwork_legal.matters LIMIT 10"
+        return {"output": {"message": {"content": [{"text": sql}]}}}
 
 
 class FakeCatalog:

@@ -12,8 +12,6 @@ renderer is injected, which is the whole reason `PageRenderer` is a protocol.
 
 from __future__ import annotations
 
-import io
-import json
 import re
 import threading
 import time
@@ -22,6 +20,7 @@ import pytest
 
 from src.documents.parse import (
     MAX_PAGES,
+    OCR_SYSTEM_PROMPT,
     PAGE_SEPARATOR,
     ParseFailed,
     VisionParser,
@@ -64,17 +63,15 @@ class FakeVision:
         self.calls: list[dict] = []
         self._lock = threading.Lock()
 
-    def invoke_model(self, **kw):
-        body = json.loads(kw["body"])
-        prompt = body["messages"][0]["content"][-1]["text"]
+    def converse(self, **kw):
+        prompt = kw["messages"][0]["content"][-1]["text"]
         page = int(re.search(r"page (\d+)", prompt).group(1))
         with self._lock:
-            self.calls.append({"modelId": kw["modelId"], "body": body, "page": page})
+            self.calls.append({"modelId": kw["modelId"], "request": kw, "page": page})
         if page == self.fail_on:
             raise RuntimeError("ThrottlingException: rate exceeded")
         text = self.texts[page - 1] if page <= len(self.texts) else ""
-        payload = {"content": [{"type": "text", "text": text}]}
-        return {"body": io.BytesIO(json.dumps(payload).encode())}
+        return {"output": {"message": {"content": [{"text": text}]}}}
 
 
 def _parser(texts: list[str], *, pages: int | None = None, **kw) -> VisionParser:
@@ -100,9 +97,7 @@ class TestPageNumbersAreExact:
     def test_each_page_asks_for_the_page_it_is(self):
         parser = _parser(["one", "two"])
         parser.parse("doc-1", b"%PDF")
-        prompts = [
-            c["body"]["messages"][0]["content"][1]["text"] for c in parser.bedrock.calls
-        ]
+        prompts = [c["request"]["messages"][0]["content"][1]["text"] for c in parser.bedrock.calls]
         assert prompts == ["Transcribe page 1.", "Transcribe page 2."]
 
     def test_one_model_call_per_page(self):
@@ -267,17 +262,29 @@ class TestMethodAndMetadata:
         parser.parse("doc-1", b"%PDF")
         assert parser.renderer.dpi == 200
 
-    def test_the_request_carries_the_page_image_as_base64_png(self):
+    def test_the_request_carries_the_page_image_as_raw_png_bytes(self):
+        """Raw bytes, not base64: botocore encodes blob members, so pre-encoding would have
+        the model read a base64 string as if it were the page."""
         parser = _parser(["one"])
         parser.parse("doc-1", b"%PDF")
-        source = parser.bedrock.calls[0]["body"]["messages"][0]["content"][0]["source"]
-        assert (source["type"], source["media_type"]) == ("base64", "image/png")
+        image = parser.bedrock.calls[0]["request"]["messages"][0]["content"][0]["image"]
+        assert image["format"] == "png"
+        assert isinstance(image["source"]["bytes"], bytes)
+
+    def test_the_request_uses_converse_not_a_vendor_native_body(self):
+        """The OCR model is admin-selectable across Nova and Anthropic, whose native bodies
+        are mutually invalid. Converse is the only shape both accept."""
+        parser = _parser(["one"])
+        parser.parse("doc-1", b"%PDF")
+        request = parser.bedrock.calls[0]["request"]
+        assert "body" not in request
+        assert request["system"] == [{"text": OCR_SYSTEM_PROMPT}]
 
     def test_temperature_is_never_sent(self):
         """Newer Anthropic models on Bedrock reject it, failing the whole parse."""
         parser = _parser(["one"])
         parser.parse("doc-1", b"%PDF")
-        assert "temperature" not in parser.bedrock.calls[0]["body"]
+        assert "temperature" not in parser.bedrock.calls[0]["request"]["inferenceConfig"]
 
 
 class TestBatchedTranscription:
@@ -297,12 +304,11 @@ class TestBatchedTranscription:
         deliberately makes page 1 the last to return."""
 
         class SlowFirstPage(FakeVision):
-            def invoke_model(self, **kw):
-                body = json.loads(kw["body"])
-                prompt = body["messages"][0]["content"][-1]["text"]
+            def converse(self, **kw):
+                prompt = kw["messages"][0]["content"][-1]["text"]
                 if int(re.search(r"page (\d+)", prompt).group(1)) == 1:
                     time.sleep(0.05)
-                return super().invoke_model(**kw)
+                return super().converse(**kw)
 
         texts = ["first", "second", "third", "fourth"]
         parser = VisionParser(
@@ -330,14 +336,14 @@ class TestBatchedTranscription:
         lock = threading.Lock()
 
         class CountingVision(FakeVision):
-            def invoke_model(self, **kw):
+            def converse(self, **kw):
                 nonlocal peak, current
                 with lock:
                     current += 1
                     peak = max(peak, current)
                 time.sleep(0.01)
                 try:
-                    return super().invoke_model(**kw)
+                    return super().converse(**kw)
                 finally:
                     with lock:
                         current -= 1

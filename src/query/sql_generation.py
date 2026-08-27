@@ -66,7 +66,7 @@ over the wrong column is not."""
 
 
 class BedrockLike(Protocol):
-    def invoke_model(self, **kwargs: Any) -> dict[str, Any]: ...
+    def converse(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 #: What the model says when the schema cannot answer the question. Honoured rather than treated as
@@ -161,23 +161,27 @@ class SqlGenerator:
         if not tables:
             return None
 
-        body: dict[str, Any] = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": self.max_tokens,
-            "system": SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": build_prompt(question, tables=tables)}],
-        }
+        # Converse, not InvokeModel: the model is admin-selectable across Nova and Anthropic,
+        # and their native request bodies are mutually invalid.
+        inference: dict[str, Any] = {"maxTokens": self.max_tokens}
         if self.temperature is not None:
-            body["temperature"] = self.temperature
+            inference["temperature"] = self.temperature
 
         try:
-            response = self.client.invoke_model(modelId=self.model_id, body=json.dumps(body))
-            data = json.loads(response["body"].read())
+            response = self.client.converse(
+                modelId=self.model_id,
+                system=[{"text": SYSTEM_PROMPT}],
+                messages=[
+                    {"role": "user", "content": [{"text": build_prompt(question, tables=tables)}]}
+                ],
+                inferenceConfig=inference,
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("SQL generation could not reach %s: %s", self.model_id, e)
             return None
 
-        text = "".join(part.get("text", "") for part in data.get("content", [])).strip()
+        blocks = response.get("output", {}).get("message", {}).get("content") or []
+        text = "".join(part.get("text", "") for part in blocks).strip()
         sql = _FENCE.sub("", text).strip().rstrip(";").strip()
         if not sql or sql.upper().startswith(NO_QUERY):
             logger.info("SQL generation declined: the offered schema does not answer the question")

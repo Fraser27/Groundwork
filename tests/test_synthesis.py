@@ -25,14 +25,6 @@ from src.query.synthesis import (
 SECRET = "Meridian holds 18 per cent of Calder"
 
 
-class _Body:
-    def __init__(self, payload: dict) -> None:
-        self._payload = payload
-
-    def read(self) -> str:
-        return json.dumps(self._payload)
-
-
 class FakeBedrock:
     """Records what it was asked, which is the point of most of these tests."""
 
@@ -40,13 +32,13 @@ class FakeBedrock:
         self.text = text
         self.request: dict | None = None
 
-    def invoke_model(self, **kwargs):
-        self.request = json.loads(kwargs["body"])
-        return {"body": _Body({"content": [{"text": self.text}]})}
+    def converse(self, **kwargs):
+        self.request = kwargs
+        return {"output": {"message": {"content": [{"text": self.text}]}}}
 
 
 class Unreachable:
-    def invoke_model(self, **kwargs):
+    def converse(self, **kwargs):
         raise RuntimeError("no route to bedrock")
 
 
@@ -150,7 +142,7 @@ class TestWhatTheModelIsGiven:
     def test_the_system_prompt_forbids_inventing_facts(self):
         bedrock = FakeBedrock()
         Synthesiser(model_id="m", bedrock=bedrock).summarise("q", parts=[_part()])
-        system = bedrock.request["system"]
+        system = bedrock.request["system"][0]["text"]
         assert "ONLY the parts" in system
         assert "disagree" in system
 
@@ -162,7 +154,7 @@ class TestWhatTheModelIsGiven:
         model no longer accepts being asked."""
         bedrock = FakeBedrock()
         Synthesiser(model_id="m", bedrock=bedrock).summarise("q", parts=[_part()])
-        assert "temperature" not in bedrock.request
+        assert "temperature" not in bedrock.request["inferenceConfig"]
 
     def test_temperature_is_sent_when_explicitly_set(self):
         """Kept settable for an older model that does accept one."""
@@ -170,7 +162,7 @@ class TestWhatTheModelIsGiven:
         Synthesiser(model_id="m", bedrock=bedrock, temperature=0.0).summarise(
             "q", parts=[_part()]
         )
-        assert bedrock.request["temperature"] == 0.0
+        assert bedrock.request["inferenceConfig"]["temperature"] == 0.0
 
 
 class TestFailureModes:

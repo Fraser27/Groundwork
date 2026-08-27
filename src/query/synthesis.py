@@ -53,7 +53,7 @@ Write plainly. Two or three short paragraphs at most, and fewer where fewer will
 
 
 class BedrockLike(Protocol):
-    def invoke_model(self, **kwargs: Any) -> dict[str, Any]: ...
+    def converse(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 class SynthesisFailed(RuntimeError):
@@ -168,24 +168,31 @@ class Synthesiser:
         if not parts:
             return None
 
-        body: dict[str, Any] = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": self.max_tokens,
-            "system": SYSTEM_PROMPT,
-            "messages": [
-                {"role": "user", "content": build_prompt(question, parts=parts, blocks=blocks)}
-            ],
-        }
+        # Converse, not InvokeModel: the model is admin-selectable across Nova and Anthropic,
+        # and their native request bodies are mutually invalid.
+        inference: dict[str, Any] = {"maxTokens": self.max_tokens}
         if self.temperature is not None:
-            body["temperature"] = self.temperature
+            inference["temperature"] = self.temperature
 
         try:
-            response = self.client.invoke_model(modelId=self.model_id, body=json.dumps(body))
-            data = json.loads(response["body"].read())
+            response = self.client.converse(
+                modelId=self.model_id,
+                system=[{"text": SYSTEM_PROMPT}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": build_prompt(question, parts=parts, blocks=blocks)}
+                        ],
+                    }
+                ],
+                inferenceConfig=inference,
+            )
         except Exception as e:
             raise SynthesisFailed(f"could not reach {self.model_id}: {e}") from e
 
-        text = "".join(part.get("text", "") for part in data.get("content", [])).strip()
+        content = response.get("output", {}).get("message", {}).get("content") or []
+        text = "".join(part.get("text", "") for part in content).strip()
         if not text:
             raise SynthesisFailed("the model returned no text")
         return text

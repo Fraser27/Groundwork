@@ -12,7 +12,6 @@ indistinguishable from a checked fact.
 
 from __future__ import annotations
 
-import io
 import json
 
 import pytest
@@ -53,20 +52,15 @@ QUOTE = "That holding undercuts the defendant's argument"
 
 
 class FakeBedrock:
-    """Returns a canned Claude response body. Records what it was asked."""
+    """Returns a canned Converse response. Records what it was asked."""
 
     def __init__(self, payload) -> None:
         self.payload = payload
         self.requests: list[dict] = []
 
-    def invoke_model(self, **kw):
-        self.requests.append({"modelId": kw["modelId"], "body": json.loads(kw["body"])})
-        body = (
-            self.payload
-            if isinstance(self.payload, dict)
-            else {"content": [{"text": self.payload}]}
-        )
-        return {"body": io.BytesIO(json.dumps(body).encode())}
+    def converse(self, **kw):
+        self.requests.append({"modelId": kw["modelId"], "request": kw})
+        return {"output": {"message": {"content": [{"text": self.payload}]}}}
 
 
 def chunk(text: str = PASSAGE, *, page: int = 1, start: int = 500, **over) -> Chunk:
@@ -356,7 +350,7 @@ class TestPrompt:
     def test_closed_vocabulary_is_listed(self):
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
         ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk())
-        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
         listed = {p["predicate"] for p in sent["allowed_predicates"]}
         assert "ADVERSE_TO" in listed
         assert "MENTIONS" in listed
@@ -368,7 +362,7 @@ class TestPrompt:
         which starved the conflict rule while looking like a document with nothing to say."""
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
         ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk())
-        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
         adverse = next(p for p in sent["allowed_predicates"] if p["predicate"] == "ADVERSE_TO")
         assert adverse["subject_kinds"] == ["Matter"]
         assert adverse["object_kinds"] == ["Party"]
@@ -381,7 +375,7 @@ class TestPrompt:
         `canonical_entity_id` leaves the local part alone and a lowercased id would not join."""
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
         ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk(matter_id="NTL-2026-0114"))
-        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
         assert sent["this_matter"] == "matter:NTL-2026-0114"
         mentions = next(p for p in sent["allowed_predicates"] if p["predicate"] == "MENTIONS")
         assert "subject_kinds" not in mentions
@@ -393,7 +387,7 @@ class TestPrompt:
         looked like it had nothing to say. Every other id in the prompt is `kind:local`."""
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
         ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk(matter_id="NTL"))
-        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
         assert sent["this_matter"] == "matter:NTL"
 
     def test_no_matter_is_offered_when_the_chunk_is_unfiled(self):
@@ -401,7 +395,7 @@ class TestPrompt:
         well-formed id for a matter that does not exist."""
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
         ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk())
-        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
         assert sent["this_matter"] is None
 
     @pytest.mark.parametrize(
@@ -416,7 +410,7 @@ class TestPrompt:
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
         onto = load_ontology(domain)
         ModelExtractor(onto, bedrock=bedrock).extract(chunk(matter_id="U-1"))
-        sent = json.loads(bedrock.requests[0]["body"]["messages"][0]["content"])
+        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
         assert sent["this_matter"] == expected
         # And the id it offers is one that pack will actually accept at the boundary.
         assert onto.entity_kind_of(expected) is not None
@@ -426,12 +420,12 @@ class TestPrompt:
         every chunk is a worse outcome than unpinned decoding."""
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
         ModelExtractor(ONTOLOGY, bedrock=bedrock).extract(chunk())
-        assert "temperature" not in bedrock.requests[0]["body"]
+        assert "temperature" not in bedrock.requests[0]["request"]["inferenceConfig"]
 
     def test_temperature_is_sent_when_set(self):
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
         ModelExtractor(ONTOLOGY, bedrock=bedrock, temperature=0.0).extract(chunk())
-        assert bedrock.requests[0]["body"]["temperature"] == 0.0
+        assert bedrock.requests[0]["request"]["inferenceConfig"]["temperature"] == 0.0
 
     def test_configured_model_is_used(self):
         bedrock = FakeBedrock('{"entities": []}')
@@ -547,7 +541,7 @@ class TestEndToEnd:
 
     def test_bedrock_failure_is_wrapped(self):
         class Broken:
-            def invoke_model(self, **kw):
+            def converse(self, **kw):
                 raise RuntimeError("throttled")
 
         with pytest.raises(ModelExtractionFailed, match="bedrock invoke failed"):
@@ -625,11 +619,11 @@ class TestEntityKindsAreClosed:
         discard work the model would have got right."""
         ex = extractor()
         ex.extract(chunk())
-        body = ex.bedrock.requests[0]["body"]
-        sent = json.dumps(body)
+        request = ex.bedrock.requests[0]["request"]
+        sent = json.dumps(request)
         assert "entity_kinds" in sent
         assert "party" in sent
-        assert "invent" in body["system"]
+        assert "invent" in request["system"][0]["text"]
 
     def test_a_catalog_kind_is_declared_rather_than_special_cased(self):
         """The Glue scanner mints `table:`, `column:` and `source:`. They were in the graph while no

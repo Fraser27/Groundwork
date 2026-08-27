@@ -61,14 +61,6 @@ TIME_ENTRIES = _table(
 PAYROLL = _table("payroll", CatalogColumn("salary", "double"), description="Staff compensation")
 
 
-class _Body:
-    def __init__(self, payload: dict) -> None:
-        self._payload = payload
-
-    def read(self) -> str:
-        return json.dumps(self._payload)
-
-
 class FakeBedrock:
     """Returns the SQL it was told to, and records what it was asked."""
 
@@ -76,13 +68,13 @@ class FakeBedrock:
         self.text = text
         self.request: dict | None = None
 
-    def invoke_model(self, **kwargs):
-        self.request = json.loads(kwargs["body"])
-        return {"body": _Body({"content": [{"text": self.text}]})}
+    def converse(self, **kwargs):
+        self.request = kwargs
+        return {"output": {"message": {"content": [{"text": self.text}]}}}
 
 
 class Unreachable:
-    def invoke_model(self, **kwargs):
+    def converse(self, **kwargs):
         raise RuntimeError("no route to bedrock")
 
 
@@ -189,7 +181,7 @@ class TestTemperatureIsNeverSent:
         sending it."""
         bedrock = FakeBedrock()
         SqlGenerator(model_id="m", bedrock=bedrock).generate("q", tables=[MATTERS])
-        assert "temperature" not in (bedrock.request or {})
+        assert "temperature" not in (bedrock.request or {})["inferenceConfig"]
 
 
 class TestTheModelsAnswerIsNormalised:

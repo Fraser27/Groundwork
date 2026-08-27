@@ -116,7 +116,7 @@ Schema:
 
 
 class BedrockLike(Protocol):
-    def invoke_model(self, **kwargs: Any) -> dict[str, Any]: ...
+    def converse(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 class ModelExtractionFailed(RuntimeError):
@@ -337,18 +337,20 @@ class ModelExtractor:
         return f"{self.method}+{QUOTE_CHECK}"
 
     def invoke(self, prompt: str) -> str:
-        body: dict[str, Any] = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": self.max_tokens,
-            "system": SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": prompt}],
-        }
+        # Converse, not InvokeModel: the extraction model is admin-selectable across Nova and
+        # Anthropic, and their native request bodies are mutually invalid.
+        inference: dict[str, Any] = {"maxTokens": self.max_tokens}
         if self.temperature is not None:
-            body["temperature"] = self.temperature
+            inference["temperature"] = self.temperature
 
-        response = self.bedrock.invoke_model(modelId=self.model_id, body=json.dumps(body))
-        data = json.loads(response["body"].read())
-        return "".join(part.get("text", "") for part in data.get("content", []))
+        response = self.bedrock.converse(
+            modelId=self.model_id,
+            system=[{"text": SYSTEM_PROMPT}],
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig=inference,
+        )
+        blocks = response.get("output", {}).get("message", {}).get("content") or []
+        return "".join(part.get("text", "") for part in blocks)
 
     def extract(self, chunk: Chunk) -> list[Assertion]:
         """One model call over one chunk, returning validated assertions.

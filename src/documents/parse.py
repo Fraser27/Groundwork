@@ -28,8 +28,6 @@ Admin.
 
 from __future__ import annotations
 
-import base64
-import json
 import logging
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -84,7 +82,7 @@ class PageRenderer(Protocol):
 
 
 class VisionLike(Protocol):
-    def invoke_model(self, **kwargs: Any) -> dict[str, Any]: ...
+    def converse(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 class ParseFailed(RuntimeError):
@@ -258,37 +256,32 @@ class VisionParser:
         return self._bedrock
 
     def _read_page(self, image: bytes, page: int) -> str:
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": self.max_tokens,
-            "system": OCR_SYSTEM_PROMPT,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": base64.b64encode(image).decode(),
-                            },
-                        },
-                        {"type": "text", "text": f"Transcribe page {page}."},
-                    ],
-                }
-            ],
-        }
-        # `temperature` is deliberately absent: newer Anthropic models on Bedrock reject
-        # it outright, and a rejected call would fail the whole parse.
+        # Converse, not InvokeModel: the OCR model is admin-selectable and the list spans
+        # Nova and Anthropic, whose native request bodies are incompatible. Nova rejects
+        # Anthropic's `type` keys outright, so a native body can only ever suit one vendor.
+        # `bytes` raw, not base64 -- botocore encodes blob members itself.
         try:
-            response = self.bedrock.invoke_model(modelId=self.model_id, body=json.dumps(body))
-            payload = json.loads(response["body"].read())
+            response = self.bedrock.converse(
+                modelId=self.model_id,
+                system=[{"text": OCR_SYSTEM_PROMPT}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"image": {"format": "png", "source": {"bytes": image}}},
+                            {"text": f"Transcribe page {page}."},
+                        ],
+                    }
+                ],
+                # `temperature` is deliberately absent: newer Anthropic models on Bedrock
+                # reject it outright, and a rejected call would fail the whole parse.
+                inferenceConfig={"maxTokens": self.max_tokens},
+            )
         except Exception as e:
             raise ParseFailed(f"transcription failed on page {page}: {e}") from e
 
-        blocks = payload.get("content") or []
-        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        blocks = response.get("output", {}).get("message", {}).get("content") or []
+        text = "".join(b.get("text", "") for b in blocks)
         if not text.strip():
             # A blank page is legitimate — a divider, an empty verso. Record it as empty
             # rather than failing the document.
