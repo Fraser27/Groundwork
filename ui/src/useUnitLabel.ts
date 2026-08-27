@@ -3,7 +3,13 @@ import { api } from './api'
 import { getTenantId, isAuthenticated } from './auth'
 
 /**
- * What this tenant's ontology pack calls the unit work is organised by.
+ * What this tenant's ontology pack calls things: the organising unit's name, and the questions
+ * worth asking of its data.
+ *
+ * Both live here because both come from `/settings`, both change at exactly one moment -- an admin
+ * switching pack -- and both were hardcoded English before. One fetch, one cache, one invalidation
+ * path. A second module would mean a second round trip on every page and a second thing to
+ * remember to invalidate.
  *
  * "Matter" is the legal pack's word for it. Healthcare calls it an Encounter, lending a Facility and
  * retail a Case, so hardcoding it made a whitelabel platform read as a legal one. The scoping key is
@@ -75,8 +81,11 @@ export function useUnitText(): (text: string) => string {
   return (text: string) => fillUnit(text, unit)
 }
 
-const cache = new Map<string, UnitLabel>()
-const inFlight = new Map<string, Promise<UnitLabel>>()
+/** Everything `/settings` tells us about how this pack words itself. */
+type Pack = { unit: UnitLabel; questions: string[] }
+
+const cache = new Map<string, Pack>()
+const inFlight = new Map<string, Promise<Pack>>()
 
 // Persisted, so a reload paints the right word on the first frame. The module cache is empty on
 // every page load, so without this the fallback rendered first and the heading changed from Matters
@@ -85,13 +94,16 @@ const inFlight = new Map<string, Promise<UnitLabel>>()
 // stale entry is corrected within one round trip.
 const KEY = 'groundwork.unitLabel'
 
-function persisted(tenant: string): UnitLabel | null {
+function persisted(tenant: string): Pack | null {
   try {
     const raw = localStorage.getItem(`${KEY}.${tenant}`)
     if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<Wording>
+    const parsed = JSON.parse(raw) as Partial<Wording> & { questions?: unknown }
     if (typeof parsed?.singular !== 'string' || typeof parsed?.plural !== 'string') return null
-    return derive({ singular: parsed.singular, plural: parsed.plural })
+    const questions = Array.isArray(parsed.questions)
+      ? parsed.questions.filter((q): q is string => typeof q === 'string')
+      : []
+    return { unit: derive({ singular: parsed.singular, plural: parsed.plural }), questions }
   } catch {
     // A quota error, a disabled store, or wording somebody hand-edited. None of it is worth
     // failing a render over when the fetch is already in flight.
@@ -99,9 +111,9 @@ function persisted(tenant: string): UnitLabel | null {
   }
 }
 
-function persist(tenant: string, w: Wording): void {
+function persist(tenant: string, w: Wording, questions: string[]): void {
   try {
-    localStorage.setItem(`${KEY}.${tenant}`, JSON.stringify(w))
+    localStorage.setItem(`${KEY}.${tenant}`, JSON.stringify({ ...w, questions }))
   } catch {
     /* see `persisted` */
   }
@@ -113,7 +125,7 @@ function persist(tenant: string, w: Wording): void {
 // after a reload -- the second half of "Facilities is only seen when I refreshed".
 const listeners = new Set<() => void>()
 
-/** Drop the cached label and re-read it everywhere, for a pack the admin just switched. */
+/** Drop the cached wording and re-read it everywhere, for a pack the admin just switched. */
 export function forgetUnitLabel(tenant: string = getTenantId()): void {
   cache.delete(tenant)
   inFlight.delete(tenant)
@@ -127,25 +139,28 @@ export function forgetUnitLabel(tenant: string = getTenantId()): void {
   for (const notify of [...listeners]) notify()
 }
 
-function load(tenant: string): Promise<UnitLabel> {
+function load(tenant: string): Promise<Pack> {
   const running = inFlight.get(tenant)
   if (running) return running
   const p = api
     .getSettings(tenant)
     .then((s) => {
       const wording = s.unit_label ?? FALLBACK
-      const label = derive(wording)
-      cache.set(tenant, label)
-      persist(tenant, wording)
-      return label
+      // Empty rather than a hardcoded default. A pack declaring no question should show none: the
+      // fallbacks here would be legal ones, which is the whole problem being fixed.
+      const questions = s.example_questions ?? []
+      const pack: Pack = { unit: derive(wording), questions }
+      cache.set(tenant, pack)
+      persist(tenant, wording, questions)
+      return pack
     })
-    .catch(() => derive(FALLBACK))
+    .catch(() => ({ unit: derive(FALLBACK), questions: [] }))
     .finally(() => inFlight.delete(tenant))
   inFlight.set(tenant, p)
   return p
 }
 
-function seed(tenant: string): UnitLabel | null {
+function seed(tenant: string): Pack | null {
   const hit = cache.get(tenant)
   if (hit) return hit
   const stored = persisted(tenant)
@@ -153,14 +168,19 @@ function seed(tenant: string): UnitLabel | null {
   return stored
 }
 
-export function useUnitLabel(): UnitLabel {
+/**
+ * Shared machinery for both hooks: a cached read during render, a fetch on mount, and a
+ * re-fetch when `forgetUnitLabel` fires.
+ *
+ * Tagged with the tenant it belongs to, so a cached value is read during render rather than
+ * pushed in from an effect -- and a tenant switch reads as "not loaded" instead of briefly
+ * showing the previous tenant's wording.
+ */
+function usePack(): Pack | null {
   const tenant = getTenantId()
-  // Tagged with the tenant it belongs to, so a cached value is read during render rather than
-  // pushed in from an effect -- and a tenant switch reads as "not loaded" instead of briefly
-  // showing the previous tenant's wording.
-  const [loaded, setLoaded] = useState<{ tenant: string; label: UnitLabel } | null>(() => {
+  const [loaded, setLoaded] = useState<{ tenant: string; pack: Pack } | null>(() => {
     const hit = seed(tenant)
-    return hit ? { tenant, label: hit } : null
+    return hit ? { tenant, pack: hit } : null
   })
   // Bumped by `forgetUnitLabel`, which is the only thing that invalidates wording. Carried in the
   // effect's dependencies so a pack switch re-fetches here without this hook knowing who changed it.
@@ -184,14 +204,28 @@ export function useUnitLabel(): UnitLabel {
     // `?code=` of an in-progress Cognito callback, so signing in could never complete.
     if (!isAuthenticated()) return
     let live = true
-    load(tenant).then((label) => {
-      if (live) setLoaded({ tenant, label })
+    load(tenant).then((pack) => {
+      if (live) setLoaded({ tenant, pack })
     })
     return () => {
       live = false
     }
   }, [tenant, epoch])
 
-  const fresh = loaded?.tenant === tenant ? loaded.label : seed(tenant)
-  return fresh ?? derive(FALLBACK)
+  return loaded?.tenant === tenant ? loaded.pack : seed(tenant)
+}
+
+export function useUnitLabel(): UnitLabel {
+  return usePack()?.unit ?? derive(FALLBACK)
+}
+
+/**
+ * Questions worth asking of this pack's data, for the Ask and Retrieval pages.
+ *
+ * Empty until settings arrive, and empty for a pack that declares none. Callers render nothing
+ * rather than a placeholder: the affordance exists to show what the system *can* answer, so an
+ * example that returns nothing is worse than no example at all.
+ */
+export function useExampleQuestions(): string[] {
+  return usePack()?.questions ?? []
 }

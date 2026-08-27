@@ -62,6 +62,18 @@ entity_suffixes:
 # Merchant's id, by contrast, is minted here from words on a page -- a memo names "Sam
 # Parker", not customer 47 -- so it is ours to canonicalise, which is what stops one
 # person becoming several nodes.
+
+# Offered on the Ask and Retrieval pages, in this order. Ordered cheapest route first: the
+# return rate compiles from an approved metric with no model involved, and the three below
+# it need the graph. Each of the last three is a question no single document answers --
+# which is the point, because a question one page answers demonstrates search, not
+# reasoning.
+example_questions:
+  - What is the return rate for each customer?
+  - Has a customer under investigation been granted a returns exception?
+  - Which return approvals rely on a policy provision that has since been superseded?
+  - Does a customer under investigation control a marketplace seller we pay out to?
+
 entity_types:
   - id: Case
     label: Case

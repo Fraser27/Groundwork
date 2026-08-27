@@ -23,7 +23,6 @@ import {
   type Matter,
   type QueryHit,
   type QueryResult,
-  type ResolutionTier,
   type TenantSettings,
 } from '../api'
 import { getTenantId } from '../auth'
@@ -43,9 +42,9 @@ import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
 import QueryTrace from '../components/QueryTrace'
-import { ErrorState, Spinner, TierBadge } from '../components/Shared'
+import { ErrorState, Spinner } from '../components/Shared'
 import { entityLabel, epiStyle } from '../format'
-import { fillUnit, useUnitLabel } from '../useUnitLabel'
+import { useExampleQuestions, useUnitLabel } from '../useUnitLabel'
 
 /** Tier 2 explains a fact by the terms it matched; tier 3 walked to it, so distance is the
  *  explanation -- ten edges read alike otherwise, quoting indistinguishable from inferring. */
@@ -61,19 +60,13 @@ function whyIncluded(h: QueryHit): string {
   return parts.join(' · ')
 }
 
-/** The tier is what each example is meant to demonstrate, not a promise about the answer. */
-const EXAMPLES: { q: string; tier: ResolutionTier }[] = [
-  { q: 'What were fees billed by practice area last quarter?', tier: 1 },
-  { q: 'Does acting for Halveston create a conflict?', tier: 2 },
-  {
-    q: 'Which open {units} have unbilled work and an adverse party we also act for?',
-    tier: 3,
-  },
-]
-
 export default function QueryBuilder() {
   const tenant = getTenantId()
   const unit = useUnitLabel()
+  const examples = useExampleQuestions()
+  // The pack's first question, so the empty field suggests something this data can actually
+  // answer. Falls back to a shape rather than a subject, which is true of any pack.
+  const placeholder = examples[0] ?? `Which ${unit.lowerPlural} does this apply to?`
   const [question, setQuestion] = useState('')
   const [matterId, setMatterId] = useState('')
   const [asOf, setAsOf] = useState('')
@@ -214,7 +207,7 @@ export default function QueryBuilder() {
           <textarea
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder={`e.g. Which ${unit.lowerPlural} cite a policy that has since been superseded?`}
+            placeholder={`e.g. ${placeholder}`}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && question.trim()) ask(question)
             }}
@@ -316,19 +309,19 @@ export default function QueryBuilder() {
         )}
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <h3>Try one of these</h3>
-          <span className="card-note">Each takes a different route through the system.</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          {EXAMPLES.map((ex) => {
-            // Filled before it is asked, not just before it is shown: the question reaches the
-            // router as typed, and `{units}` is not a word anything would match.
-            const q = fillUnit(ex.q, unit)
-            return (
+      {examples.length > 0 && (
+        <div className="card">
+          <div className="card-header">
+            <h3>Try one of these</h3>
+            <span className="card-note">
+              Declared by this tenant&apos;s ontology pack, alongside the vocabulary they are asked
+              in.
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {examples.map((q) => (
               <button
-                key={ex.q}
+                key={q}
                 className="btn btn-ghost btn-sm"
                 style={{ justifyContent: 'flex-start', textAlign: 'left', whiteSpace: 'normal' }}
                 onClick={() => {
@@ -336,13 +329,12 @@ export default function QueryBuilder() {
                   ask(q)
                 }}
               >
-                <TierBadge tier={ex.tier} />
                 {q}
               </button>
-            )
-          })}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {error && (
         <div className="banner banner-error" style={{ marginTop: 16 }}>

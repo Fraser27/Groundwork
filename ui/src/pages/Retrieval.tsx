@@ -24,13 +24,7 @@ import { EmptyState, ErrorState, Spinner } from '../components/Shared'
 import TraceDialog from '../components/TraceDialog'
 import { type TraceView, traceOf } from '../trace'
 import { useProvenance } from '../useProvenance'
-import { fillUnit, useUnitLabel } from '../useUnitLabel'
-
-const EXAMPLES = [
-  'Does acting for Calder create a conflict?',
-  'What were fees billed by practice area last quarter?',
-  'Which open {units} rely on authority that has been superseded?',
-]
+import { useExampleQuestions } from '../useUnitLabel'
 
 /** Turns that carry a full governance trace, so the row says so before it is opened. */
 function kindLabel(event: RetrievalEvent): string {
@@ -41,7 +35,9 @@ function kindLabel(event: RetrievalEvent): string {
 
 export default function Retrieval() {
   const tenant = getTenantId()
-  const unit = useUnitLabel()
+  // Declared by the tenant's ontology pack, so a retail deployment is not invited to ask about a
+  // conflict of interest. Empty for a pack that declares none, and nothing is then offered.
+  const examples = useExampleQuestions()
   const [question, setQuestion] = useState('')
   const [events, setEvents] = useState<RetrievalEvent[]>([])
   const [running, setRunning] = useState(false)
@@ -120,7 +116,7 @@ export default function Retrieval() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) run()
               }}
-              placeholder="Does acting for Calder create a conflict?"
+              placeholder={examples[0] ?? 'Ask a question about your data'}
               disabled={running}
             />
             <p className="hint">Cmd/Ctrl + Enter to run.</p>
@@ -140,20 +136,17 @@ export default function Retrieval() {
             </button>
           )}
         </div>
-        {events.length === 0 && !running && (
+        {events.length === 0 && !running && examples.length > 0 && (
           <div className="hint" style={{ marginTop: 4 }}>
             Try one of these:{' '}
-            {EXAMPLES.map((raw, i) => {
-              const e = fillUnit(raw, unit)
-              return (
-                <span key={raw}>
-                  {i > 0 && ' · '}
-                  <button className="link-button" onClick={() => setQuestion(e)}>
-                    {e}
-                  </button>
-                </span>
-              )
-            })}
+            {examples.map((e, i) => (
+              <span key={e}>
+                {i > 0 && ' · '}
+                <button className="link-button" onClick={() => setQuestion(e)}>
+                  {e}
+                </button>
+              </span>
+            ))}
           </div>
         )}
       </div>
