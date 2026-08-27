@@ -13,7 +13,11 @@ from pathlib import Path
 import pytest
 import sqlglot
 
-from src.metrics.compiler import compile_metric, is_safe_scalar_expression
+from src.metrics.compiler import (
+    _expression_column_warnings,
+    compile_metric,
+    is_safe_scalar_expression,
+)
 from src.metrics.loader import load_metrics
 from src.metrics.models import (
     FilterClause,
@@ -394,6 +398,115 @@ class TestFanoutDetection:
         )
         result = compile_metric(m, CATALOG)
         assert not any("inflate" in w for w in result.warnings)
+
+
+class TestExpressionColumns:
+    """The catalog used to be consulted for dimensions, filters and the time axis but never
+    for the expression body, so `SUM(invoice_amt)` compiled clean and failed at Athena.
+
+    A warning rather than a refusal, because the catalog is permissive by design: an empty or
+    unscanned one disables the check instead of making the metric invalid.
+    """
+
+    def a_metric(self, expression: str, **over) -> MetricDefinition:
+        fields = {
+            "metric_id": "x",
+            "name": "measure",
+            "expression": expression,
+            "source_table": "legal_ops.invoices",
+        }
+        fields.update(over)
+        return MetricDefinition(**fields)
+
+    def test_a_misspelled_column_warns(self):
+        result = compile_metric(self.a_metric("SUM(invoice_amt)"), CATALOG)
+        assert any("invoice_amt" in w for w in result.warnings)
+
+    def test_it_stays_a_warning_and_still_emits_sql(self):
+        """Refusing would make a cold catalog read as a broken definition."""
+        result = compile_metric(self.a_metric("SUM(invoice_amt)"), CATALOG)
+        assert result.is_valid, result.errors
+        assert "SUM(invoice_amt)" in result.sql
+
+    def test_a_correct_column_is_silent(self):
+        result = compile_metric(self.a_metric("SUM(invoice_amount)"), CATALOG)
+        assert result.warnings == []
+
+    def test_a_column_on_a_joined_table_is_silent(self):
+        m = self.a_metric(
+            "SUM(unbilled_value)",
+            source_table="legal_ops.matters",
+            joins=[
+                {
+                    "table": "legal_ops.matter_wip_daily",
+                    "source_column": "matter_id",
+                    "target_column": "matter_id",
+                }
+            ],
+        )
+        assert not any("does not list" in w for w in compile_metric(m, CATALOG).warnings)
+
+    def test_case_alone_does_not_warn(self):
+        """Trino folds an unquoted identifier, so a capital is not a typo."""
+        result = compile_metric(self.a_metric("SUM(Invoice_Amount)"), CATALOG)
+        assert result.warnings == []
+
+    def test_the_alias_the_compiler_itself_assigned_is_silent(self):
+        """`_make_alias` takes the first letter of the last segment, so `legal_ops.invoices`
+        is `i`. Warning about the alias the compiler emits would fire on every correct
+        qualified expression there is."""
+        result = compile_metric(self.a_metric("SUM(i.invoice_amount)"), CATALOG)
+        assert result.warnings == []
+
+    def test_an_alias_the_query_does_not_define_warns(self):
+        """The motivating case: the expression says `r`, the compiler emits `i`, and Athena
+        is the first thing to notice."""
+        result = compile_metric(self.a_metric("SUM(r.invoice_amount)"), CATALOG)
+        assert any("r.invoice_amount" in w for w in result.warnings)
+
+    def test_an_unknown_table_warns_about_nothing(self):
+        """Authoring against a table nobody has scanned yet has to keep working."""
+        m = self.a_metric("SUM(whatever)", source_table="legal_ops.not_scanned")
+        assert compile_metric(m, CATALOG).warnings == []
+
+    def test_a_table_known_but_with_no_columns_warns_about_nothing(self):
+        """`TableSchema` treats no columns as unknown, not as no columns."""
+        catalog = StaticCatalog.from_dicts({"legal_ops.invoices": {}})
+        assert compile_metric(self.a_metric("SUM(whatever)"), catalog).warnings == []
+
+    def test_one_unknown_join_target_silences_the_unqualified_check(self):
+        """An unqualified name could resolve on the table we cannot see."""
+        m = self.a_metric(
+            "SUM(mystery_column)",
+            joins=[
+                {
+                    "table": "legal_ops.not_scanned",
+                    "source_column": "matter_id",
+                    "target_column": "matter_id",
+                }
+            ],
+        )
+        assert compile_metric(m, CATALOG).warnings == []
+
+    def test_an_unparseable_expression_warns_about_nothing(self):
+        """Asserted on the scan itself: `compile_metric` refuses an unparseable expression
+        earlier, so going through it would pass for the wrong reason."""
+        m = self.a_metric("SUM(")
+        assert _expression_column_warnings(m, CATALOG, {"legal_ops.invoices": "i"}) == []
+        assert compile_metric(m, CATALOG).warnings == []
+
+    def test_a_fully_qualified_reference_warns_about_nothing(self):
+        """It names a relation the compiler never emits, so there is nothing to resolve it
+        against and silence is the honest answer."""
+        m = self.a_metric("SUM(legal_ops.invoices.invoice_amount)")
+        assert compile_metric(m, CATALOG).warnings == []
+
+    def test_the_derived_expression_is_not_checked_as_columns(self, registry):
+        """A derived expression names base metrics, not columns. Checking it would flag both
+        halves of every ratio."""
+        result = compile_metric(metric(registry, "lm_003"), CATALOG, registry=registry)
+        assert result.is_valid, result.errors
+        assert not any("does not list" in w for w in result.warnings)
 
 
 class TestFilterSurface:

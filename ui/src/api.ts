@@ -566,6 +566,17 @@ export interface MetricParameter {
   description?: string
 }
 
+/** A table the compiled query joins to the source table, and the equality it joins on. */
+export interface MetricJoin {
+  table: string
+  source_column: string
+  target_column: string
+  join_type: string
+}
+
+/** simple aggregates one table; derived composes other simple metrics as CTEs. */
+export type MetricType = 'simple' | 'derived'
+
 export interface Metric {
   metric_id: string
   name: string
@@ -573,6 +584,13 @@ export interface Metric {
   expression: string
   source_table: string
   source_id?: string
+  /** Optional only because an older API may not send it. A write always states it. */
+  type?: MetricType
+  joins?: MetricJoin[]
+  /** For a derived metric, the simple metrics it composes, by name or id. */
+  base_metrics?: string[]
+  /** Result column to graph node label, declared rather than inferred from values. */
+  entity_columns?: Record<string, string>
   grain: string[]
   time_grain_column?: string | null
   time_grains: string[]
@@ -598,6 +616,39 @@ export interface Metric {
   updated_by?: string | null
   updated_at?: string | null
 }
+
+/**
+ * Every field a write carries, none of them optional.
+ *
+ * The edit form fetches a definition and sends it back, so a field it has no editor for still
+ * has to be returned: leaving one out rewrites a governed definition on save. Required here so
+ * that omitting one is a type error rather than a silent loss.
+ */
+export type MetricWrite = Required<
+  Pick<
+    Metric,
+    | 'metric_id'
+    | 'name'
+    | 'definition'
+    | 'expression'
+    | 'source_table'
+    | 'type'
+    | 'joins'
+    | 'base_metrics'
+    | 'entity_columns'
+    | 'grain'
+    | 'time_grain_column'
+    | 'time_grains'
+    | 'aggregation'
+    | 'parameters'
+    | 'filters'
+    | 'synonyms'
+    | 'value_type'
+    | 'unit'
+    | 'format'
+    | 'owner'
+  >
+>
 
 /**
  * A compiled metric definition, saved or not.
@@ -1857,9 +1908,9 @@ export const api = {
     request<Provenance>(`/tenants/${tenant}/assertions/${id}/provenance`),
 
   listMetrics: (tenant: string) => request<Metric[]>(`/tenants/${tenant}/metrics`),
-  createMetric: (tenant: string, m: Partial<Metric>) =>
+  createMetric: (tenant: string, m: MetricWrite) =>
     request<SavedMetric>(`/tenants/${tenant}/metrics`, { method: 'POST', body: JSON.stringify(m) }),
-  updateMetric: (tenant: string, id: string, m: Partial<Metric>) =>
+  updateMetric: (tenant: string, id: string, m: MetricWrite) =>
     request<SavedMetric>(`/tenants/${tenant}/metrics/${id}`, {
       method: 'PUT',
       body: JSON.stringify(m),
@@ -1880,7 +1931,7 @@ export const api = {
    * their definition produces before anyone can be answered with it. No model is involved, so
    * the SQL shown here is the SQL that will run.
    */
-  previewMetric: (tenant: string, m: Partial<Metric>) =>
+  previewMetric: (tenant: string, m: MetricWrite) =>
     request<CompiledMetric>(`/tenants/${tenant}/metrics/preview`, {
       method: 'POST',
       body: JSON.stringify(m),

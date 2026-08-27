@@ -329,6 +329,147 @@ class TestUpdate:
         assert graph_client.put(f"{BASE}/nope", json=a_body(metric_id="nope")).status_code == 404
 
 
+class TestDerivedMetrics:
+    """A derived metric is arithmetic over two governed measures, so the compiler needs a
+    registry to resolve them by id or name.
+
+    This router never built one, so every derived path was a 422: create, preview, update and
+    compile alike, including for `lm_003` and `rm_005`, which both ship in the box.
+    """
+
+    def _bases(self, c: TestClient) -> None:
+        c.post(BASE, json=a_body(metric_id="m_fees", name="total_fees"))
+        c.post(
+            BASE,
+            json=a_body(
+                metric_id="m_hours",
+                name="total_hours",
+                expression="SUM(hours)",
+                source_table="legal_ops.time_entries",
+                grain=["work_date"],
+            ),
+        )
+
+    def _ratio(self, **over: Any) -> dict[str, Any]:
+        body = {
+            "metric_id": "m_realization",
+            "name": "realization",
+            "type": "derived",
+            "expression": "total_fees / NULLIF(total_hours, 0)",
+            "base_metrics": ["m_fees", "m_hours"],
+            "source_table": "",
+            "aggregation": "non_additive",
+        }
+        body.update(over)
+        return body
+
+    def test_creating_one_succeeds(self, graph_client):
+        self._bases(graph_client)
+        r = graph_client.post(BASE, json=self._ratio())
+        assert r.status_code == 201, r.text
+        assert "total_fees AS (" in r.json()["sql"]
+        assert "total_hours AS (" in r.json()["sql"]
+
+    def test_previewing_one_succeeds(self, graph_client):
+        self._bases(graph_client)
+        r = graph_client.post(f"{BASE}/preview", json=self._ratio())
+        assert r.status_code == 200, r.text
+        assert "(total_fees / NULLIF(total_hours, 0)) AS realization" in r.json()["sql"]
+
+    def test_a_stored_one_compiles(self, graph_client):
+        self._bases(graph_client)
+        graph_client.post(BASE, json=self._ratio())
+        r = graph_client.post(f"{BASE}/m_realization/compile")
+        assert r.status_code == 200, r.text
+        assert "total_fees AS (" in r.json()["sql"]
+
+    def test_editing_one_succeeds(self, graph_client):
+        self._bases(graph_client)
+        graph_client.post(BASE, json=self._ratio())
+        r = graph_client.put(
+            f"{BASE}/m_realization",
+            json=self._ratio(expression="total_hours / NULLIF(total_fees, 0)"),
+        )
+        assert r.status_code == 200, r.text
+
+    def test_a_draft_base_can_be_composed(self, graph_client):
+        """Nothing is approved here: create only ever writes a draft. Requiring an approved
+        base would make writing both halves of a ratio in one sitting impossible, and it is
+        `approved_only=True` on the query path, not this one, that keeps a draft from
+        answering a question."""
+        self._bases(graph_client)
+        assert graph_client.get(f"{BASE}?approved_only=true").json() == []
+        assert graph_client.post(BASE, json=self._ratio()).status_code == 201
+
+    def test_a_base_that_does_not_exist_is_a_422_naming_it(self, graph_client):
+        """A 500 here tells the author nothing about which reference is wrong."""
+        self._bases(graph_client)
+        r = graph_client.post(BASE, json=self._ratio(base_metrics=["m_fees", "m_ghost"]))
+        assert r.status_code == 422
+        assert "m_ghost" in r.json()["detail"]
+
+    def test_a_metric_naming_itself_as_a_base_is_refused(self, graph_client):
+        """The submitted definition is what its own id resolves to, not the stored version.
+        Otherwise editing a simple metric into a derived one that names itself resolves to the
+        stored simple metric and compiles a CTE that is its own base."""
+        graph_client.post(BASE, json=a_body(metric_id="m_fees", name="total_fees"))
+        r = graph_client.put(
+            f"{BASE}/m_fees",
+            json=a_body(
+                metric_id="m_fees",
+                name="total_fees",
+                type="derived",
+                expression="total_fees / 2",
+                base_metrics=["m_fees"],
+                source_table="",
+            ),
+        )
+        assert r.status_code == 422
+        assert "derived" in r.json()["detail"]
+
+    def test_a_broken_derived_definition_is_not_stored(self, graph_client):
+        r = graph_client.post(BASE, json=self._ratio(base_metrics=["m_ghost"]))
+        assert r.status_code == 422
+        assert graph_client.get(f"{BASE}/m_realization").status_code == 404
+
+
+class TestTheShippedRatiosCompile:
+    """`lm_003` and `rm_005` are the two derived metrics in the box, and neither could be
+    compiled through this API at all."""
+
+    def _derived(self, domain: str) -> list[Any]:
+        from src.api.deps import load_example_pack
+
+        return [m for m in load_example_pack(domain) if m.type == "derived"]
+
+    def test_they_compile_from_the_graph_after_seeding(self, graph_client):
+        """The real path: bases resolved out of the tenant's stored metrics."""
+        get_services().metric_matcher = None
+        graph_client.post(f"{BASE}/seed")
+        derived = self._derived(get_services().ontology.domain)
+        assert derived
+        for m in derived:
+            r = graph_client.post(f"{BASE}/{m.metric_id}/compile")
+            assert r.status_code == 200, (m.metric_id, r.text)
+            assert m.name in r.json()["sql"]
+
+    @pytest.mark.parametrize("domain", ["legal", "retail"])
+    def test_both_packs_ratios_compile_without_a_graph(self, client, domain):
+        """lm_003 and rm_005 by name, through the pack fallback `_find` already uses."""
+        from src.api.deps import load_example_pack
+        from src.metrics.models import StaticCatalog
+        from src.query.metric_matcher import MetricMatcher
+
+        pack = load_example_pack(domain)
+        get_services().metric_matcher = MetricMatcher(pack, StaticCatalog(tables={}))
+        derived = self._derived(domain)
+        assert {m.metric_id for m in derived} & {"lm_003", "rm_005"}
+        for m in derived:
+            r = client.post(f"{BASE}/{m.metric_id}/compile")
+            assert r.status_code == 200, (m.metric_id, r.text)
+            assert m.name in r.json()["sql"]
+
+
 class TestStatus:
     def test_approving_lets_a_metric_serve(self, graph_client):
         graph_client.post(BASE, json=a_body())

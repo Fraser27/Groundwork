@@ -44,7 +44,13 @@ from src.metrics.graph_store import (
     VALID_STATUSES,
     GraphMetricStore,
 )
-from src.metrics.models import MetricDefinition, MetricJoin, MetricParameter, StaticCatalog
+from src.metrics.models import (
+    MetricDefinition,
+    MetricJoin,
+    MetricParameter,
+    MetricRegistry,
+    StaticCatalog,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +93,30 @@ def _catalog(services: Services, tenant_id: str) -> Any:
     except Exception as e:
         logger.debug("could not build a schema catalog: %s", e)
     return StaticCatalog(tables=tables)
+
+
+def _registry(services: Services, tenant_id: str, candidate: MetricDefinition) -> MetricRegistry:
+    """The metrics a derived definition may compose.
+
+    Every stored metric, not only the approved ones. An author writing a ratio has usually
+    just written both halves and neither is approved yet, and requiring an approved base would
+    make composition impossible in one sitting. Approval gates *serving*, not authoring:
+    `build_metric_matcher` still reads `approved_only=True`, so a draft base composed here
+    still cannot answer a question.
+
+    The submitted definition replaces its stored version, so a metric naming itself as a base
+    resolves to itself and the compiler refuses it for composing a derived metric.
+    """
+    stored: list[MetricDefinition] | None = None
+    if services.graph is not None:
+        try:
+            stored = GraphMetricStore(services.graph).list_metrics(tenant_id)
+        except Exception as e:
+            logger.warning("could not read metrics to resolve base metrics: %s", e)
+    if stored is None:
+        matcher = services.metric_matcher
+        stored = list(matcher.metrics) if matcher is not None else []
+    return MetricRegistry.from_list([*stored, candidate])
 
 
 class MetricParameterIn(BaseModel):
@@ -179,10 +209,16 @@ def _compile_or_422(
     A missing source_table, a name that is not an identifier and an unparseable expression are
     all the same thing to an author -- a typo in the definition -- so all three have to read as
     422. Building the `MetricDefinition` outside made the first two an opaque 500.
+
+    The registry is built only for a derived metric: a simple one resolves nothing through it,
+    and building it costs a graph read on every preview keystroke.
     """
     try:
         definition = metric.to_definition() if isinstance(metric, MetricIn) else metric
-        result = compile_metric(definition, _catalog(services, tenant_id))
+        registry = (
+            _registry(services, tenant_id, definition) if definition.type == "derived" else None
+        )
+        result = compile_metric(definition, _catalog(services, tenant_id), registry=registry)
     except Exception as e:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -8,7 +8,17 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, type CompiledMetric, type Metric, type TableSummary } from '../api'
+import {
+  api,
+  type Column,
+  type CompiledMetric,
+  type Metric,
+  type MetricJoin,
+  type MetricParameter,
+  type MetricType,
+  type MetricWrite,
+  type TableSummary,
+} from '../api'
 import { getTenantId, isPlatformAdmin } from '../auth'
 import { HELP } from '../epistemic'
 import FieldHelp from '../components/FieldHelp'
@@ -16,12 +26,21 @@ import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDateTime } from '../format'
 import { fillUnit, useUnitLabel } from '../useUnitLabel'
 
+/**
+ * The definition as the modal holds it. Lists are strings only where the editor is a text field.
+ *
+ * Every field the API accepts has a home here, including the ones with no editor: this form is a
+ * fetch-then-save round trip, so anything it cannot hold it destroys on save.
+ */
 interface Form {
   metric_id: string
   name: string
   definition: string
   expression: string
+  type: MetricType
   source_table: string
+  joins: MetricJoin[]
+  base_metrics: string[]
   grain: string
   time_grain_column: string
   time_grains: string
@@ -30,7 +49,10 @@ interface Form {
   unit: string
   format: string
   filters: string
+  parameters: MetricParameter[]
   synonyms: string
+  entity_columns: Record<string, string>
+  owner: string
 }
 
 const EMPTY: Form = {
@@ -38,7 +60,10 @@ const EMPTY: Form = {
   name: '',
   definition: '',
   expression: '',
+  type: 'simple',
   source_table: '',
+  joins: [],
+  base_metrics: [],
   grain: '',
   time_grain_column: '',
   time_grains: 'month, quarter, year',
@@ -47,17 +72,29 @@ const EMPTY: Form = {
   unit: '',
   format: '',
   filters: '',
+  parameters: [],
   synonyms: '',
+  entity_columns: {},
+  owner: '',
 }
 
 const VALUE_TYPES = ['number', 'currency', 'percent', 'count', 'duration']
+// Mirrors JOIN_TYPES in src/metrics/models.py, minus the two that need no join columns.
+const JOIN_TYPES = ['INNER', 'LEFT', 'RIGHT', 'FULL']
+// Mirrors OPERATORS in src/metrics/models.py. A parameter declared with anything else is refused.
+const OPERATORS = ['=', '!=', '>', '<', '>=', '<=', 'IN', 'NOT IN', 'LIKE', 'BETWEEN']
+// Mirrors _TEMPORAL_TYPE_PREFIXES in src/metrics/compiler.py, which decides the same question.
+const TEMPORAL_TYPE = /^(date|timestamp|time)/i
 
 const toForm = (m: Metric): Form => ({
   metric_id: m.metric_id,
   name: m.name,
   definition: m.definition,
   expression: m.expression,
+  type: m.type || 'simple',
   source_table: m.source_table,
+  joins: (m.joins || []).map((j) => ({ ...j })),
+  base_metrics: [...(m.base_metrics || [])],
   grain: m.grain.join(', '),
   time_grain_column: m.time_grain_column || '',
   time_grains: m.time_grains.join(', '),
@@ -66,7 +103,10 @@ const toForm = (m: Metric): Form => ({
   unit: m.unit || '',
   format: m.format || '',
   filters: m.filters.join('\n'),
+  parameters: m.parameters.map((p) => ({ ...p, description: p.description || '' })),
   synonyms: m.synonyms.join(', '),
+  entity_columns: { ...(m.entity_columns || {}) },
+  owner: m.owner || '',
 })
 
 const list = (s: string) =>
@@ -75,12 +115,16 @@ const list = (s: string) =>
     .map((x) => x.trim())
     .filter(Boolean)
 
-const fromForm = (f: Form): Partial<Metric> => ({
+const fromForm = (f: Form): MetricWrite => ({
   metric_id: f.metric_id,
   name: f.name,
   definition: f.definition,
   expression: f.expression,
+  type: f.type,
   source_table: f.source_table,
+  // Blank rows are the editor's own scaffolding, never something a stored definition contains.
+  joins: f.joins.filter((j) => j.table || j.source_column || j.target_column),
+  base_metrics: f.base_metrics,
   grain: list(f.grain),
   time_grain_column: f.time_grain_column,
   time_grains: list(f.time_grains),
@@ -92,7 +136,10 @@ const fromForm = (f: Form): Partial<Metric> => ({
     .split('\n')
     .map((x) => x.trim())
     .filter(Boolean),
+  parameters: f.parameters.filter((p) => p.column || p.description),
   synonyms: list(f.synonyms),
+  entity_columns: f.entity_columns,
+  owner: f.owner,
 })
 
 const AGGREGATION_HELP: Record<Metric['aggregation'], string> = {
@@ -135,6 +182,66 @@ function CompilerWarnings({ warnings }: { warnings: string[] }) {
   )
 }
 
+const OTHER = '__other__'
+
+/**
+ * A column reference: the scanned schema when there is one, free text when there is not.
+ *
+ * The catalog is allowed to be empty, so a bare select would make a metric unauthorable until
+ * somebody runs a scan. A name the schema does not contain stays visible and selected rather
+ * than being dropped, because a column the scan has not seen is not necessarily wrong.
+ */
+function ColumnField({
+  value,
+  columns,
+  onChange,
+  empty,
+  placeholder,
+  withType,
+}: {
+  value: string
+  columns: Column[]
+  onChange: (v: string) => void
+  empty: string
+  placeholder: string
+  withType?: boolean
+}) {
+  const [typed, setTyped] = useState(false)
+  if (columns.length === 0 || typed) {
+    return (
+      <div className="field-row">
+        <input
+          className="input-mono"
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {columns.length > 0 && (
+          <button className="btn btn-ghost btn-sm" onClick={() => setTyped(false)}>
+            List
+          </button>
+        )}
+      </div>
+    )
+  }
+  const unlisted = value !== '' && !columns.some((c) => c.name === value)
+  return (
+    <select
+      value={value}
+      onChange={(e) => (e.target.value === OTHER ? setTyped(true) : onChange(e.target.value))}
+    >
+      <option value="">{empty}</option>
+      {columns.map((c) => (
+        <option key={c.name} value={c.name}>
+          {withType ? `${c.name} (${c.data_type})` : c.name}
+        </option>
+      ))}
+      {unlisted && <option value={value}>{value} (not in the scanned schema)</option>}
+      <option value={OTHER}>Type a column name…</option>
+    </select>
+  )
+}
+
 export default function Metrics() {
   const tenant = getTenantId()
   const unit = useUnitLabel()
@@ -155,6 +262,9 @@ export default function Metrics() {
   const [preview, setPreview] = useState<CompiledMetric | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
+  const [columns, setColumns] = useState<Record<string, Column[]>>({})
+  const [showJoins, setShowJoins] = useState(false)
+  const [showParams, setShowParams] = useState(false)
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
@@ -172,6 +282,8 @@ export default function Metrics() {
     setEditing(m)
     setForm(m ? toForm(m) : EMPTY)
     setPreview(null)
+    setShowJoins((m?.joins?.length ?? 0) > 0)
+    setShowParams((m?.parameters?.length ?? 0) > 0)
     setModal(true)
   }
 
@@ -200,6 +312,75 @@ export default function Metrics() {
         m.synonyms.some((s) => s.toLowerCase().includes(q)),
     )
   }, [metrics, filter])
+
+  // Joined so the effect below depends on the set of tables in play, not on every keystroke.
+  const wanted = useMemo(
+    () => [...new Set([form.source_table, ...form.joins.map((j) => j.table)])].join('\n'),
+    [form.source_table, form.joins],
+  )
+
+  useEffect(() => {
+    const missing = wanted.split('\n').filter((t) => t && !(t in columns))
+    if (missing.length === 0) return
+    let live = true
+    // A failure caches an empty column list, which is what makes the pickers fall back to text
+    // rather than blocking on a catalog that may never have been scanned.
+    Promise.all(
+      missing.map((t) =>
+        api
+          .getTable(tenant, t)
+          .then((d) => [t, d.columns || []] as const)
+          .catch(() => [t, [] as Column[]] as const),
+      ),
+    ).then((pairs) => {
+      if (live) setColumns((c) => ({ ...c, ...Object.fromEntries(pairs) }))
+    })
+    return () => {
+      live = false
+    }
+  }, [wanted, columns, tenant])
+
+  const sourceColumns = columns[form.source_table] || []
+  // The governed time axis has to be a real date or timestamp. A month partition string that
+  // looks like one would make the declared grain unenforceable, which is the mistake
+  // _check_time_axis_bypass exists to catch, so the picker cannot express it.
+  const temporalColumns = sourceColumns.filter((c) => TEMPORAL_TYPE.test(c.data_type || ''))
+  const derived = form.type === 'derived'
+  // The shape the model requires of each type. Checked here only to spare the author a 422.
+  const shapeReady = derived ? form.base_metrics.length > 0 : !!form.source_table
+
+  const databases = useMemo(() => [...new Set(tables.map((t) => t.database))].sort(), [tables])
+
+  // Only simple metrics: the compiler refuses a derived metric composed of derived metrics, so
+  // offering one here would produce a definition that cannot compile.
+  const baseCandidates = metrics.filter(
+    (m) => (m.type || 'simple') === 'simple' && m.metric_id !== form.metric_id,
+  )
+  const baseTokens = (m: Metric) => [m.metric_id, m.name]
+  const unresolvedBases = form.base_metrics.filter(
+    (b) => !baseCandidates.some((m) => baseTokens(m).includes(b)),
+  )
+  const unknownGrain =
+    sourceColumns.length > 0
+      ? list(form.grain).filter((g) => !sourceColumns.some((c) => c.name === g))
+      : []
+
+  // By name, not id: a derived metric's expression refers to its bases by their output name, so
+  // the two halves of the definition stay written in the same vocabulary.
+  const toggleBase = (m: Metric) => {
+    const tokens = baseTokens(m)
+    update({
+      base_metrics: form.base_metrics.some((b) => tokens.includes(b))
+        ? form.base_metrics.filter((b) => !tokens.includes(b))
+        : [...form.base_metrics, m.name],
+    })
+  }
+
+  const patchJoin = (i: number, patch: Partial<MetricJoin>) =>
+    update({ joins: form.joins.map((j, n) => (n === i ? { ...j, ...patch } : j)) })
+
+  const patchParam = (i: number, patch: Partial<MetricParameter>) =>
+    update({ parameters: form.parameters.map((p, n) => (n === i ? { ...p, ...patch } : p)) })
 
   const save = async () => {
     setSaving(true)
@@ -530,7 +711,7 @@ export default function Metrics() {
 
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
             <h3>{editing ? `Edit ${editing.name}` : 'New metric'}</h3>
             <p className="modal-sub">
               Saved as a draft. A draft never answers a question until it is approved.
@@ -573,33 +754,194 @@ export default function Metrics() {
 
             <div className="form-group">
               <label>
-                SQL expression
-                <FieldHelp text="The aggregate that computes the figure, e.g. SUM(fee_amount). This is the only SQL anyone writes; the surrounding query is compiled. Name columns unqualified: the compiler assigns the table alias, so a prefix written here may not match the one it emits. Preview SQL shows exactly what will run." />
+                Type
+                <FieldHelp text="A simple metric aggregates rows from one table. A derived metric composes other metrics, each recomputed from its own rows at the shared grain, which is what keeps a ratio correct at every level rather than averaging averages." />
+              </label>
+              <select
+                value={form.type}
+                onChange={(e) => update({ type: e.target.value as MetricType })}
+              >
+                <option value="simple">Simple, aggregates one table</option>
+                <option value="derived">Derived, composes other metrics</option>
+              </select>
+            </div>
+
+            {/* Kept for a derived metric that carries one, so hiding never strands a value. */}
+            {(!derived || !!form.source_table) && (
+              <div className="form-group">
+                <label>Source table</label>
+                <select
+                  value={form.source_table}
+                  onChange={(e) => update({ source_table: e.target.value })}
+                >
+                  <option value="">Select a table…</option>
+                  {databases.map((db) => (
+                    <optgroup key={db} label={db}>
+                      {tables
+                        .filter((t) => t.database === db)
+                        .map((t) => (
+                          <option key={t.full_name} value={t.full_name}>
+                            {t.full_name}
+                          </option>
+                        ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <p className="hint">
+                  Rows stay where they are. The compiled query reads this table in place.
+                </p>
+              </div>
+            )}
+
+            {(!derived || form.joins.length > 0) && (
+              <details
+                className="form-section"
+                open={showJoins}
+                onToggle={(e) => setShowJoins(e.currentTarget.open)}
+              >
+                <summary>
+                  Joins{form.joins.length > 0 ? ` (${form.joins.length})` : ''}
+                  <FieldHelp text="Tables the compiled query joins to the source table so their columns can be used as dimensions. A join that multiplies rows inflates the figure, which is why the compiler reports fan-out as a caveat beside the SQL rather than refusing it." />
+                </summary>
+                <div className="metric-rows">
+                  {form.joins.map((j, i) => (
+                    <div key={i} className="metric-row">
+                      <select
+                        value={j.join_type}
+                        onChange={(e) => patchJoin(i, { join_type: e.target.value })}
+                        style={{ width: 88, flexShrink: 0 }}
+                      >
+                        {JOIN_TYPES.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={j.table}
+                        onChange={(e) => patchJoin(i, { table: e.target.value })}
+                        style={{ flex: 2 }}
+                      >
+                        <option value="">Join table…</option>
+                        {databases.map((db) => (
+                          <optgroup key={db} label={db}>
+                            {tables
+                              .filter((t) => t.database === db && t.full_name !== form.source_table)
+                              .map((t) => (
+                                <option key={t.full_name} value={t.full_name}>
+                                  {t.name}
+                                </option>
+                              ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                      <span className="op">ON</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <ColumnField
+                          value={j.source_column}
+                          columns={sourceColumns}
+                          onChange={(v) => patchJoin(i, { source_column: v })}
+                          empty="Source column…"
+                          placeholder="source column"
+                        />
+                      </div>
+                      <span className="op">=</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <ColumnField
+                          value={j.target_column}
+                          columns={columns[j.table] || []}
+                          onChange={(v) => patchJoin(i, { target_column: v })}
+                          empty="Joined column…"
+                          placeholder="joined column"
+                        />
+                      </div>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        onClick={() => update({ joins: form.joins.filter((_, n) => n !== i) })}
+                        title="Remove this join"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {form.joins.length === 0 && (
+                  <p className="hint" style={{ marginTop: 0, marginBottom: 8 }}>
+                    No joins. The compiled query reads the source table only.
+                  </p>
+                )}
+                <button
+                  className="btn btn-ghost btn-sm"
+                  style={{ marginTop: form.joins.length > 0 ? 8 : 0 }}
+                  onClick={() =>
+                    update({
+                      joins: [
+                        ...form.joins,
+                        { table: '', source_column: '', target_column: '', join_type: 'INNER' },
+                      ],
+                    })
+                  }
+                >
+                  Add join
+                </button>
+              </details>
+            )}
+
+            {(derived || form.base_metrics.length > 0) && (
+              <div className="form-group">
+                <label>
+                  Base metrics
+                  <FieldHelp text="The metrics this one composes. Only simple metrics are offered: the compiler refuses a derived metric built from another derived metric, so that the SQL stays readable. Each base becomes a CTE recomputed at the shared grain." />
+                </label>
+                {baseCandidates.length === 0 ? (
+                  <p className="hint">
+                    No simple metrics to compose yet. Define one first, then come back.
+                  </p>
+                ) : (
+                  <div className="base-metric-list">
+                    {baseCandidates.map((m) => {
+                      const on = form.base_metrics.some((b) => baseTokens(m).includes(b))
+                      return (
+                        <label key={m.metric_id} className="base-metric-option">
+                          <input type="checkbox" checked={on} onChange={() => toggleBase(m)} />
+                          <code>{m.name}</code>
+                          <span className="dim" style={{ flex: 1, minWidth: 0 }}>
+                            {m.definition}
+                          </span>
+                          {m.status !== 'approved' && (
+                            <span className="tag tag-orange">{m.status}</span>
+                          )}
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+                {unresolvedBases.length > 0 && (
+                  <p className="hint">
+                    Referenced but not found here: <code>{unresolvedBases.join(', ')}</code>. Kept
+                    as written, and the compiler refuses a reference it cannot resolve.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="form-group">
+              <label>
+                {derived ? 'Expression over the base metrics' : 'SQL expression'}
+                <FieldHelp
+                  text={
+                    derived
+                      ? 'Arithmetic over the base metrics, referenced by their names, e.g. fees_billed / hours_recorded. The compiler emits each base as a CTE and applies this to the joined result, so no aggregate belongs here.'
+                      : 'The aggregate that computes the figure, e.g. SUM(fee_amount). This is the only SQL anyone writes; the surrounding query is compiled. Name columns unqualified: the compiler assigns the table alias, so a prefix written here may not match the one it emits. Preview SQL shows exactly what will run.'
+                  }
+                />
               </label>
               <input
                 className="input-mono"
                 value={form.expression}
                 onChange={(e) => update({ expression: e.target.value })}
-                placeholder="SUM(fee_amount)"
+                placeholder={derived ? 'fees_billed / NULLIF(hours_recorded, 0)' : 'SUM(fee_amount)'}
               />
-            </div>
-
-            <div className="form-group">
-              <label>Source table</label>
-              <select
-                value={form.source_table}
-                onChange={(e) => update({ source_table: e.target.value })}
-              >
-                <option value="">Select a table…</option>
-                {tables.map((t) => (
-                  <option key={t.full_name} value={t.full_name}>
-                    {t.full_name}
-                  </option>
-                ))}
-              </select>
-              <p className="hint">
-                Rows stay where they are. The compiled query reads this table in place.
-              </p>
             </div>
 
             <div className="form-row">
@@ -608,11 +950,37 @@ export default function Metrics() {
                   Grain
                   <FieldHelp text="The dimensions this metric may be broken down by. Anything not listed here cannot be used to slice it, which stops a figure being cut in a way its definition does not support." />
                 </label>
-                <input
-                  value={form.grain}
-                  onChange={(e) => update({ grain: e.target.value })}
-                  placeholder="matter_id, practice_area"
-                />
+                <div className="field-row">
+                  <input
+                    value={form.grain}
+                    onChange={(e) => update({ grain: e.target.value })}
+                    placeholder="matter_id, practice_area"
+                  />
+                  {sourceColumns.length > 0 && (
+                    <select
+                      value=""
+                      style={{ width: 96, flexShrink: 0 }}
+                      onChange={(e) =>
+                        update({ grain: [...list(form.grain), e.target.value].join(', ') })
+                      }
+                    >
+                      <option value="">Add…</option>
+                      {sourceColumns
+                        .filter((c) => !list(form.grain).includes(c.name))
+                        .map((c) => (
+                          <option key={c.name} value={c.name}>
+                            {c.name}
+                          </option>
+                        ))}
+                    </select>
+                  )}
+                </div>
+                {unknownGrain.length > 0 && (
+                  <p className="hint">
+                    Not in the scanned schema: <code>{unknownGrain.join(', ')}</code>. The compiler
+                    drops a dimension it cannot resolve, so check the spelling.
+                  </p>
+                )}
               </div>
               <div className="form-group">
                 <label>
@@ -637,12 +1005,20 @@ export default function Metrics() {
                   Time axis column
                   <FieldHelp text="The real date or timestamp column the time grain applies to. A partition string that merely looks like a date must not be used here, or the grain it is meant to guard is unenforceable." />
                 </label>
-                <input
-                  className="input-mono"
+                <ColumnField
                   value={form.time_grain_column}
-                  onChange={(e) => update({ time_grain_column: e.target.value })}
+                  columns={temporalColumns}
+                  onChange={(v) => update({ time_grain_column: v })}
+                  empty="First temporal column in the grain"
                   placeholder="issued_date"
+                  withType
                 />
+                {sourceColumns.length > 0 && temporalColumns.length === 0 && (
+                  <p className="hint">
+                    No date or timestamp column in the scanned schema for this table, so nothing can
+                    be offered. A partition string that looks like a date is not one.
+                  </p>
+                )}
               </div>
               <div className="form-group">
                 <label>
@@ -714,7 +1090,91 @@ export default function Metrics() {
                 onChange={(e) => update({ filters: e.target.value })}
                 placeholder="status = 'ISSUED'"
               />
+              {sourceColumns.length > 0 && (
+                <p className="hint">
+                  Columns on this table: <code>{sourceColumns.map((c) => c.name).join(', ')}</code>
+                </p>
+              )}
             </div>
+
+            <details
+              className="form-section"
+              open={showParams}
+              onToggle={(e) => setShowParams(e.currentTarget.open)}
+            >
+              <summary>
+                Parameters{form.parameters.length > 0 ? ` (${form.parameters.length})` : ''}
+                <FieldHelp text="The columns a caller may filter on when they ask. Declaring any closes the set to exactly these, so a question cannot narrow the figure in a way the definition does not sanction. Declaring none leaves the table's own columns as the filter surface, which is wider but still closed." />
+              </summary>
+              <div className="metric-rows">
+                {form.parameters.map((p, i) => (
+                  <div key={i} className="metric-row">
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <ColumnField
+                        value={p.column}
+                        columns={sourceColumns}
+                        onChange={(v) => patchParam(i, { column: v })}
+                        empty="Column…"
+                        placeholder="column"
+                      />
+                    </div>
+                    <select
+                      value={p.operator}
+                      onChange={(e) => patchParam(i, { operator: e.target.value })}
+                      style={{ width: 92, flexShrink: 0 }}
+                    >
+                      {OPERATORS.map((o) => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="metric-check" title="A question that omits it is refused.">
+                      <input
+                        type="checkbox"
+                        checked={p.required}
+                        onChange={(e) => patchParam(i, { required: e.target.checked })}
+                      />
+                      Required
+                    </label>
+                    <input
+                      value={p.description || ''}
+                      onChange={(e) => patchParam(i, { description: e.target.value })}
+                      placeholder="What it narrows"
+                      style={{ flex: 2 }}
+                    />
+                    <button
+                      className="btn btn-danger btn-sm"
+                      onClick={() =>
+                        update({ parameters: form.parameters.filter((_, n) => n !== i) })
+                      }
+                      title="Remove this parameter"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {form.parameters.length === 0 && (
+                <p className="hint" style={{ marginTop: 0, marginBottom: 8 }}>
+                  None declared, so the filter surface is this table's own columns.
+                </p>
+              )}
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ marginTop: form.parameters.length > 0 ? 8 : 0 }}
+                onClick={() =>
+                  update({
+                    parameters: [
+                      ...form.parameters,
+                      { column: '', operator: '=', required: false, description: '' },
+                    ],
+                  })
+                }
+              >
+                Add parameter
+              </button>
+            </details>
 
             <div className="form-group">
               <label>
@@ -727,6 +1187,20 @@ export default function Metrics() {
                 placeholder="billings, revenue, turnover"
               />
             </div>
+
+            {Object.keys(form.entity_columns).length > 0 && (
+              <div className="form-group">
+                <label>
+                  Graph entity columns
+                  <FieldHelp text="Which result columns resolve to graph entities, as column to node label. Declared rather than guessed: matching warehouse values to node names by similarity would silently join two different clients and produce a confident, cited, wrong answer. This form does not edit them and saving keeps them exactly as they are." />
+                </label>
+                <p className="hint">
+                  {Object.entries(form.entity_columns)
+                    .map(([col, label]) => `${col} to ${label}`)
+                    .join(', ')}
+                </p>
+              </div>
+            )}
 
             {preview && (
               <div className="form-group">
@@ -750,7 +1224,7 @@ export default function Metrics() {
                 className="btn btn-ghost"
                 style={{ marginRight: 'auto' }}
                 onClick={runPreview}
-                disabled={previewing || !form.name || !form.expression}
+                disabled={previewing || !form.name || !form.expression || !shapeReady}
                 title="Compile this definition to SQL without saving it."
               >
                 {previewing ? 'Compiling…' : 'Preview SQL'}
@@ -761,7 +1235,9 @@ export default function Metrics() {
               <button
                 className="btn btn-primary"
                 onClick={save}
-                disabled={saving || !form.metric_id || !form.name || !form.expression}
+                disabled={
+                  saving || !form.metric_id || !form.name || !form.expression || !shapeReady
+                }
               >
                 {saving ? 'Saving…' : editing ? 'Save draft' : 'Create draft'}
               </button>
