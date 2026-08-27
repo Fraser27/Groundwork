@@ -472,8 +472,9 @@ function TiersStep({ router, lanes }: { router?: RouterTrace | null; lanes: Trac
     (d) => routerDecided(router) || isForbidden(router, d.tier, d.reason),
   )
   const reasonFor = new Map(dropped.map((d) => [d.tier, d.reason]))
-  // A lane the planner skipped is a fifth story: the tier was permitted and chosen, and its
-  // collaborator was missing. Kept beside the tier reasons rather than merged into them.
+  // A lane the planner skipped is a fifth story: the tier was permitted and chosen, and the lane
+  // still did not run -- its collaborator was missing, or a switch refused that lane by itself.
+  // Kept beside the tier reasons rather than merged into them.
   const laneSkips = lanes.filter((l) => !l.ran && !reasonFor.has(l.tier))
 
   return (
@@ -531,8 +532,10 @@ function TiersStep({ router, lanes }: { router?: RouterTrace | null; lanes: Trac
       {laneSkips.length > 0 && (
         <>
           <p className="qtrace-note">
-            These were permitted, and still did not run, because the part of the system they need
-            is not available in this deployment:
+            These were permitted, and still did not run. The reason is on each one: either an
+            administrator has switched that lane off — the ungoverned-query switch does this to the
+            SQL lane alone, leaving the rest of its tier running — or the part of the system it
+            needs is not available in this deployment.
           </p>
           <ul className="qtrace-list">
             {laneSkips.map((l) => (

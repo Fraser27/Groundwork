@@ -702,15 +702,17 @@ export default function Admin() {
               }
             />
             <span className="switch-track" />
-            <span>Refuse questions no approved metric can answer</span>
+            <span>Refuse SQL a model wrote, rather than a metric compiled</span>
           </label>
           <p className="card-note">
-            When on, a question that matches no approved governed metric is refused rather than
-            answered with SQL a model wrote, in the web UI and over the API alike. Governed metrics
-            are unaffected: they compile from a definition and never depended on a model.
+            When on, a question no approved metric covers is never answered with SQL a model wrote,
+            in the web UI and over the API alike. It removes that one lane and not the question:
+            tier 3 still returns its passages and its graph facts, and the trace names the lane it
+            refused. Governed metrics are unaffected — they compile from a definition and never
+            depended on a model.
           </p>
           <p className="card-note" style={{ marginTop: 9 }}>
-            Refused questions are logged. They are the best available backlog of metrics worth
+            Refused attempts are logged. They are the best available backlog of metrics worth
             defining.
           </p>
         </div>

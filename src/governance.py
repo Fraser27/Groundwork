@@ -102,9 +102,12 @@ class GovernanceSettings:
     served a different one, because "answered at a tier you disallowed" and "answered
     at the tier you asked for" must not look the same.
 
-    Distinct from `block_ungoverned_queries`, which is specifically about tier 4 and
-    logs its refusals for an admin to read. This is the general form, so a firm can
-    also forbid, say, the hybrid tier while keeping metrics and graph traversal."""
+    Coarser than `block_ungoverned_queries`, which removes one *lane* of tier 3 and logs its
+    refusals for an admin to read. This removes whole tiers, so a tenant can forbid, say, the
+    hybrid tier while keeping metrics and graph traversal. Dropping 3 here therefore also drops
+    the SQL lane, which is why both controls exist: the switch is how you keep tier 3's passages
+    and graph facts while removing only the model-written SQL inside it. The tier-4 wording this
+    docstring used to carry outlived the tier it named."""
 
     router_enabled: bool = True
     """Choose which tiers to run by similarity rather than trying them in order.
