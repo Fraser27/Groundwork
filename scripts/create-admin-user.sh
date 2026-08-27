@@ -35,7 +35,16 @@ ask() {
   echo "${__reply:-$2}"
 }
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# One trap, registered once: a second `trap ... EXIT` later would silently replace this
+# one and leak whatever the first was cleaning up.
+TMP_DIR=""
+CREATE_ERR=""
+cleanup() {
+  [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"
+  [ -n "$CREATE_ERR" ] && rm -f "$CREATE_ERR"
+  return 0
+}
+trap cleanup EXIT
 
 # ── 1. AWS CLI present, or install it ───────────────────────────────────────────
 say "Checking for the AWS CLI"
@@ -51,21 +60,33 @@ else
       else
         # Official Apple Silicon / Intel universal installer. Needs sudo, since it
         # installs into /usr/local; there is no Homebrew-free way around that.
-        tmp="$(mktemp -d)"
-        trap 'rm -rf "$tmp"' EXIT
-        curl -fsSL -o "$tmp/AWSCLIV2.pkg" "https://awscli.amazonaws.com/AWSCLIV2.pkg" \
+        TMP_DIR="$(mktemp -d)"
+        curl -fsSL -o "$TMP_DIR/AWSCLIV2.pkg" "https://awscli.amazonaws.com/AWSCLIV2.pkg" \
           || die "could not download the AWS CLI installer"
-        sudo installer -pkg "$tmp/AWSCLIV2.pkg" -target / \
+        sudo installer -pkg "$TMP_DIR/AWSCLIV2.pkg" -target / \
           || die "AWS CLI install failed"
       fi
       ;;
     Linux)
-      tmp="$(mktemp -d)"
-      trap 'rm -rf "$tmp"' EXIT
-      curl -fsSL -o "$tmp/awscliv2.zip" \
+      # unzip is not on a bare Ubuntu or minimal AL2023 image, and the installer is a zip.
+      # Worth installing here rather than failing: this is the one path every participant hits.
+      if ! command -v unzip >/dev/null 2>&1; then
+        note "unzip missing -- installing it first"
+        if command -v dnf >/dev/null 2>&1; then sudo dnf install -y unzip
+        elif command -v yum >/dev/null 2>&1; then sudo yum install -y unzip
+        elif command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y unzip
+        else die "no unzip and no package manager I recognise. Install unzip, then re-run."
+        fi
+        command -v unzip >/dev/null 2>&1 || die "could not install unzip"
+      fi
+      command -v curl >/dev/null 2>&1 || die "curl is required to download the AWS CLI installer"
+      TMP_DIR="$(mktemp -d)"
+      curl -fsSL -o "$TMP_DIR/awscliv2.zip" \
         "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" \
         || die "could not download the AWS CLI installer"
-      (cd "$tmp" && unzip -q awscliv2.zip && sudo ./aws/install)
+      # Without an explicit die, set -e would abort here with no message at all.
+      (cd "$TMP_DIR" && unzip -q awscliv2.zip && sudo ./aws/install) \
+        || die "AWS CLI install failed. Check that this user has sudo."
       ;;
     *)
       die "don't know how to install the AWS CLI on $(uname -s). Install it yourself: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
@@ -83,7 +104,10 @@ EMAIL="${1:-}"
 [[ "$EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] \
   || die "'$EMAIL' does not look like an email address"
 
-REGION="$(ask "AWS region" "${REGION:-${AWS_DEFAULT_REGION:-us-east-1}}")"
+# AWS_REGION before AWS_DEFAULT_REGION, matching the CLI's own precedence. CloudShell sets
+# only the former, from the console's Region selector, so reading just the latter would
+# offer us-east-1 to someone who opened CloudShell somewhere else entirely.
+REGION="$(ask "AWS region" "${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}")"
 TENANT_ID="$(ask "Tenant id" "${HOME_TENANT:-demo-firm}")"
 
 echo
@@ -141,7 +165,6 @@ note "tenant table $TENANT_TABLE"
 say "Creating the Cognito user"
 
 CREATE_ERR="$(mktemp)"
-trap 'rm -f "$CREATE_ERR"' EXIT
 
 if aws cognito-idp admin-create-user --region "$REGION" --user-pool-id "$USER_POOL_ID" \
     --username "$EMAIL" \
