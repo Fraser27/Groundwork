@@ -27,7 +27,6 @@ from src.api.deps import (
 from src.constants import SELECTABLE_MODELS
 from src.discovery.catalog_store import CatalogTable
 from src.discovery.enrichment import (
-    CONCERNS_TOPIC,
     DESCRIBED_AS,
     description_node,
     is_catalog_claim,
@@ -39,10 +38,14 @@ from src.discovery.enrichment_run import (
     run_enrichment,
     subject_ids_for,
 )
-from src.discovery.glue_scanner import parse_catalog_node_id, scan_catalog, table_node_id
+from src.discovery.glue_scanner import (
+    CATALOG_KINDS,
+    parse_catalog_node_id,
+    scan_catalog,
+    table_node_id,
+)
 from src.graph.assertions import (
     DESCRIPTIVE_CONFIDENCE,
-    SIGNED_OFF_STATES,
     EpistemicClass,
     ReviewState,
     SourceLocator,
@@ -260,6 +263,10 @@ async def get_ontology(domain: str) -> dict[str, Any]:
 #: "unknown" for those, so the two names are reconciled here rather than in the UI.
 UNDECLARED_LAYER = "__undeclared__"
 
+#: The `layer:` a pack declares on its Source, Table and Column kinds. Named because the cap
+#: orders this one layer differently, and a typo would silently restore the starved default view.
+CATALOG_LAYER = "catalog"
+
 
 @router.get("/tenants/{tenant}/graph/neighbourhood")
 async def neighbourhood(
@@ -356,6 +363,11 @@ def _graph_overview(
     `layer` narrows before the cap, and `truncated`/`total_edges` then describe the narrowed set.
     Reporting the whole graph's total against a filtered slice would tell a reader their catalog
     view is complete when most of it was cut.
+
+    Inside the catalog layer the sort is by depth instead, because there every edge is
+    non-governing at 1.0 and the ranking above cannot tell `HAS_TABLE` from `HAS_COLUMN` -- on a
+    wide schema the cap filled with column edges and the database and table level, which is the
+    default view, came back empty.
     """
     edges: list[dict[str, Any]] = []
     onto = services.ontology_for(ctx.tenant_id)
@@ -385,7 +397,10 @@ def _graph_overview(
             if layer in (_layer_of(onto, e["source"]), _layer_of(onto, e["target"]))
         ]
 
-    edges.sort(key=lambda e: (not e["governing"], -e["confidence"]))
+    if layer == CATALOG_LAYER:
+        edges.sort(key=lambda e: (_spine_depth(e), not e["governing"], -e["confidence"]))
+    else:
+        edges.sort(key=lambda e: (not e["governing"], -e["confidence"]))
     kept = edges[:limit]
     node_ids = {e["source"] for e in kept} | {e["target"] for e in kept}
 
@@ -403,6 +418,27 @@ def _layer_of(onto: Any, entity_id: str) -> str:
     """The layer this id's kind is declared under, named as the explorer names it."""
     found = onto.layer_of(entity_id)
     return UNDECLARED_LAYER if found == "unknown" else found
+
+
+#: Anything off the spine, which is one step past its deepest rung.
+_OFF_SPINE = len(CATALOG_KINDS)
+
+
+def _spine_depth(edge: dict[str, Any]) -> int:
+    """How far from the root of the catalog spine this edge reaches.
+
+    Derived from the endpoints rather than from a list of predicates, so a new catalog edge is
+    ordered without an edit here: `CATALOG_KINDS` is the spine in order, source then table then
+    column, and an id it does not name is a leaf hanging off it -- a description, a synonym, a
+    topic, a metric. The deeper end decides, which is what puts `HAS_COLUMN` after `HAS_TABLE` and
+    `MEASURES` last however wide the schema is.
+    """
+    return max(_node_depth(edge["source"]), _node_depth(edge["target"]))
+
+
+def _node_depth(entity_id: str) -> int:
+    ref = parse_catalog_node_id(entity_id)
+    return CATALOG_KINDS.index(ref.kind) if ref is not None else _OFF_SPINE
 
 
 def _node(entity_id: str) -> dict[str, Any]:
@@ -540,34 +576,19 @@ def _approved_synonyms(services: Any, ctx: Any, table: CatalogTable) -> list[str
 def _approved_topics(services: Any, ctx: Any, full_name: str) -> list[str]:
     """Subject matter a reviewer signed off for this table.
 
-    `CONCERNS_TOPIC` is shared with document extraction, so the predicate alone does not say what a
-    topic is about: `is_catalog_claim` checks the locator, without which every topic a filing
-    mentions would appear on a table page.
+    One scoped traversal, not a scan of every live assertion the firm holds. `CONCERNS_TOPIC` is
+    shared with document extraction, so `APPROVED_TOPICS` anchors the subject on `(s:Table)`:
+    without that every topic a filing mentions would appear on a table page.
     """
+    store = services.catalog_graph_store()
+    if store is None:
+        return []
     try:
-        records = services.review_queue.live_assertions(ctx)
+        by_table = store.approved_topics(ctx)
     except Exception as e:  # noqa: BLE001
         logger.debug("could not read topics for %s: %s", full_name, e)
         return []
-
-    found: set[str] = set()
-    for record in records:
-        a = record.assertion
-        if a.predicate != CONCERNS_TOPIC or a.review_state not in SIGNED_OFF_STATES:
-            continue
-        if not is_catalog_claim(a) or a.source_locator.table != full_name:
-            continue
-        found.add(_term_label(a.object_id))
-    return sorted(found)
-
-
-def _term_label(node_id: str) -> str:
-    """`topic:client-billing` to "client billing", the way `_node` labels any built id.
-
-    From the id rather than the node's `name` property, because no scoped read returns it.
-    """
-    _, _, slug = node_id.partition(":")
-    return (slug or node_id).replace("-", " ").replace("_", " ")
+    return list(by_table.get(full_name, ()))
 
 
 def _pending_descriptions(

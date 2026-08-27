@@ -18,6 +18,7 @@ from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.discovery.glue_scanner import (
     HAS_COLUMN,
     HAS_TABLE,
+    PARTITIONED_BY,
     column_node_id,
     source_node_id,
     table_node_id,
@@ -562,6 +563,78 @@ class TestGraphOverviewByLayer:
         """Silently ignoring it would draw the whole graph under a heading naming one layer."""
         _stage_catalog()
         assert _overview(client, layer="not-a-layer")["edges"] == []
+
+
+class TestTheCatalogCapKeepsTheSpine:
+    """Inside the catalog layer every edge is non-governing at 1.0, so governing-then-confidence
+    cannot tell `HAS_TABLE` from `HAS_COLUMN`. On a wide schema the cap filled with column edges and
+    left the database and table level -- the default view -- sparse or empty.
+    """
+
+    def test_the_spine_order_the_depth_is_derived_from_is_pinned(self):
+        """`_spine_depth` reads a position out of this tuple rather than hardcoding a predicate
+        list, so reordering it would silently invert the cap's ranking."""
+        from src.discovery.glue_scanner import CATALOG_KINDS
+
+        assert CATALOG_KINDS == ("source", "table", "column")
+
+    def test_the_source_to_table_edges_survive_a_cap_smaller_than_the_columns(self, client):
+        _stage_catalog(columns=5)
+
+        capped = _overview(client, limit=3, layer="catalog")
+        assert {e["predicate"] for e in capped["edges"]} == {HAS_TABLE}
+        assert len(capped["edges"]) == len(TABLES)
+
+    def test_a_partition_edge_ranks_with_the_columns_and_the_leaves_rank_last(self, client):
+        """`PARTITIONED_BY` reaches a column, so it is at the column level. A topic or a synonym
+        hangs off the spine rather than extending it."""
+        # Leaves first, so insertion order alone would have kept them: the old key could not
+        # separate these from the spine, and a test that agreed with it would prove nothing.
+        table_id = table_node_id(SOURCE_ID, TABLES[0])
+        _stage(
+            [
+                _declared(table_id, "CONCERNS_TOPIC", "topic:returns", TABLES[0]),
+                _declared(table_id, "HAS_SYNONYM", "synonym:refunds", TABLES[0]),
+                _declared(
+                    table_id,
+                    PARTITIONED_BY,
+                    column_node_id(SOURCE_ID, TABLES[0], "col_0"),
+                    TABLES[0],
+                ),
+            ]
+        )
+        _stage_catalog(columns=1)
+        total = len(_overview(client, limit=2000, layer="catalog")["edges"])
+        assert total == 2 * len(TABLES) + 3
+
+        capped = _overview(client, limit=total - 2, layer="catalog")
+        kept = {e["predicate"] for e in capped["edges"]}
+        assert kept == {HAS_TABLE, HAS_COLUMN, PARTITIONED_BY}
+        assert capped["truncated"] is True
+        assert capped["total_edges"] == total
+
+    def test_a_named_layer_other_than_catalog_still_leads_with_governing(self, client):
+        """Depth ordering is the catalog layer's alone. Elsewhere the edges worth keeping when the
+        cap bites are the ones that drive a consequence, whatever their confidence."""
+        _stage_governing(1)
+        _stage(
+            [
+                build_assertion(
+                    tenant_id=TENANT,
+                    subject_id="matter:M-4",
+                    predicate="MENTIONS",
+                    object_id="party:acme-0",
+                    epistemic_class=EpistemicClass.EXTRACTED_DET,
+                    method="llm:test@v1",
+                    confidence=0.9,
+                    source_locator=SourceLocator(
+                        document_id="doc-4", filename="f.pdf", page=1, quote="acme"
+                    ),
+                )
+            ]
+        )
+        edges = _overview(client, limit=1, layer="domain")["edges"]
+        assert [e["predicate"] for e in edges] == ["ADVERSE_TO"]
 
 
 class TestGraphNodeLabels:

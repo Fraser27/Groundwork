@@ -147,6 +147,21 @@ class CatalogGraphStore:
                 out.setdefault(subject, set()).add(name)
         return {k: sorted(v) for k, v in out.items()}
 
+    def approved_topics(self, ctx: AuthContext) -> dict[str, list[str]]:
+        """Approved topics per table `full_name`, in a stable order.
+
+        Keyed by `full_name` rather than by subject id, unlike the synonyms: the traversal already
+        reaches the `:Table` node, and that name is what a caller asking about one table holds.
+        """
+        rows = self.graph.read_scoped(q.APPROVED_TOPICS, edge_scope(ctx))
+        out: dict[str, set[str]] = {}
+        for row in rows:
+            full_name = str(row.get("full_name") or "")
+            name = str(row.get("name") or "").strip()
+            if full_name and name:
+                out.setdefault(full_name, set()).add(name)
+        return {k: sorted(v) for k, v in out.items()}
+
 
 def _outranks(candidate: DescriptionText, incumbent: DescriptionText | None) -> bool:
     """Whether `candidate` should be read instead of `incumbent`.

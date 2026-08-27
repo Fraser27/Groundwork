@@ -77,6 +77,18 @@ WHERE {scope}
 RETURN s.entity_id AS subject_id, t.name AS name
 """
 
+#: Topics for a tenant's tables, keyed by the table's own name. Same scoping as the synonyms.
+#:
+#: `(s:Table)` is load-bearing rather than decoration. `CONCERNS_TOPIC` is the pack's general
+#: subject-matter tag and document extraction writes it too, so matching the predicate alone would
+#: list every filing's subject matter as a property of a table. The label is the `:Topic` node's own
+#: `name`, never the slug in its id: ids are built, not parsed.
+APPROVED_TOPICS = """
+MATCH (s:Table)-[r:CONCERNS_TOPIC]->(t:Topic)
+WHERE {scope}
+RETURN s.full_name AS full_name, t.name AS name
+"""
+
 #: The tenant's configured sources, for rebuilding the catalog cache after a restart.
 #:
 #: Scoped with `node_scope`, not `edge_scope`: a source that has been registered but never scanned
@@ -142,6 +154,7 @@ ORDER BY t.full_name, c.name
 ALL_CATALOG_QUERIES = {
     "APPROVED_DESCRIPTIONS": APPROVED_DESCRIPTIONS,
     "APPROVED_SYNONYMS": APPROVED_SYNONYMS,
+    "APPROVED_TOPICS": APPROVED_TOPICS,
     "SOURCES_FOR_TENANT": SOURCES_FOR_TENANT,
     "TABLES_FOR_TENANT": TABLES_FOR_TENANT,
     "COLUMNS_FOR_TENANT": COLUMNS_FOR_TENANT,

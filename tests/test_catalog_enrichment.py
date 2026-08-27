@@ -178,6 +178,17 @@ class TestTheNodesActuallyGetWritten:
             CatalogGraphStore(graph).persist([CatalogNode("x:1", (), {"tenant_id": TENANT})]) == 0
         )
 
+    def test_topics_group_under_the_table_name_and_are_deduped(self):
+        """Two enrichment runs can propose the same topic, and the read is what collapses them."""
+        rows = [
+            {"full_name": FULL_NAME, "name": "credit risk"},
+            {"full_name": FULL_NAME, "name": "credit risk"},
+            {"full_name": FULL_NAME, "name": "collateral"},
+            {"full_name": "fin.other", "name": "shipping"},
+        ]
+        found = CatalogGraphStore(FakeGraph(rows)).approved_topics(ctx())
+        assert found == {FULL_NAME: ["collateral", "credit risk"], "fin.other": ["shipping"]}
+
 
 class TestTheOverlayPrecedence:
     """Three sources can describe a column and they are not equally authoritative."""
@@ -384,6 +395,18 @@ class TestTheCypherShape:
         assert "c.table" not in q.COLUMNS_FOR_TENANT
         assert "-[r:HAS_TABLE]->" in q.TABLES_FOR_TENANT
 
+    def test_the_topics_read_is_anchored_on_a_table(self):
+        """The one thing keeping a case file's subject matter off a table page. `CONCERNS_TOPIC` is
+        shared with document extraction, so a match on the predicate alone would list every
+        filing's topics as properties of a table."""
+        assert "(s:Table)-[r:CONCERNS_TOPIC]->(t:Topic)" in q.APPROVED_TOPICS
+
+    def test_the_topics_read_returns_the_topic_nodes_own_name(self):
+        """Not the slug in `topic:credit-risk`. Ids are built, never parsed, and un-slugging one is
+        reverse-engineering a display label out of a key."""
+        assert "t.name AS name" in q.APPROVED_TOPICS
+        assert "s.full_name AS full_name" in q.APPROVED_TOPICS
+
     def test_the_columns_read_names_its_parent_table(self):
         """Without `full_name` the rows cannot be grouped and every table hydrates with no
         columns, which looks like a scan that found empty tables."""
@@ -582,22 +605,25 @@ class TestCatalogClaimsStayOutOfTheReviewQueue:
 
 
 class RouteGraph:
-    """A graph for the table detail route: synonyms through the scope, metrics through `query`.
+    """A graph for the table detail route: synonyms and topics through the scope, metrics through
+    `query`.
 
-    The synonym rows carry a review state and this honours the scope's filter, so "only approved
-    reaches the page" is tested rather than assumed. A fake that returned every row would pass
-    whatever the route did.
+    The synonym and topic rows carry a review state and this honours the scope's filter, so "only
+    approved reaches the page" is tested rather than assumed. A fake that returned every row would
+    pass whatever the route did.
     """
 
     def __init__(
         self,
         *,
         synonyms: list[dict[str, Any]] | None = None,
+        topics: list[dict[str, Any]] | None = None,
         approved_metrics: list[dict[str, Any]] | None = None,
         measuring: list[dict[str, Any]] | None = None,
         fail: bool = False,
     ) -> None:
         self.synonyms = synonyms or []
+        self.topics = topics or []
         self.approved_metrics = approved_metrics or []
         self.measuring = measuring or []
         self.fail = fail
@@ -609,15 +635,22 @@ class RouteGraph:
 
     def read_scoped(self, template: str, scope: Any, params: Any = None) -> list[dict[str, Any]]:
         assert "{scope}" in template, "a scoped read must carry the token"
-        if template != q.APPROVED_SYNONYMS:
-            return []
-        self.reads.append("synonyms")
         states = scope.params.get("scope_states")
-        return [
-            {"subject_id": r["subject_id"], "name": r["name"]}
-            for r in self.synonyms
-            if states is None or r["review_state"] in states
-        ]
+        if template == q.APPROVED_SYNONYMS:
+            self.reads.append("synonyms")
+            return [
+                {"subject_id": r["subject_id"], "name": r["name"]}
+                for r in self.synonyms
+                if states is None or r["review_state"] in states
+            ]
+        if template == q.APPROVED_TOPICS:
+            self.reads.append("topics")
+            return [
+                {"full_name": r["full_name"], "name": r["name"]}
+                for r in self.topics
+                if states is None or r["review_state"] in states
+            ]
+        return []
 
     def query(self, cypher: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         from src.graph import metric_queries as mq
@@ -642,27 +675,14 @@ def metric_row(metric_id: str = "utilisation") -> dict[str, Any]:
     }
 
 
-def topic(
-    object_id: str = "topic:credit-risk",
+def topic_row(
+    name: str = "credit risk",
     *,
-    from_a_document: bool = False,
-    column: str | None = None,
-) -> Any:
-    locator = (
-        SourceLocator(document_id="doc-1", page=2, quote="the parties agree")
-        if from_a_document
-        else SourceLocator(source_id=SOURCE, table=FULL_NAME, column=column)
-    )
-    return build_assertion(
-        tenant_id=TENANT,
-        subject_id="document:doc-1" if from_a_document else table_node_id(SOURCE, FULL_NAME),
-        predicate=CONCERNS_TOPIC,
-        object_id=object_id,
-        epistemic_class=EpistemicClass.EXTRACTED_MODEL,
-        method="llm:m1",
-        confidence=DESCRIPTIVE_CONFIDENCE,
-        source_locator=locator,
-    )
+    full_name: str = FULL_NAME,
+    review_state: str = "APPROVED",
+) -> dict[str, Any]:
+    """One `APPROVED_TOPICS` row. The `:Topic` node's own name, never a slug to be un-parsed."""
+    return {"full_name": full_name, "name": name, "review_state": review_state}
 
 
 class TestTheTableDetailContract:
@@ -697,14 +717,6 @@ class TestTheTableDetailContract:
         client, services = self.api(graph)
         for assertion in staged or []:
             services.review_queue.stage(ctx(), [assertion], job_id="enrich")
-        return client.get(f"/api/tenants/{TENANT}/tables/{FULL_NAME}").json()
-
-    def approved(self, graph: Any, staged: list[Any]) -> dict[str, Any]:
-        client, services = self.api(graph)
-        services.review_queue.stage(ctx(), staged, job_id="enrich")
-        for assertion in staged:
-            services.review_queue.approve(ctx(), assertion.assertion_id, note="looks right")
-        services.review_queue.promote(ctx(), job_id="enrich")
         return client.get(f"/api/tenants/{TENANT}/tables/{FULL_NAME}").json()
 
     def test_an_unmeasured_table_says_so_rather_than_saying_nothing(self):
@@ -773,19 +785,16 @@ class TestTheTableDetailContract:
         assert self.detail(graph)["synonyms"] == []
 
     def test_an_approved_topic_is_shown_as_a_label(self):
-        body = self.approved(RouteGraph(), [topic()])
-        assert body["topics"] == ["credit risk"]
+        assert self.detail(RouteGraph(topics=[topic_row()]))["topics"] == ["credit risk"]
 
     def test_a_pending_topic_is_not(self):
-        body = self.detail(RouteGraph(), staged=[topic()])
-        assert body["topics"] == []
+        """The page claims nothing about review state, so a model's guess must not reach it."""
+        graph = RouteGraph(topics=[topic_row("leverage", review_state="PENDING")])
+        assert self.detail(graph)["topics"] == []
 
-    def test_a_topic_a_document_mentions_never_appears_on_a_table(self):
-        """`CONCERNS_TOPIC` is shared with document extraction, so the predicate alone does not say
-        what the claim is about. Without the locator check every filing's subject matter would be
-        listed as a property of a table."""
-        body = self.approved(RouteGraph(), [topic(from_a_document=True)])
-        assert body["topics"] == []
+    def test_another_tables_topic_does_not_leak(self):
+        graph = RouteGraph(topics=[topic_row("shipping", full_name="fin.other")])
+        assert self.detail(graph)["topics"] == []
 
     def test_the_three_fields_are_always_sent_when_the_graph_answers(self):
         """The UI reads `metrics` undefaulted and the other two with `?? []`. A field that is
