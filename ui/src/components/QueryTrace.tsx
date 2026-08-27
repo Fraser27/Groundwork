@@ -25,6 +25,7 @@ import type {
   ResolutionTier,
 } from '../api'
 import { HELP, ROUTER_LAYERS, PART_PROVENANCE_LABEL, TIERS } from '../epistemic'
+import { fillUnit, useUnitLabel } from '../useUnitLabel'
 import {
   droppedTiers,
   isForbidden,
@@ -330,6 +331,7 @@ function Layer({
   decided: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const unit = useUnitLabel()
   const meta = layer.kind in ROUTER_LAYERS ? ROUTER_LAYERS[layer.kind] : null
   const items = layer.items ?? []
 
@@ -414,7 +416,7 @@ function Layer({
         <p className="qtrace-layer-reason dim">
           {layer.hit_count > 0
             ? `${layer.hit_count} matched, but the trace carries no detail of them.`
-            : `Nothing here matched. ${meta ? meta.meaning : ''}`}
+            : `Nothing here matched. ${meta ? fillUnit(meta.meaning, unit) : ''}`}
         </p>
       )}
     </div>
@@ -470,8 +472,9 @@ function TiersStep({ router, lanes }: { router?: RouterTrace | null; lanes: Trac
     (d) => routerDecided(router) || isForbidden(router, d.tier, d.reason),
   )
   const reasonFor = new Map(dropped.map((d) => [d.tier, d.reason]))
-  // A lane the planner skipped is a fifth story: the tier was permitted and chosen, and its
-  // collaborator was missing. Kept beside the tier reasons rather than merged into them.
+  // A lane the planner skipped is a fifth story: the tier was permitted and chosen, and the lane
+  // still did not run -- its collaborator was missing, or a switch refused that lane by itself.
+  // Kept beside the tier reasons rather than merged into them.
   const laneSkips = lanes.filter((l) => !l.ran && !reasonFor.has(l.tier))
 
   return (
@@ -529,8 +532,10 @@ function TiersStep({ router, lanes }: { router?: RouterTrace | null; lanes: Trac
       {laneSkips.length > 0 && (
         <>
           <p className="qtrace-note">
-            These were permitted, and still did not run, because the part of the system they need
-            is not available in this deployment:
+            These were permitted, and still did not run. The reason is on each one: either an
+            administrator has switched that lane off — the ungoverned-query switch does this to the
+            SQL lane alone, leaving the rest of its tier running — or the part of the system it
+            needs is not available in this deployment.
           </p>
           <ul className="qtrace-list">
             {laneSkips.map((l) => (
@@ -834,6 +839,7 @@ function GateStep({
   blocks: QueryBlock[]
   usedFactCount: number
 }) {
+  const unit = useUnitLabel()
   const screens = blocks.filter((b) => b.rule === 'ethical_screen')
   const withheld = blocks.filter((b) => (b.effect ?? 'withhold') === 'withhold')
   const degraded = Boolean(gate?.degraded)
@@ -900,8 +906,8 @@ function GateStep({
         !degraded && (
           <p className="qtrace-note">
             Nothing was refused for this question. That is a result the wall produced, not an
-            absence of one: had a screened matter matched, it would be named here rather than
-            quietly left out.
+            absence of one: had a screened {unit.lower} matched, it would be named here rather
+            than quietly left out.
           </p>
         )
       ) : (
@@ -975,7 +981,7 @@ function GateStep({
                     <span className="withheld-field-label">Who to contact</span>
                     {b.contact ?? (
                       <span className="dim">
-                        No contact was given. Ask your risk team about this matter.
+                        No contact was given. Ask your risk team about this {unit.lower}.
                       </span>
                     )}
                   </div>

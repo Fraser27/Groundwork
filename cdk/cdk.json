@@ -24,7 +24,7 @@
     "appCpu": 512,
     "appMemoryMiB": 1024,
 
-    "defaultOntology": "fintech",
+    "defaultOntology": "retail",
 
     "agentCoreMcp": false,
 

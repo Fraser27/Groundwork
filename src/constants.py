@@ -18,15 +18,15 @@ GRAPH_PORT = 8182
 #: uses it too — one image, and local matches deployed.
 APP_PORT = 8000
 
-#: Ships as the default pack. `legal` and `healthcare` exist alongside it to keep the
-#: domain-agnostic claim honest; if a second pack ever stops loading, the abstraction has rotted.
+#: Ships as the default pack. The other three exist alongside it to keep the domain-agnostic
+#: claim honest; if a second pack ever stops loading, the abstraction has rotted.
 #:
 #: Changing this changes which predicates are accepted at write time, and the packs are close to
 #: disjoint: `legal` and `fintech` share only GOVERNED_BY, SUPERSEDES and MENTIONS. So a graph
 #: holding facts written under one pack will have those writes rejected under another, and the
 #: existing facts stay readable but no rule matches them. It is a per-tenant setting for that
 #: reason -- this only decides where a tenant that has never chosen starts.
-DEFAULT_ONTOLOGY_PACK = "fintech"
+DEFAULT_ONTOLOGY_PACK = "retail"
 
 #: Trust floor for retrieval, mirroring `src.graph.scope.DEFAULT_MIN_CONFIDENCE`.
 #: Duplicated rather than imported because this module must not depend on

@@ -362,4 +362,32 @@ class TestSeeding:
     def test_the_note_warns_the_metrics_are_examples(self, graph_client):
         """An operator has to know to check them against their own catalog."""
         get_services().metric_matcher = None
-        assert "fictional firm" in graph_client.post(f"{BASE}/seed").json()["note"]
+        note = graph_client.post(f"{BASE}/seed").json()["note"]
+        assert "fictional company" in note
+        assert "own catalog" in note
+
+    def test_seeding_follows_the_tenants_pack(self, graph_client):
+        """One example file per pack, because a metric names real tables. Seeding the legal
+        examples into a retail deployment gives a reader six approved-looking definitions that
+        compile against tables their catalog does not have -- which reads as a populated
+        semantic layer rather than as a mistake."""
+        from src.api.deps import load_example_pack
+
+        get_services().metric_matcher = None
+        graph_client.post(f"{BASE}/seed")
+        seeded = {m["name"] for m in graph_client.get(BASE).json()}
+        # Derived from the app's own pack rather than named, so this test says "the seeded
+        # metrics are this pack's" and keeps saying it when the default pack changes.
+        domain = get_services().ontology.domain
+        assert seeded == {m.name for m in load_example_pack(domain)}
+        other = "legal" if domain != "legal" else "retail"
+        assert not seeded & {m.name for m in load_example_pack(other)}
+
+    def test_a_pack_with_no_examples_says_so_instead_of_seeding_someone_elses(self):
+        """503 with a pointer to the Metrics page, not a silent fallback to another pack's
+        tables. There is nothing domain-neutral to offer, so offering nothing is the answer."""
+        from src.api.deps import load_example_pack
+
+        assert load_example_pack("healthcare") == []
+        assert load_example_pack("retail")
+        assert load_example_pack("legal")

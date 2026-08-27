@@ -49,6 +49,15 @@ entity_suffixes:
 # case-management reference and `table:src-1:legal.matters` is a Glue name; lowercasing either
 # breaks the join back to the system that issued it. A Party's id is minted here from words on a
 # page, so it is ours to canonicalise — which is what stops one company becoming several nodes.
+
+# Offered on the Ask and Retrieval pages, in this order. These three were hardcoded in the
+# UI, which is why a retail tenant was invited to check a conflict for a client called
+# Calder and got nothing back.
+example_questions:
+  - What were fees billed by practice area last quarter?
+  - Does acting for Calder create a conflict?
+  - Which open matters rely on authority that has been overruled?
+
 entity_types:
   - id: Matter
     label: Matter

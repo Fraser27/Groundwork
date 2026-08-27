@@ -10,7 +10,7 @@ import {
   type TenantUser,
 } from '../api'
 import { getTenantId } from '../auth'
-import { forgetUnitLabel } from '../useUnitLabel'
+import { forgetUnitLabel, useUnitLabel } from '../useUnitLabel'
 import { HELP } from '../epistemic'
 import ConfidenceBar from '../components/ConfidenceBar'
 import FieldHelp from '../components/FieldHelp'
@@ -37,6 +37,7 @@ function modelNote(settings: TenantSettings, modelId?: string): string {
 
 export default function Admin() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [settings, setSettings] = useState<TenantSettings | null>(null)
   const [retrieval, setRetrieval] = useState<RetrievalGovernance | null>(null)
   const [fieldHelp, setFieldHelp] = useState<Record<string, string>>({})
@@ -413,7 +414,8 @@ export default function Admin() {
           </div>
           <p className="card-note">
             Every read is filtered to this tenant, and there is no way to express a query that is not.
-            Matters are subgraphs within it, filtered by your grants rather than stored separately.
+            {' '}{unit.plural} are subgraphs within it, filtered by your grants rather than stored
+            separately.
           </p>
         </div>
 
@@ -439,8 +441,9 @@ export default function Admin() {
               ))}
             </select>
             <p className="hint">
-              The platform is domain-agnostic. The legal pack is the default; the healthcare pack
-              exists to keep that claim honest.
+              The platform is domain-agnostic. Each pack declares its own vocabulary, rules and
+              organising unit, and the choice is per tenant, so this changes what this tenant may
+              write and what its captions call things.
             </p>
           </div>
           {ontology && (
@@ -699,15 +702,17 @@ export default function Admin() {
               }
             />
             <span className="switch-track" />
-            <span>Refuse questions no approved metric can answer</span>
+            <span>Refuse SQL a model wrote, rather than a metric compiled</span>
           </label>
           <p className="card-note">
-            When on, a question that matches no approved governed metric is refused rather than
-            answered with SQL a model wrote, in the web UI and over the API alike. Governed metrics
-            are unaffected: they compile from a definition and never depended on a model.
+            When on, a question no approved metric covers is never answered with SQL a model wrote,
+            in the web UI and over the API alike. It removes that one lane and not the question:
+            tier 3 still returns its passages and its graph facts, and the trace names the lane it
+            refused. Governed metrics are unaffected — they compile from a definition and never
+            depended on a model.
           </p>
           <p className="card-note" style={{ marginTop: 9 }}>
-            Refused questions are logged. They are the best available backlog of metrics worth
+            Refused attempts are logged. They are the best available backlog of metrics worth
             defining.
           </p>
         </div>
@@ -782,7 +787,7 @@ export default function Admin() {
           <div className="form-group">
             <label>
               Catalog enrichment
-              <FieldHelp text="Writes plain-language descriptions for tables and columns, which are then given to the model that generates SQL. Glue says a column is mtr_stat_cd varchar(2); this is what says it is a matter status. A cheap model does this well, because it is describing names and types rather than reasoning over them. Every description it proposes waits for review before any query can use it." />
+              <FieldHelp text="Writes plain-language descriptions for tables and columns, which are then given to the model that generates SQL. Glue says a column is mtr_stat_cd varchar(2); this is what says it is a {unit} status. A cheap model does this well, because it is describing names and types rather than reasoning over them. Every description it proposes waits for review before any query can use it." />
             </label>
             <select
               value={settings.enrichment_model ?? ''}
@@ -996,9 +1001,10 @@ export default function Admin() {
         </div>
         <p className="hint">
           Replay runs inline without model extraction, so it returns a report rather than a
-          spinner. A large corpus is better replayed by re-uploading. The demo documents are in{' '}
-          <code>sample/legal-demo.zip</code> and are uploaded through Documents like any other
-          file.{' '}
+          spinner. A large corpus is better replayed by re-uploading. There is one demo pack per
+          ontology, <code>sample/&lt;pack&gt;-demo.zip</code>, uploaded through Documents like any
+          other file. Take the one matching the pack above, since a document read under the wrong
+          vocabulary produces claims no rule matches.{' '}
           <a href="/docs/demo-data.html" target="_blank" rel="noreferrer">
             Read more about resetting and rebuilding
           </a>

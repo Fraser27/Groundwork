@@ -39,6 +39,14 @@ from src.ontology.loader import available_domains, load_ontology
 
 ALL_PACKS = available_domains()
 
+# The id prefix each pack's organising unit mints, written out rather than derived.
+UNIT_PREFIXES = {
+    "fintech": "facility:U-1",
+    "healthcare": "encounter:U-1",
+    "legal": "matter:U-1",
+    "retail": "case:U-1",
+}
+
 TENANT = "firm-acme"
 ONTOLOGY = load_ontology("legal")
 
@@ -398,10 +406,13 @@ class TestPrompt:
         sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
         assert sent["this_matter"] is None
 
-    @pytest.mark.parametrize(
-        ("domain", "expected"),
-        [("legal", "matter:U-1"), ("healthcare", "encounter:U-1"), ("fintech", "facility:U-1")],
-    )
+    def test_every_shipped_pack_has_a_row_below(self):
+        """The table is written out by hand so the expectation is independent of the slug the
+        code derives it from. That only holds if a new pack is added to it, and a pack with no
+        row is a pack whose prefix nothing checks."""
+        assert set(UNIT_PREFIXES) == set(ALL_PACKS)
+
+    @pytest.mark.parametrize(("domain", "expected"), sorted(UNIT_PREFIXES.items()))
     def test_the_offered_unit_takes_the_prefix_its_own_pack_declares(self, domain, expected):
         """`matter:` is the legal pack's kind. Hardcoding it minted an id of a kind no other pack
         declares, so `entity_kind_of` returned None and `validate` dropped every claim about the

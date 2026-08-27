@@ -46,6 +46,48 @@ class TestPacksLoad:
         assert rule.method == f"rule:{rule.id}@{rule.version}"
 
 
+class TestExampleQuestionsComeFromThePack:
+    """The Ask and Retrieval pages offer questions to click. They used to be legal ones, hardcoded,
+    so a retail tenant was invited to ask about a conflict of interest and got nothing back."""
+
+    @pytest.mark.parametrize("domain", ALL_PACKS)
+    def test_every_pack_offers_at_least_one_question(self, domain):
+        """The UI renders nothing rather than a fallback, so a pack that declares none leaves the
+        demo surface blank. That is the honest behaviour, but it is not one to ship by accident."""
+        assert load_ontology(domain).example_questions
+
+    @pytest.mark.parametrize("domain", ALL_PACKS)
+    def test_questions_are_asked_in_the_packs_own_vocabulary(self, domain):
+        o = load_ontology(domain)
+        for q in o.example_questions:
+            assert q == q.strip() and q, repr(q)
+
+    def test_order_is_the_pack_authors(self, tmp_path):
+        """A tuple, not a set: the first question is the one a reader meets, and the pack author
+        chooses it. It is also the placeholder in the empty question field."""
+        from src.ontology import loader
+
+        pack = tmp_path / "ordered.yaml"
+        pack.write_text(
+            "domain: ordered\nversion: 1\nentity_types: []\ngoverning_predicates: []\n"
+            "descriptive_predicates: []\nrules: []\n"
+            "example_questions:\n  - Second to write, first to ask?\n  - '  Padded?  '\n"
+            "  - ''\n  - Last?\n"
+        )
+        o = loader._parse(__import__("yaml").safe_load(pack.read_text()))
+        assert o.example_questions == ("Second to write, first to ask?", "Padded?", "Last?")
+
+    def test_a_pack_may_decline_to_suggest_anything(self, tmp_path):
+        from src.ontology import loader
+
+        pack = tmp_path / "silent.yaml"
+        pack.write_text(
+            "domain: silent\nversion: 1\nentity_types: []\ngoverning_predicates: []\n"
+            "descriptive_predicates: []\nrules: []\n"
+        )
+        assert loader._parse(__import__("yaml").safe_load(pack.read_text())).example_questions == ()
+
+
 class TestTransitiveIsDeclaredNotAssumed:
     """Which predicates a rule may walk as a chain is a claim about the world, so the pack
     makes it and the engine does not guess."""

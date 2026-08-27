@@ -1,7 +1,7 @@
 """A tool-calling loop over the MCP server, traced turn by turn.
 
-This exists to be watched. The point is not that an agent can answer a legal question, it is
-that a person can see every tool it called, every raw result it got, and every lane the system
+This exists to be watched. The point is not that an agent can answer a question, it is that a
+person can see every tool it called, every raw result it got, and every lane the system
 searched, before we hand those same tools to a third party.
 
 Three properties it has to hold:
@@ -13,8 +13,8 @@ inside, so every graph and Athena call in them blocks the event loop. An agent a
 worker's tool call would starve the loop that has to serve it.
 
 **It has no identity.** The caller's bearer token is forwarded verbatim to MCP and never
-re-minted, so every tool call is scoped to the real end user's firm and matters. An agent with
-a service account would be a hole straight through the tenant boundary.
+re-minted, so every tool call is scoped to the real end user's tenant and to the records they
+are on. An agent with a service account would be a hole straight through the tenant boundary.
 
 **It stops.** Caps are enforced here rather than trusted to the model or the SDK, and each one
 reports a distinct `stop_reason` so a reader can tell "it finished" from "we cut it off". The

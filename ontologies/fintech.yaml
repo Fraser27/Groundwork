@@ -38,6 +38,14 @@ entity_suffixes:
 # `partners`, `treasury`. Each is part of a name rather than its legal form, and in this domain
 # they are frequently the *only* thing distinguishing a parent from its financing vehicle.
 
+# Offered on the Ask and Retrieval pages, in this order. One per rule in this pack, plus a
+# metric question first: a reader who meets `group_exposure_via_control` before seeing a
+# compiled figure has no baseline to judge the derived one against.
+example_questions:
+  - What is our total drawn exposure by facility?
+  - Which facilities reach one counterparty through a controlled group?
+  - Are we lending to a party related to one of the facility's own obligors?
+
 entity_types:
   - id: Facility
     label: Facility

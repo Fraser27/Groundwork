@@ -18,6 +18,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import type { ReasonerReport, RuleDef } from '../api'
 import FieldHelp from './FieldHelp'
+import { useUnitLabel } from '../useUnitLabel'
 
 /** `conclusions_refused` entries are `${rule_id}: ${error}`. Split so the rule can be named. */
 function splitRefusal(line: string): { ruleId: string; detail: string } {
@@ -34,6 +35,7 @@ export default function ReasonerReportPanel({
   /** The pack's rules, so the ones that ran and found nothing can be named rather than counted. */
   rules?: RuleDef[]
 }) {
+  const unit = useUnitLabel()
   const starved = Object.entries(report.rules_starved ?? {})
   const skipped = Object.entries(report.rules_skipped ?? {})
   const refused = (report.conclusions_refused ?? []).map(splitRefusal)
@@ -221,7 +223,7 @@ export default function ReasonerReportPanel({
               <tr>
                 <th>Conclusion</th>
                 <th>Rule</th>
-                <th>Matter</th>
+                <th>{unit.singular}</th>
                 <th className="num">Premises</th>
                 <th className="num">Confidence</th>
               </tr>

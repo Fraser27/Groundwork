@@ -534,6 +534,10 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
         # pack instead of hardcoding "Matter". The scoping key is still `matter_id` -- renaming that
         # would touch Cedar, a Cognito group and a Neptune constraint to change a caption.
         "unit_label": _unit_label(services, ctx.tenant_id),
+        # Questions worth asking of this pack's data. Hardcoded in the UI until now, and one of them
+        # asked whether acting for a client called Calder created a conflict -- so under any pack but
+        # legal, the one affordance telling a new reader what to ask returned nothing at all.
+        "example_questions": list(services.ontology_for(ctx.tenant_id).example_questions),
     }
 
 

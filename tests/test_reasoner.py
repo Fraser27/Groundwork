@@ -718,6 +718,230 @@ class TestTheSameEngineRunsAnotherDomain:
         assert Reasoner(load_ontology("healthcare")).run(ctx, facts).count == 0
 
 
+class TestTheRetailPackFindsWhatTheWorkshopPromises:
+    """Every rule in the retail pack, on the facts its demo documents actually carry.
+
+    A workshop is a promise made in advance: the participant uploads four PDFs and is told three
+    findings will appear. If a rule silently stops matching -- a renamed predicate, a premise typed
+    to a kind the extractor no longer mints -- the pack still loads, the ingest still succeeds and
+    the reasoner reports nothing. Nothing goes red, and the demo fails in front of a room.
+
+    The ids here are the ones the pack's own prefixes produce, and the clause is spelled as both
+    documents spell it, because that spelling is the join.
+    """
+
+    CASE = "LP-2026-0088"
+    CLAUSE = "policyclause:provision-2-4-of-the-return-policy-manual-2025"
+    APPROVAL = "document:lp-2026-0088-return-approval"
+    SAM = "customer:sam-parker"
+
+    @pytest.fixture
+    def retail_ctx(self) -> AuthContext:
+        return AuthContext(user_id="lp@anycorp.example", tenant_id=TENANT)
+
+    def _run(self, ctx, facts):
+        return Reasoner(load_ontology("retail")).run(ctx, facts)
+
+    def test_an_approval_under_a_withdrawn_clause_is_flagged(self, retail_ctx):
+        """The approval cites the clause; a bulletin issued a fortnight earlier withdrew it.
+        Neither document mentions the other, which is why no reader of either would notice."""
+        report = self._run(
+            retail_ctx,
+            [
+                fact(self.APPROVAL, "RELIES_ON", self.CLAUSE, matter=self.CASE),
+                fact(
+                    "document:pol-2026-03-policy-bulletin",
+                    "SUPERSEDES",
+                    self.CLAUSE,
+                    matter="POL-2026-03",
+                ),
+            ],
+        )
+        assert report.count == 1
+        a = report.inferences[0].assertion
+        assert a.rule_id == "exception_on_superseded_policy"
+        assert (a.subject_id, a.predicate, a.object_id) == (
+            self.APPROVAL,
+            "RELIES_ON_SUPERSEDED_POLICY",
+            self.CLAUSE,
+        )
+
+    def test_a_clause_spelled_two_ways_finds_nothing(self, retail_ctx):
+        """Why both demo documents cite "Provision 2.4" character for character. The join is on
+        the node id, and nothing merges two spellings of one clause without a person asking, so a
+        loosely described clause leaves two nodes and a rule with nothing to match. This is the
+        failure the generator's docstring warns about, pinned so it cannot return quietly."""
+        report = self._run(
+            retail_ctx,
+            [
+                fact(self.APPROVAL, "RELIES_ON", self.CLAUSE, matter=self.CASE),
+                fact(
+                    "document:pol-2026-03-policy-bulletin",
+                    "SUPERSEDES",
+                    "policyclause:section-2-return-windows-by-category",
+                    matter="POL-2026-03",
+                ),
+            ],
+        )
+        assert report.count == 0
+
+    def test_an_exception_granted_during_an_open_case_is_flagged(self, retail_ctx):
+        """The finding no single document contains: a goodwill refund on the 16th, a loss
+        prevention file opened on the 6th, and two teams who never saw each other's page."""
+        report = self._run(
+            retail_ctx,
+            [
+                fact(f"case:{self.CASE}", "INVESTIGATES", self.SAM, matter=self.CASE),
+                fact(self.APPROVAL, "APPROVES_EXCEPTION_FOR", self.SAM, matter=self.CASE),
+            ],
+        )
+        assert report.count == 1
+        a = report.inferences[0].assertion
+        assert a.rule_id == "exception_during_investigation"
+        assert (a.subject_id, a.predicate, a.object_id) == (
+            self.APPROVAL,
+            "EXCEPTION_AGAINST_OPEN_CASE",
+            self.SAM,
+        )
+
+    def _resale_findings(self, report):
+        return {
+            (i.assertion.object_id, i.assertion.rule_id)
+            for i in report.inferences
+            if i.assertion.predicate == "RELATED_PARTY_RESALE"
+        }
+
+    def test_control_is_walked_through_the_interposed_holding_company(self, retail_ctx):
+        """Two hops, because that is the shape the demo memo describes and the shape a real ring
+        takes. A one-hop premise would pass every other test in this class and miss the finding
+        the pack exists to make, since no record shows both ends of the chain.
+
+        The middle is a `Company`, which is the honest kind for a vehicle the memo calls
+        non-trading, and the finding names only the storefront: the path's declared end is a
+        Merchant, so the ladder is walked through the holding company without concluding that
+        anyone resells through it.
+        """
+        report = self._run(
+            retail_ctx,
+            [
+                fact(f"case:{self.CASE}", "INVESTIGATES", self.SAM, matter=self.CASE),
+                fact(self.SAM, "CONTROLS", "company:parker-holdings-llc", matter="MEM-2026-0231"),
+                fact(
+                    "company:parker-holdings-llc",
+                    "CONTROLS",
+                    "merchant:pixelperfect-resale",
+                    matter="MEM-2026-0231",
+                ),
+            ],
+        )
+        assert self._resale_findings(report) == {
+            ("merchant:pixelperfect-resale", "related_party_resale")
+        }
+        assert all(i.assertion.subject_id == f"case:{self.CASE}" for i in report.inferences)
+
+    def test_a_merchant_in_the_middle_is_still_walked_through(self, retail_ctx):
+        """`Company` is the honest kind for a holding vehicle, not a required one: a chain may
+        legitimately run through a merchant that does trade here, and an extractor reading a memo
+        that says so should not have the chain silently stop. Kept alongside the case above because
+        this is the same-kind shape the other packs' chains are made of."""
+        report = self._run(
+            retail_ctx,
+            [
+                fact(f"case:{self.CASE}", "INVESTIGATES", self.SAM, matter=self.CASE),
+                fact(self.SAM, "CONTROLS", "merchant:parker-holdings-llc", matter="MEM-2026-0231"),
+                fact(
+                    "merchant:parker-holdings-llc",
+                    "CONTROLS",
+                    "merchant:pixelperfect-resale",
+                    matter="MEM-2026-0231",
+                ),
+            ],
+        )
+        # Both ends are Merchants here, so both are legitimate ends of the path.
+        assert self._resale_findings(report) == {
+            ("merchant:parker-holdings-llc", "related_party_resale"),
+            ("merchant:pixelperfect-resale", "related_party_resale"),
+        }
+
+    def test_a_supersession_two_revisions_back_is_still_found(self, retail_ctx):
+        """Why `SUPERSEDES` is walked as a chain rather than a single edge. The desk cited the 2025
+        wording; a 2026 bulletin replaced the amendment that replaced it. A one-hop premise finds
+        the revision only when the desk happens to cite the most recent link, which is the citation
+        least likely to be stale in the first place."""
+        report = self._run(
+            retail_ctx,
+            [
+                fact(self.APPROVAL, "RELIES_ON", self.CLAUSE, matter=self.CASE),
+                fact(
+                    "document:pol-2026-03-policy-bulletin",
+                    "SUPERSEDES",
+                    "policyclause:provision-2-4a-interim-amendment",
+                    matter="POL-2026-03",
+                ),
+                fact(
+                    "policyclause:provision-2-4a-interim-amendment",
+                    "SUPERSEDES",
+                    self.CLAUSE,
+                    matter="POL-2026-03",
+                ),
+            ],
+        )
+        stale = {
+            i.assertion.object_id
+            for i in report.inferences
+            if i.assertion.predicate == "RELIES_ON_SUPERSEDED_POLICY"
+        }
+        assert self.CLAUSE in stale
+
+    def test_a_cross_case_conclusion_belongs_to_no_single_case(self, retail_ctx):
+        """The supersession sits under POL-2026-03 and the approval under the case, on purpose --
+        filing the bulletin in the case would put it inside the file it is meant to be found from.
+        So the conclusion spans two units and is stamped with neither, or it would be invisible
+        from one of the two places a person looks for it."""
+        report = self._run(
+            retail_ctx,
+            [
+                fact(self.APPROVAL, "RELIES_ON", self.CLAUSE, matter=self.CASE),
+                fact(
+                    "document:pol-2026-03-policy-bulletin",
+                    "SUPERSEDES",
+                    self.CLAUSE,
+                    matter="POL-2026-03",
+                ),
+            ],
+        )
+        assert report.inferences[0].assertion.matter_id is None
+
+    def test_an_unreviewed_guess_does_not_flag_a_customer(self, retail_ctx):
+        """Same floor as every other pack, checked here because these findings name a person as a
+        suspected fraudster. `min_premise_class: EXTRACTED_MODEL` means a model may supply the
+        premise, but the review gate still decides whether it counts."""
+        report = self._run(
+            retail_ctx,
+            [
+                fact(
+                    f"case:{self.CASE}",
+                    "INVESTIGATES",
+                    self.SAM,
+                    matter=self.CASE,
+                    review_state=ReviewState.PENDING,
+                ),
+                fact(self.APPROVAL, "APPROVES_EXCEPTION_FOR", self.SAM, matter=self.CASE),
+            ],
+        )
+        assert report.count == 0
+
+    def test_every_rule_in_the_pack_is_covered_above(self):
+        """The cases above are written by hand, so a fourth rule added to the pack would go
+        untested without anything failing. This is what fails instead."""
+        covered = {
+            "exception_on_superseded_policy",
+            "exception_during_investigation",
+            "related_party_resale",
+        }
+        assert {r.id for r in load_ontology("retail").rules} == covered
+
+
 class TestReportsAreLegible:
     def test_the_report_says_what_it_did(self, ctx):
         legal = load_ontology("legal")
@@ -1333,9 +1557,7 @@ class TestARuleWalksAChain:
         assert by_target["party:l1"] == pytest.approx(0.95 * 0.95**3)
         load_ontology.cache_clear()
 
-    def test_a_decayed_conflict_would_fall_under_the_governance_floor(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_decayed_conflict_would_fall_under_the_governance_floor(self, tmp_path, monkeypatch):
         """Why vetoes had to stop being filtered by confidence first. A 3-hop conclusion off a
         0.95 premise lands under 0.8, so had the trust floor still applied to blocks this
         conclusion would be derived, approved, and then dropped by the veto path -- a conflict

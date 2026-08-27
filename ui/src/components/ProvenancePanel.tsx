@@ -19,6 +19,7 @@ import DocumentViewer from './DocumentViewer'
 import EpistemicBadge from './EpistemicBadge'
 import ConfidenceBar from './ConfidenceBar'
 import FieldHelp from './FieldHelp'
+import { useUnitLabel } from '../useUnitLabel'
 
 export function SourceSpan({
   text,
@@ -51,11 +52,12 @@ export function Triple({ a }: { a: Assertion }) {
 
 /** One premise row. A premise that is itself inferred says so, and says how deep it goes. */
 function PremiseRow({ premise, onSelect }: { premise: Premise; onSelect?: (id: string) => void }) {
+  const unit = useUnitLabel()
   if (!premise.visible) {
     return (
       <div className="proof-row proof-row-hidden">
         <span className="proof-triple">
-          A fact you are not cleared to see, on another matter.
+          A fact you are not cleared to see, on another {unit.lower}.
         </span>
         <code className="proof-method">{premise.assertion_id.slice(0, 12)}</code>
       </div>
@@ -140,6 +142,7 @@ export default function ProvenancePanel({
   onSelectAssertion?: (assertionId: string) => void
   compact?: boolean
 }) {
+  const unit = useUnitLabel()
   const [viewing, setViewing] = useState(false)
   const a = provenance.assertion
   const citation = provenance.document
@@ -255,7 +258,7 @@ export default function ProvenancePanel({
             {a.matter_id && (
               <div>
                 <dt>
-                  Matter
+                  {unit.singular}
                   <FieldHelp text={HELP.matterWall} />
                 </dt>
                 <dd>

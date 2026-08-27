@@ -93,6 +93,16 @@ export const REVIEW_STATE_LABEL: Record<ReviewState, string> = {
 
 // ── Glossary. Single source for every term that earns a (?) tooltip. ────────
 
+/**
+ * Help text may contain `{unit}`, `{units}`, `{Unit}` and `{Units}`, substituted with whatever the
+ * tenant's ontology pack calls the unit work is organised by -- Matter for law, Encounter for care,
+ * Facility for lending, Case for retail. `FieldHelp` does the substitution, so a string handed to it
+ * needs nothing at the call site; anything rendering one of these strings directly has to pass it
+ * through `fillUnit` first, or the placeholder shows up on screen.
+ *
+ * Spell the word out and this text lies the moment an admin switches pack, which is how the
+ * navigation came to read Facilities while the Documents page still asked for a matter.
+ */
 export const HELP = {
   epistemicClass:
     'How the system came to believe a fact: declared by a system of record, quoted from a document and checked, read into a document by a language model, inferred by a rule, or guessed. Every fact in Groundwork carries one, which is what lets you ask why it is believed.',
@@ -125,29 +135,29 @@ export const HELP = {
   descriptivePredicate:
     'A subject-matter tag. The list is open. Sprawl here costs search precision, not a negligence claim.',
   matterWall:
-    'An ethical wall. Matters you are walled off from are invisible to you: they do not appear in results, counts, or the graph. A denial always beats a permission, so a broad role cannot defeat a wall.',
+    'An ethical wall. {Units} you are walled off from are invisible to you: they do not appear in results, counts, or the graph. A denial always beats a permission, so a broad role cannot defeat a wall.',
   matterAssignment:
-    'Being on a matter’s team. You can read a matter only if someone put you on it, so the starting position for everyone is no access at all. Taking someone off does not erase the record that they were on it, the file has to show who could read what, and when.',
+    'Being on a {unit}’s team. You can read a {unit} only if someone put you on it, so the starting position for everyone is no access at all. Taking someone off does not erase the record that they were on it, the file has to show who could read what, and when.',
   ethicalScreen:
-    'A recorded instruction that one person must not see one matter, whatever else they hold. It overrides being on the team, and it overrides holding the administrator role, because a wall a senior person can read through is not a wall. Lifting one is also recorded rather than tidied away.',
+    'A recorded instruction that one person must not see one {unit}, whatever else they hold. It overrides being on the team, and it overrides holding the administrator role, because a wall a senior person can read through is not a wall. Lifting one is also recorded rather than tidied away.',
   blockKinds:
-    'Three different findings are listed here, and they call for different reactions. An ethical screen is a recorded instruction that one person must not see one matter. A potential conflict means the firm may be on both sides of a party, a conduct question for a lawyer to judge. Relying on overruled authority is neither: it means a document rests on a case that has since been overturned, so the advice was very likely right when written and now needs revising. Only the first two are about ethics, and only a screen withholds anything. A conflict and a stale citation are reported for you to weigh, with the evidence left intact.',
+    'Three different findings are listed here, and they call for different reactions. An ethical screen is a recorded instruction that one person must not see one {unit}. A potential conflict means the firm may be on both sides of a party, a conduct question for a person to judge. Relying on superseded authority is neither: it means a document rests on a rule that has since been withdrawn, so the advice was very likely right when written and now needs revising. Only the first two are about ethics, and only a screen withholds anything. A conflict and a stale citation are reported for you to weigh, with the evidence left intact.',
   accessDecision:
-    'The reason a matter is or is not open to someone, in four possibilities: they are on the team; they are screened from it; nobody has put them on it; or they hold the administrator role and can reach it without being on the team. Naming the reason matters, “screened” calls for a conversation with the risk team, while “not on the team” is usually just someone forgetting to staff them.',
+    'The reason a {unit} is or is not open to someone, in four possibilities: they are on the team; they are screened from it; nobody has put them on it; or they hold the administrator role and can reach it without being on the team. Naming the reason matters, “screened” calls for a conversation with the risk team, while “not on the team” is usually just someone forgetting to staff them.',
   accessAudit:
-    'The record of every change to who may read what: who made the change, who it was about, which matter, the reason given, and when. Entries are only ever added, never edited or removed, which is what makes it usable as evidence.',
+    'The record of every change to who may read what: who made the change, who it was about, which {unit}, the reason given, and when. Entries are only ever added, never edited or removed, which is what makes it usable as evidence.',
   platformAdminAccess:
-    'Access held because of a role rather than because anyone staffed the person onto the matter. It is shown separately for exactly that reason: it is the entry a reviewer should ask about. A screen still overrides it.',
+    'Access held because of a role rather than because anyone staffed the person onto the {unit}. It is shown separately for exactly that reason: it is the entry a reviewer should ask about. A screen still overrides it.',
   asOf:
     'Reconstructs what the file showed on a chosen date, including facts since retracted. This is the question that matters when someone asks what you knew at the time you advised.',
   bitemporal:
     'Two clocks. World time is when a fact was true; transaction time is when the system learned it. Keeping both is what makes "what did we know then" answerable.',
   tenant:
-    'One firm. Each tenant has its own graph and every read is filtered to it. Matters are subgraphs inside a tenant, not separate graphs, because conflict checking is by definition cross-matter.',
+    'One organisation. Each tenant has its own graph and every read is filtered to it. {Units} are subgraphs inside a tenant, not separate graphs, because conflict checking is by definition across all of them.',
   timeGrain:
     'The coarsest time buckets this metric may be reported in, monthly, quarterly, and so on. Fixed per metric so the same number cannot be quietly re-cut into a period it is not valid for.',
   additivity:
-    'Whether a measure may be summed across periods. Fees billed are additive; matter headcount is not, adding it across months produces a number that means nothing.',
+    'Whether a measure may be summed across periods. Amounts billed are additive; a count of open {units} is not, adding it across months produces a number that means nothing.',
   governedMetric:
     'A metric definition that compiles to SQL deterministically. The same question always produces the same SQL, and no language model is involved in generating it.',
   resolutionTier:
@@ -218,35 +228,35 @@ export const ACCESS_DECISIONS: Record<AccessDecision, AccessDecisionMeta> = {
   ALLOWED: {
     label: 'On the team',
     colour: 'var(--green)',
-    meaning: 'Someone put this person on the matter, so they can read it.',
+    meaning: 'Someone put this person on the {unit}, so they can read it.',
     action: 'Nothing to do. Check the team list is still the right one.',
   },
   SCREENED: {
     label: 'Screened',
     colour: 'var(--red)',
     meaning:
-      'A wall was raised against this person on this matter. It overrides being on the team and it overrides the administrator role.',
+      'A wall was raised against this person on this {unit}. It overrides being on the team and it overrides the administrator role.',
     action:
-      'The person is told the matter by name, shown the reason, and pointed at the contact. Lift it only with a reason of your own.',
+      'The person is told the {unit} by name, shown the reason, and pointed at the contact. Lift it only with a reason of your own.',
   },
   NOT_ASSIGNED: {
     label: 'Not on the team',
     colour: 'var(--text-dim)',
-    meaning: 'Nobody has put this person on the matter, so it is closed to them.',
+    meaning: 'Nobody has put this person on the {unit}, so it is closed to them.',
     action: 'Not a wall, nobody decided anything. Add them if they should be working on it.',
   },
   PLATFORM_ADMIN: {
     label: 'By role',
     colour: 'var(--orange)',
     meaning:
-      'Readable because this person holds the administrator role, not because anyone staffed them onto the matter.',
+      'Readable because this person holds the administrator role, not because anyone staffed them onto the {unit}.',
     action: 'The entry worth questioning. Screen them from anything they should not reach.',
   },
 }
 
 export const ACCESS_ACTION_LABEL: Record<string, string> = {
-  ASSIGN: 'Added to matter',
-  UNASSIGN: 'Removed from matter',
+  ASSIGN: 'Added to {unit}',
+  UNASSIGN: 'Removed from {unit}',
   SCREEN: 'Screen raised',
   LIFT_SCREEN: 'Screen lifted',
 }
@@ -386,13 +396,13 @@ export const ROUTER_LAYERS: Record<RouterLayerKind, LayerMeta> = {
   metric: {
     label: 'Governed metrics',
     colour: 'var(--green)',
-    meaning: 'The approved metric definitions this firm has written.',
+    meaning: 'The approved metric definitions this organisation has written.',
     items: 'the metrics that matched, and what each measures',
   },
   entity: {
     label: 'Graph entities',
     colour: 'var(--epi-declared)',
-    meaning: 'The parties, matters and authorities recorded in the graph.',
+    meaning: 'The parties, {units} and authorities recorded in the graph.',
     items: 'the entities that matched, and their type',
   },
   table: {

@@ -1,7 +1,7 @@
 """Author governed metrics against the Iceberg demo tables, and approve what runs.
 
 Tier 1 reads `list_metrics(approved_only=True)`, so a draft answers nothing. The shipped pack in
-`sample/metrics.yaml` is examples for a fictional firm pointing at `legal_ops.*` tables that do not
+`sample/metrics/legal.yaml` is examples for a fictional firm pointing at `legal_ops.*` tables that do not
 exist, and it seeds as drafts deliberately -- so until now the tenant had no metric that could
 answer anything, and the Athena wiring had nothing to prove itself with.
 

@@ -1,18 +1,23 @@
 /**
- * Create a matter, and file documents under one.
+ * Create an organising unit, and file documents under one.
  *
- * A matter is a record now rather than a side effect of grouping facts, which is what makes both
- * of these possible. Before, a matter existed only because a document referred to it, so an empty
- * matter could not be created and a mistyped reference silently became a second matter that
- * nothing queried.
+ * The unit is a record now rather than a side effect of grouping facts, which is what makes both of
+ * these possible. Before, it existed only because a document referred to it, so an empty one could
+ * not be created and a mistyped reference silently became a second record that nothing queried.
  *
- * The reference is the firm's own, not generated here: a matter already has one in the firm's
+ * The reference is the firm's own, not generated here: the unit already has one in the firm's
  * systems, and inventing a second guarantees the two diverge.
+ *
+ * Every caption reads its noun from `useUnitLabel` -- Matter for law, Encounter for care, Facility
+ * for lending, Case for retail. The file keeps its name because `matter_id` is the scoping key
+ * everywhere in the API, the graph, Cedar and a Cognito group; renaming that to relabel a dialog
+ * would be the wrong trade.
  */
 
 import { useState } from 'react'
 
 import FieldHelp from './FieldHelp'
+import { useUnitLabel } from '../useUnitLabel'
 
 export function CreateMatterDialog({
   busy,
@@ -23,6 +28,7 @@ export function CreateMatterDialog({
   onCancel: () => void
   onSubmit: (matterId: string, name: string) => void
 }) {
+  const unit = useUnitLabel()
   const [matterId, setMatterId] = useState('')
   const [name, setName] = useState('')
   const ready = matterId.trim().length > 0 && name.trim().length > 0
@@ -30,22 +36,27 @@ export function CreateMatterDialog({
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>New matter</h3>
+        <h3>New {unit.lower}</h3>
         <p className="modal-sub">
-          The matter exists as soon as you create it, before any document is filed under it. That
-          is the order real work happens in: a team is staffed and an ethical screen raised before
-          the first document arrives.
+          The {unit.lower} exists as soon as you create it, before any document is filed under it.
+          That is the order real work happens in: a team is staffed and an ethical screen raised
+          before the first document arrives.
         </p>
 
         <div className="form-group">
           <label>
             Reference
-            <FieldHelp text="Your firm's own reference, exactly as it appears in your systems. Not generated here: a second reference invented by this system would drift from the real one, and then two records describe one matter." />
+            <FieldHelp
+              text={`Your firm's own reference, exactly as it appears in your systems. Not generated here: a second reference invented by this system would drift from the real one, and then two records describe one ${unit.lower}.`}
+            />
           </label>
+          {/* Placeholders are deliberately generic. A worked example would have to be a legal
+              reference or a retail one, and whichever was hardcoded would read as wrong in every
+              other pack -- the same leak that put "Choose a matter" under a Facilities heading. */}
           <input
             value={matterId}
             onChange={(e) => setMatterId(e.target.value)}
-            placeholder="NTL-2026-0114"
+            placeholder="Your reference"
             autoFocus
           />
         </div>
@@ -55,11 +66,11 @@ export function CreateMatterDialog({
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Northwind Trading Ltd v Calder Shipping AG"
+            placeholder="A short description somebody will recognise"
           />
           {!ready && (
             <p className="hint">
-              Both are required. A list of bare references is unreadable, and a matter with no
+              Both are required. A list of bare references is unreadable, and a {unit.lower} with no
               reference cannot be filed against.
             </p>
           )}
@@ -74,7 +85,7 @@ export function CreateMatterDialog({
             disabled={!ready || busy}
             onClick={() => onSubmit(matterId.trim(), name.trim())}
           >
-            {busy ? 'Creating…' : 'Create matter'}
+            {busy ? 'Creating…' : `Create ${unit.lower}`}
           </button>
         </div>
       </div>
@@ -96,6 +107,7 @@ export function LinkDocumentsDialog({
   onCancel: () => void
   onSubmit: (matterId: string, reason: string) => void
 }) {
+  const unit = useUnitLabel()
   const [matterId, setMatterId] = useState('')
   const [reason, setReason] = useState('')
 
@@ -103,27 +115,27 @@ export function LinkDocumentsDialog({
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>
-          File {count} document{count === 1 ? '' : 's'} under a matter
+          File {count} document{count === 1 ? '' : 's'} under a {unit.lower}
         </h3>
         <p className="modal-sub">
-          Every fact read out of these documents moves with them. Citations are untouched: the
-          matter is not part of what identifies a fact, so nothing is re-read and no page or quote
-          changes.
+          Every fact read out of these documents moves with them. Citations are untouched: the{' '}
+          {unit.lower} is not part of what identifies a fact, so nothing is re-read and no page or
+          quote changes.
         </p>
 
         <div className="consequence">
           <div className="consequence-title">This changes who can read these facts</div>
           <ul>
             <li>
-              Matter access is by assignment, so a document moved into a matter somebody is not
-              staffed on becomes invisible to them.
+              {unit.singular} access is by assignment, so a document moved into a {unit.lower}{' '}
+              somebody is not staffed on becomes invisible to them.
             </li>
             <li>
-              Moved out of a matter they are screened from, it becomes visible. A screen follows
-              the matter, not the document.
+              Moved out of a {unit.lower} they are screened from, it becomes visible. A screen
+              follows the {unit.lower}, not the document.
             </li>
             <li>
-              Recorded on the Audit page with your name, the time, and the matter each document
+              Recorded on the Audit page with your name, the time, and the {unit.lower} each document
               came from, because an access change made through a data operation is still an access
               change.
             </li>
@@ -131,9 +143,9 @@ export function LinkDocumentsDialog({
         </div>
 
         <div className="form-group">
-          <label>Matter</label>
+          <label>{unit.singular}</label>
           <select value={matterId} onChange={(e) => setMatterId(e.target.value)}>
-            <option value="">Choose a matter…</option>
+            <option value="">Choose a {unit.lower}…</option>
             {matters.map((m) => (
               <option key={m.matter_id} value={m.matter_id}>
                 {m.matter_id}
@@ -151,7 +163,7 @@ export function LinkDocumentsDialog({
           <input
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="Filed under the wrong matter on upload."
+            placeholder={`Filed under the wrong ${unit.lower} on upload.`}
           />
         </div>
 

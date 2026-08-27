@@ -1,10 +1,13 @@
 /**
- * Who may read which matter.
+ * Who may read which organising unit.
  *
- * Matter-centric first, because access is allowlist-primary: a user sees only the
- * matters someone put them on, so the everyday task is staffing a matter rather than
- * auditing a person. The by-user view exists for the other question — "what can this
- * lawyer reach, and why" — which is what a risk reviewer actually asks.
+ * Unit-centric first, because access is allowlist-primary: a user sees only the units
+ * someone put them on, so the everyday task is staffing a unit rather than auditing a
+ * person. The by-user view exists for the other question — "what can this person reach,
+ * and why" — which is what a risk reviewer actually asks.
+ *
+ * Every caption reads its noun from `useUnitLabel`, so this page says Facility under the
+ * lending pack and Case under retail. The scoping key stays `matter_id`.
  *
  * A screen beats an assignment and beats the administrator role. Both views render that
  * ordering rather than reporting a simple yes or no, because "screened" needs a
@@ -25,8 +28,25 @@ import AccessAudit from '../components/AccessAudit'
 import FieldHelp from '../components/FieldHelp'
 import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDate } from '../format'
+import { fillUnit, useUnitLabel } from '../useUnitLabel'
 
-const ROLES = ['supervising partner', 'associate', 'paralegal', 'trainee', 'support'] as const
+/**
+ * Suggestions, not a vocabulary. The API takes `role` as free text (`routes_access.py`
+ * `AssignRequest.role: str = "member"`), stores it on the assignment and copies it into the audit
+ * detail. It grants nothing -- access comes from the assignment existing, so a trainee and a
+ * supervising partner read exactly the same facts. The role answers "why was this person staffed
+ * on", for whoever reads the trail later.
+ *
+ * So these are deliberately domain-neutral and the field is editable. The previous list was
+ * `supervising partner / associate / paralegal / trainee / support`, which offered a returns
+ * supervisor the word "paralegal" -- the same leak that put "Choose a matter" under a Facilities
+ * heading, except the API never enforced this one, so the fix is a better default rather than a
+ * new pack field.
+ */
+const ROLES = ['owner', 'reviewer', 'contributor', 'observer'] as const
+
+/** What the API assumes when no role is sent, so the field starts where the server would. */
+const DEFAULT_ROLE = 'contributor'
 
 type View = 'matter' | 'user'
 
@@ -43,6 +63,7 @@ type Pending =
 
 export default function Access() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [view, setView] = useState<View>('matter')
   const [matters, setMatters] = useState<MatterRef[]>([])
   const [users, setUsers] = useState<DirectoryUser[]>([])
@@ -57,7 +78,7 @@ export default function Access() {
   const [loadedKey, setLoadedKey] = useState<string | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
   const [addUser, setAddUser] = useState('')
-  const [addRole, setAddRole] = useState<string>(ROLES[1])
+  const [addRole, setAddRole] = useState<string>(DEFAULT_ROLE)
   const [refreshKey, setRefreshKey] = useState(0)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
 
@@ -151,7 +172,10 @@ export default function Access() {
   const doAssign = async () => {
     if (!matterId || !addUser) return
     try {
-      await api.assign(tenant, { user_id: addUser, matter_id: matterId, role: addRole })
+      // Trimmed, and blank falls back rather than storing an empty string: the field is typed
+      // into now, and `role: ''` would read in the trail as a role deliberately left off.
+      const role = addRole.trim() || DEFAULT_ROLE
+      await api.assign(tenant, { user_id: addUser, matter_id: matterId, role })
       showToast(`${userLabels[addUser] ?? addUser} added to ${matterLabels[matterId] ?? matterId}`)
     } catch {
       showToast('Could not add that person. Nothing was changed.', 'error')
@@ -182,7 +206,7 @@ export default function Access() {
           <div>
             <h2>Access</h2>
             <p>
-              Nobody reads a matter unless someone put them on it. A screen overrides being on
+              Nobody reads a {unit.lower} unless someone put them on it. A screen overrides being on
               the team, and it overrides the administrator role, a wall a senior person can read
               through is not a wall. Every change here is added to the record and never removed.
             </p>
@@ -192,7 +216,7 @@ export default function Access() {
 
       {error && (
         <ErrorState
-          title="Could not load matters or the user directory"
+          title={`Could not load ${unit.lowerPlural} or the user directory`}
           detail={error}
           onRetry={retry}
         />
@@ -203,7 +227,7 @@ export default function Access() {
           className={`access-tab${view === 'matter' ? ' active' : ''}`}
           onClick={() => setView('matter')}
         >
-          By matter
+          By {unit.lower}
         </button>
         <button
           className={`access-tab${view === 'user' ? ' active' : ''}`}
@@ -217,11 +241,11 @@ export default function Access() {
         <div className="access-layout">
           <div className="card card-tight">
             <div className="card-header">
-              <h3>Matters</h3>
+              <h3>{unit.plural}</h3>
             </div>
             <div className="access-picker">
               {matters.length === 0 && !error && (
-                <EmptyState title="No matters">Nothing to staff yet.</EmptyState>
+                <EmptyState title={`No ${unit.lowerPlural}`}>Nothing to staff yet.</EmptyState>
               )}
               {matters.map((m) => (
                 <button
@@ -239,15 +263,15 @@ export default function Access() {
           <div>
             {detailError ? (
               <ErrorState
-                title="Could not load access for this matter"
+                title={`Could not load access for this ${unit.lower}`}
                 detail={detailError}
                 onRetry={() => setRefreshKey((k) => k + 1)}
               />
             ) : detailLoading ? (
               <Spinner />
             ) : !matterAccess ? (
-              <EmptyState title="Pick a matter">
-                Choose a matter on the left to see who may read it.
+              <EmptyState title={`Pick a ${unit.lower}`}>
+                Choose a {unit.lower} on the left to see who may read it.
               </EmptyState>
             ) : (
               <>
@@ -263,16 +287,16 @@ export default function Access() {
                   </div>
 
                   {matterAccess.team.length === 0 ? (
-                    <EmptyState title="Nobody is on this matter">
-                      Until someone is added, this matter is closed to everyone except holders of
-                      the administrator role.
+                    <EmptyState title={`Nobody is on this ${unit.lower}`}>
+                      Until someone is added, this {unit.lower} is closed to everyone except holders
+                      of the administrator role.
                     </EmptyState>
                   ) : (
                     <table className="data-table">
                       <thead>
                         <tr>
                           <th>Person</th>
-                          <th>Role on the matter</th>
+                          <th>Role on the {unit.lower}</th>
                           <th>Added by</th>
                           <th>Added</th>
                           <th />
@@ -353,7 +377,7 @@ export default function Access() {
                     }}
                   >
                     <div className="form-group" style={{ marginBottom: 0, minWidth: 240, flex: 1 }}>
-                      <label>Add someone to this matter</label>
+                      <label>Add someone to this {unit.lower}</label>
                       <select value={addUser} onChange={(e) => setAddUser(e.target.value)}>
                         <option value="">Choose a person…</option>
                         {notOnTeam.map((u) => (
@@ -366,18 +390,27 @@ export default function Access() {
                     <div className="form-group" style={{ marginBottom: 0, minWidth: 190 }}>
                       <label>
                         Role
-                        <FieldHelp text="What this person does on the matter. It is recorded for the file and shown in the trail; it does not widen or narrow what they can read." />
+                        <FieldHelp
+                          text={`What this person does on the ${unit.lower}. It is recorded for the file and shown in the trail; it does not widen or narrow what they can read. Type your own word for it -- the suggestions are generic on purpose, because every organisation names these differently.`}
+                        />
                       </label>
-                      <select value={addRole} onChange={(e) => setAddRole(e.target.value)}>
+                      {/* An input with suggestions rather than a closed list. The API does not
+                          validate `role`, so presenting four options as though it did was a
+                          smaller lie than the words themselves but still a lie. */}
+                      <input
+                        list="access-role-suggestions"
+                        value={addRole}
+                        onChange={(e) => setAddRole(e.target.value)}
+                        placeholder={DEFAULT_ROLE}
+                      />
+                      <datalist id="access-role-suggestions">
                         {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
+                          <option key={r} value={r} />
                         ))}
-                      </select>
+                      </datalist>
                     </div>
                     <button className="btn btn-primary" disabled={!addUser} onClick={doAssign}>
-                      Add to matter
+                      Add to {unit.lower}
                     </button>
                   </div>
                 </div>
@@ -385,7 +418,7 @@ export default function Access() {
                 <div className="card">
                   <div className="card-header">
                     <h3>
-                      Screened from this matter
+                      Screened from this {unit.lower}
                       <FieldHelp text={HELP.ethicalScreen} />
                     </h3>
                     <span className={`tag ${matterAccess.screened.length ? 'tag-red' : 'tag-neutral'}`}>
@@ -395,8 +428,8 @@ export default function Access() {
 
                   {matterAccess.screened.length === 0 ? (
                     <p className="card-note">
-                      No walls on this matter. Screening someone here tells them the matter by
-                      name, gives them the reason, and points them at a contact.
+                      No walls on this {unit.lower}. Screening someone here tells them the{' '}
+                      {unit.lower} by name, gives them the reason, and points them at a contact.
                     </p>
                   ) : (
                     <table className="data-table">
@@ -470,7 +503,7 @@ export default function Access() {
                     }}
                   >
                     <div className="form-group" style={{ marginBottom: 0, minWidth: 240, flex: 1 }}>
-                      <label>Screen someone from this matter</label>
+                      <label>Screen someone from this {unit.lower}</label>
                       <select
                         value=""
                         onChange={(e) => {
@@ -566,11 +599,13 @@ export default function Access() {
                   {userAccess.is_platform_admin && (
                     <div className="banner banner-warn">
                       <span>
-                        <strong>Every matter below is open to this person by role.</strong>{' '}
+                        <strong>
+                          Every {unit.lower} below is open to this person by role.
+                        </strong>{' '}
                         <span>
-                          Nobody staffed them onto these matters, they can read them because they
-                          hold the administrator role. A screen still overrides it, so screen them
-                          from anything they must not reach.
+                          Nobody staffed them onto these {unit.lowerPlural}, they can read them
+                          because they hold the administrator role. A screen still overrides it, so
+                          screen them from anything they must not reach.
                         </span>
                         <FieldHelp text={HELP.platformAdminAccess} />
                       </span>
@@ -580,12 +615,12 @@ export default function Access() {
                   <table className="data-table">
                     <thead>
                       <tr>
-                        <th>Matter</th>
+                        <th>{unit.singular}</th>
                         <th>
                           Can they read it?
                           <FieldHelp text={HELP.accessDecision} />
                         </th>
-                        <th>Role on the matter</th>
+                        <th>Role on the {unit.lower}</th>
                         <th>Why</th>
                         <th />
                       </tr>
@@ -615,7 +650,7 @@ export default function Access() {
                                   </span>
                                 </>
                               ) : (
-                                ACCESS_DECISIONS[d.decision].meaning
+                                fillUnit(ACCESS_DECISIONS[d.decision].meaning, unit)
                               )}
                             </div>
                           </td>
@@ -738,14 +773,14 @@ export default function Access() {
           subtitle="Removing someone from the team is not the same as screening them. Use a screen where there is a conflict."
           consequences={[
             `${pending.userLabel} loses access to the documents, facts and figures on ${pending.matterLabel}.`,
-            'They are told they are not on the matter, and to ask the matter owner if they need it.',
-            'The record that they were on the matter, and who added them, stays in place.',
-            'This is not a wall. Anyone can put them back on the matter without a review.',
+            `They are told they are not on the ${unit.lower}, and to ask its owner if they need it.`,
+            `The record that they were on the ${unit.lower}, and who added them, stays in place.`,
+            `This is not a wall. Anyone can put them back on the ${unit.lower} without a review.`,
           ]}
-          reasonLabel="Why are they coming off the matter?"
+          reasonLabel={`Why are they coming off the ${unit.lower}?`}
           reasonHelp="Optional for the API, asked for here because a removal with no explanation is indistinguishable from a mistake six months later."
-          placeholder="Moved to another matter and no longer working on this one."
-          confirmLabel="Remove from matter"
+          placeholder={`Moved to another ${unit.lower} and no longer working on this one.`}
+          confirmLabel={`Remove from ${unit.lower}`}
           danger
           reasonRequired={false}
           onCancel={() => setPending(null)}
@@ -778,6 +813,7 @@ function rowClass(d: AccessDecision): string {
 }
 
 function DecisionBadge({ decision }: { decision: AccessDecision }) {
+  const unit = useUnitLabel()
   const meta = ACCESS_DECISIONS[decision]
   const modifier =
     decision === 'SCREENED'
@@ -789,7 +825,7 @@ function DecisionBadge({ decision }: { decision: AccessDecision }) {
     <span
       className={`access-decision${modifier}`}
       style={{ ['--decision-colour' as string]: meta.colour }}
-      title={`${meta.meaning} ${meta.action}`}
+      title={fillUnit(`${meta.meaning} ${meta.action}`, unit)}
     >
       <span className="access-decision-dot" aria-hidden="true" />
       {meta.label}
@@ -815,6 +851,7 @@ function ScreenModal({
   onCancel: () => void
   onConfirm: (reason: string, contact: string) => Promise<void>
 }) {
+  const unit = useUnitLabel()
   const [reason, setReason] = useState('')
   const [contact, setContact] = useState('')
   const [saving, setSaving] = useState(false)
@@ -849,8 +886,8 @@ function ScreenModal({
               blank.
             </li>
             <li>
-              This is deliberate. Hiding the matter instead would let a conflict check come back
-              clean because the matching matter was invisible.
+              This is deliberate. Hiding the {unit.lower} instead would let a conflict check come
+              back clean because the matching {unit.lower} was invisible.
             </li>
           </ul>
           {ready && (

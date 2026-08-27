@@ -205,7 +205,7 @@ export default function TableDetail() {
               <th>Type</th>
               <th>
                 Description
-                <FieldHelp text="Given to the model that writes SQL for questions no approved metric covers, so a column described as a matter status produces a better query than one called mtr_stat_cd. A description written here outranks a model's, and a model's is only used once approved." />
+                <FieldHelp text="Given to the model that writes SQL for questions no approved metric covers, so a column described as a {unit} status produces a better query than one called mtr_stat_cd. A description written here outranks a model's, and a model's is only used once approved." />
               </th>
               <th>Key</th>
             </tr>

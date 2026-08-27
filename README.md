@@ -3,9 +3,9 @@
 A governed semantic layer over **both** structured and unstructured data, where
 every fact carries its own provenance.
 
-Domain-agnostic by construction. Three ontology packs ship: `fintech` (the default),
-`legal` and `healthcare`. The extra two exist to keep the domain-agnostic claim
-honest rather than as demos.
+Domain-agnostic by construction. Four ontology packs ship: `retail` (the default),
+`fintech`, `legal` and `healthcare`. The extra three exist to keep the domain-agnostic
+claim honest rather than as demos.
 
 > The product is **Groundwork**. The CDK stacks, Python package, and every identifier this
 > repo controls are named `groundwork`. The one thing left as `lexgraph` is the local
@@ -312,7 +312,7 @@ create and delete other tenants; change it with `homeTenant` in `cdk.json`.
 
 ```bash
 curl -s https://dxxxxx.cloudfront.net/api/health
-# {"status":"ok","graph":"connected","vector":"enabled","ontology":"fintech", ...}
+# {"status":"ok","graph":"connected","vector":"enabled","ontology":"retail", ...}
 ```
 
 `graph: connected` is the field worth reading. A healthy container with
@@ -335,6 +335,7 @@ pack, since a document read under the wrong vocabulary produces claims no rule m
 
 | Pack | Documents | Organising unit |
 |---|---|---|
+| [`sample/retail-demo.zip`](sample/retail-demo.zip) | 4 | Case (`LP-`, `POL-`, `MEM-`) |
 | [`sample/fintech-demo.zip`](sample/fintech-demo.zip) | 3 | Facility (`FAC-`) |
 | [`sample/legal-demo.zip`](sample/legal-demo.zip) | 5 | Matter (`NTL-`, `MBC-`, `HAL-`) |
 | [`sample/healthcare-demo.zip`](sample/healthcare-demo.zip) | 4 | Encounter (`ENC-`) |
@@ -344,10 +345,12 @@ Upload** the way a user would upload anything else. That is the point of shippin
 a plain zip rather than a fixture: the demo walks the same path a real user walks, so
 nothing about it is special-cased.
 
-The walkthrough below is the legal pack, which has the most interlocking documents. The
-fintech and healthcare packs work the same way with their own references and their own
-rules: `group_exposure_via_control` and `related_party_lending` for fintech,
-`contraindication_alert` for healthcare.
+`retail` is the default pack, and its four documents interlock on all three of its rules:
+`exception_on_superseded_policy`, `exception_during_investigation` and
+`related_party_resale`. The walkthrough below is the legal pack, which has the most
+documents and is the one this section was written against. The others work the same way
+with their own references and their own rules: `group_exposure_via_control` and
+`related_party_lending` for fintech, `contraindication_alert` for healthcare.
 
 Each filename starts with its matter reference, and that is what to put in **Attach to
 matter** — `NTL-2026-0114` for the three `NTL-` files, `MBC-2024-0431` for the facility

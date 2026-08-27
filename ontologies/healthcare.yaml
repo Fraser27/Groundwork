@@ -23,6 +23,14 @@ entity_suffixes:
   - ltd
   - inc
 
+# Offered on the Ask and Retrieval pages, in this order. Both rules in this pack conclude
+# CONTRAINDICATION_ALERT, and the second reaches it through a shared active ingredient --
+# worth asking separately, because a reader who only asks the first assumes a clean answer
+# means no interaction.
+example_questions:
+  - Which prescriptions conflict with a recorded allergy?
+  - Is any prescription sharing an active ingredient with a recorded allergy?
+
 entity_types:
   - id: Patient
     label: Patient

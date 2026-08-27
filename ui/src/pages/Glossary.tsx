@@ -23,6 +23,7 @@ import {
   TIERS,
 } from '../epistemic'
 import type { EpistemicClass, ReviewState } from '../api'
+import { fillUnit, useUnitLabel } from '../useUnitLabel'
 
 interface Term {
   term: string
@@ -104,6 +105,15 @@ const TERM_GROUP: Record<string, (typeof GROUPS)[number]> = {
   additivity: 'Structured data',
 }
 
+/**
+ * Keys whose camelCase reads as the legal pack's noun. `humanise` would render `matterWall` as
+ * "Matter wall" under every pack, so these two are named explicitly and filled like the bodies.
+ */
+const TERM_NAME: Record<string, string> = {
+  matterWall: '{Unit} wall',
+  matterAssignment: '{Unit} team',
+}
+
 /** camelCase key -> "Sentence case" heading. */
 function humanise(key: string): string {
   const spaced = key.replace(/([A-Z])/g, ' $1').toLowerCase().trim()
@@ -116,6 +126,7 @@ export default function Glossary() {
   const [onto, setOnto] = useState<Ontology | null>(null)
   const [ontoError, setOntoError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
+  const unit = useUnitLabel()
 
   // Two indirections on purpose. The vocabulary comes from the live ontology rather
   // than a copy here, because it is enforced server-side at write time and a stale copy
@@ -144,15 +155,18 @@ export default function Glossary() {
     }
   }, [tenant, reloadKey])
 
+  // The bodies are the same strings the tooltips read, placeholders and all, so they are filled
+  // here for the same reason `FieldHelp` fills them: a glossary that prints `{unit}` is worse than
+  // one that prints the wrong word.
   const terms = useMemo<Term[]>(
     () =>
       Object.entries(HELP).map(([key, body]) => ({
-        term: humanise(key),
-        body: body as string,
+        term: fillUnit(TERM_NAME[key] ?? humanise(key), unit),
+        body: fillUnit(body as string, unit),
         why: JARGON_NOTE[key],
         group: TERM_GROUP[key] ?? 'Vocabulary',
       })),
-    [],
+    [unit],
   )
 
   const needle = filter.trim().toLowerCase()

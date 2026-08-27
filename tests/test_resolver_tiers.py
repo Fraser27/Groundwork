@@ -27,7 +27,7 @@ from src.query.metric_matcher import MetricMatcher
 from src.query.resolver import QueryBlocked, Resolver, Tier
 
 TENANT = "firm-acme"
-METRICS = "sample/metrics.yaml"
+METRICS = "sample/metrics/legal.yaml"
 
 
 @pytest.fixture

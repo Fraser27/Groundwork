@@ -75,7 +75,7 @@ it until deploy.
 | `vectorMaxOcu` | `4` | Spend ceiling |
 | `appCpu` / `appMemoryMiB` | `512` / `1024` | Fargate task size |
 | `appDesiredCount` | `1` | No redundancy at 1 |
-| `defaultOntology` | `fintech` | Pack from `ontologies/`, must match `constants.DEFAULT_ONTOLOGY_PACK` |
+| `defaultOntology` | `retail` | Pack from `ontologies/`, must match `constants.DEFAULT_ONTOLOGY_PACK` |
 | `availabilityZones` | unset | See above |
 | `webOrigin` | unset | Set after the first deploy |
 

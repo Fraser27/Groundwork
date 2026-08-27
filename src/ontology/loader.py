@@ -179,6 +179,18 @@ class Ontology:
     Used by `entity_blocking_keys` to ask a human whether two ids are one company, and never by
     `canonical_entity_id` — see that method for why dropping a word must not reach a stored id."""
 
+    example_questions: tuple[str, ...] = ()
+    """Questions worth asking of *this* pack's data, offered on the Ask and Retrieval pages.
+
+    Declared here for the same reason the organising unit's label is: the UI had three of them
+    hardcoded, and they asked about fees billed by practice area and whether acting for Calder
+    created a conflict. Under any other pack those are not merely mislabelled, they are dead — no
+    such party or metric exists, so the one affordance telling a new reader what the system can be
+    asked returned nothing.
+
+    A pack that declares none gets none, and the page falls back to its own prompt rather than
+    inventing a question. Empty is honest; a question that returns nothing is not."""
+
     @functools.cached_property
     def governing_predicates(self) -> frozenset[str]:
         """The closed set. `build_assertion` rejects anything outside it."""
@@ -537,6 +549,12 @@ def _parse(raw: dict[str, Any]) -> Ontology:
         predicates=predicates,
         rules=rules,
         entity_suffixes=frozenset(str(s).lower() for s in raw.get("entity_suffixes", ())),
+        # Ordered, unlike the suffixes: the pack author decides which question a reader meets
+        # first, and that is usually the cheapest route through the system rather than the most
+        # impressive one.
+        example_questions=tuple(
+            str(q).strip() for q in raw.get("example_questions", ()) if str(q).strip()
+        ),
     )
     _validate_blocks(predicates, ontology.domain)
     _validate_transitive(predicates, ontology.domain)

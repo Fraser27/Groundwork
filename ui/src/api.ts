@@ -1267,6 +1267,15 @@ export interface TenantSettings {
    * wording only.
    */
   unit_label?: { singular: string; plural: string }
+  /**
+   * Questions worth asking of this pack's data, in the order the pack author chose.
+   *
+   * Was a hardcoded array in `Retrieval.tsx` and `QueryBuilder.tsx` asking about a conflict for a
+   * client called Calder, so under any pack but legal the one affordance that shows a new reader
+   * what the system can be asked returned nothing. Absent or empty means the page offers none — a pack that
+   * declares no question is better served by silence than by a question that answers nothing.
+   */
+  example_questions?: string[]
 }
 
 /**
@@ -1817,6 +1826,17 @@ export const api = {
     request<{ metric_id: string; sql: string }>(`/tenants/${tenant}/metrics/${id}/compile`, {
       method: 'POST',
     }),
+  /**
+   * Load the example pack shipped for this tenant's ontology, as drafts.
+   *
+   * Always drafts from here. The endpoint takes `approve`, and offering that to a button would
+   * make one click put definitions naming a fictional company's tables into service.
+   */
+  seedMetrics: (tenant: string) =>
+    request<{ created: number; skipped: number; note: string }>(
+      `/tenants/${tenant}/metrics/seed`,
+      { method: 'POST' },
+    ),
 
   /**
    * @deprecated Use `compose`, or drive the agent through `runRetrieval`.

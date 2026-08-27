@@ -17,6 +17,7 @@ from src.api.deps import get_services
 from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
 from src.graph.scope import AuthContext
+from src.ontology.loader import load_ontology
 
 TENANT = "dev-tenant"
 
@@ -880,6 +881,18 @@ class TestSettingsProjectsWhatThePageCanChange:
         self._save(client, {"ontology_domain": "fintech"})
         body = client.get(f"/api/tenants/{TENANT}/settings").json()
         assert body["unit_label"] == {"singular": "Facility", "plural": "Facilities"}
+
+    def test_the_example_questions_follow_the_pack(self, client):
+        """Same trip as the unit label, and for the same reason: the questions the Ask and Retrieval
+        pages offer to click were legal ones written into the components, so a lending tenant was
+        invited to ask about a conflict of interest and got an empty answer back."""
+        legal = client.get(f"/api/tenants/{TENANT}/settings").json()["example_questions"]
+        assert legal == list(load_ontology("legal").example_questions)
+
+        self._save(client, {"ontology_domain": "fintech"})
+        fintech = client.get(f"/api/tenants/{TENANT}/settings").json()["example_questions"]
+        assert fintech == list(load_ontology("fintech").example_questions)
+        assert fintech != legal
 
     def test_an_unknown_pack_falls_back_rather_than_breaking_every_write(self, client):
         """A pack that will not load must not take the tenant's ingest down with it. The boot pack

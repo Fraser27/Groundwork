@@ -24,9 +24,11 @@ import FieldHelp from '../components/FieldHelp'
 import ProvenancePanel from '../components/ProvenancePanel'
 import { EmptyState, ErrorState, Spinner } from '../components/Shared'
 import { fmtDateTime, fmtNum } from '../format'
+import { fillUnit, useUnitLabel } from '../useUnitLabel'
 
 export default function Provenance() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [all, setAll] = useState<Assertion[]>([])
   const [floor, setFloor] = useState(0.8)
   const [loading, setLoading] = useState(true)
@@ -154,7 +156,7 @@ export default function Provenance() {
         <div className="toolbar-field" style={{ flex: 1, minWidth: 260 }}>
           <label>Search</label>
           <input
-            placeholder="Search by party, relationship, method, matter or assertion id…"
+            placeholder={`Search by party, relationship, method, ${unit.lower} or assertion id…`}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ width: '100%' }}
@@ -235,7 +237,7 @@ export default function Provenance() {
                 Method
                 <FieldHelp text={HELP.method} />
               </th>
-              <th>Matter</th>
+              <th>{unit.singular}</th>
               <th>State</th>
               <th>Recorded</th>
             </tr>
@@ -360,6 +362,7 @@ function Actor({ sub, email }: { sub: string; email?: string | null }) {
  * gap: the facts are closed, and this says who closed them and why.
  */
 function GraphChanges({ tenant }: { tenant: string }) {
+  const unit = useUnitLabel()
   const [events, setEvents] = useState<GraphAuditEvent[] | null>(null)
   const [error, setError] = useState('')
 
@@ -418,7 +421,7 @@ function GraphChanges({ tenant }: { tenant: string }) {
               </td>
               <td>
                 <span className={`tag ${e.action === 'SUPERSEDE' ? 'tag-orange' : 'tag-red'}`}>
-                  {ACTION_LABEL[e.action] ?? e.action}
+                  {fillUnit(ACTION_LABEL[e.action] ?? e.action, unit)}
                 </span>
               </td>
               <td className="mono" style={{ fontSize: 12 }}>
@@ -747,5 +750,5 @@ function basisTone(e: QueryAuditEvent): string {
 const ACTION_LABEL: Record<string, string> = {
   SUPERSEDE: 'Corrected by a reviewer',
   WIPE_DOCUMENT: 'Document facts withdrawn',
-  WIPE_MATTER: 'Matter facts withdrawn',
+  WIPE_MATTER: '{Unit} facts withdrawn',
 }

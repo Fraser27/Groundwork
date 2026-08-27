@@ -28,11 +28,13 @@ import ProvenancePanel, { SourceSpan } from '../components/ProvenancePanel'
 import ReasonerReportPanel from '../components/ReasonerReportPanel'
 import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { epiStyle, fmtDateTime } from '../format'
+import { useUnitLabel } from '../useUnitLabel'
 
 type Decision = 'approved' | 'rejected' | 'corrected'
 
 export default function ReviewQueue() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [pending, setPending] = useState<Assertion[]>([])
   const [matters, setMatters] = useState<Matter[]>([])
   const [floor, setFloor] = useState(0.8)
@@ -131,8 +133,11 @@ export default function ReviewQueue() {
         // than record one fact, and the conclusion lands in this same queue awaiting review.
         if (approved.inferred)
           showToast(
-            `Approved. ${approved.inferred} conclusion${approved.inferred === 1 ? '' : 's'} now ` +
-              'follow from the facts on file and are waiting in this queue.',
+            approved.inferred === 1
+              ? 'Approved. 1 conclusion now follows from the facts on file and is waiting in ' +
+                'this queue.'
+              : `Approved. ${approved.inferred} conclusions now follow from the facts on file ` +
+                'and are waiting in this queue.',
           )
       } else await api.rejectAssertion(tenant, a.assertion_id, note)
       setDecided((d) => ({ ...d, [a.assertion_id]: decision }))
@@ -201,9 +206,11 @@ export default function ReviewQueue() {
           ...Object.fromEntries([...done].map((id) => [id, 'approved' as Decision])),
         }))
         setSelected((s) => new Set([...s].filter((id) => !done.has(id))))
-        const drawn = r.inferred
-          ? ` ${r.inferred} conclusion${r.inferred === 1 ? '' : 's'} now follow, waiting in this queue.`
-          : ''
+        const drawn = !r.inferred
+          ? ''
+          : r.inferred === 1
+            ? ' 1 conclusion now follows, waiting in this queue.'
+            : ` ${r.inferred} conclusions now follow, waiting in this queue.`
         if (r.failed.length === 0) showToast(`${done.size} claims approved.${drawn}`)
         else
           showToast(
@@ -350,11 +357,11 @@ export default function ReviewQueue() {
       <div className="toolbar">
         <div className="toolbar-field">
           <label>
-            Matter
+            {unit.singular}
             <FieldHelp text={HELP.matterWall} />
           </label>
           <select value={matterFilter} onChange={(e) => setMatterFilter(e.target.value)}>
-            <option value="__all__">All matters</option>
+            <option value="__all__">All {unit.lowerPlural}</option>
             {matters
               .filter((m) => !m.walled)
               .map((m) => (
@@ -630,7 +637,7 @@ export default function ReviewQueue() {
                   )}
                   <span
                     className="card-note"
-                    title="Approving records your name and the time against this fact, and lets it start shaping answers. Rejecting withdraws it and retracts anything inferred from it."
+                    title="Approving records your name and the time against this fact, and lets it start shaping answers. Rejecting closes it with your reason attached. Nothing rests on it yet -- rules only fire on live facts -- so there is nothing underneath a rejection to withdraw."
                     style={{ fontSize: 11.5 }}
                   >
                     {decision === 'corrected'
@@ -668,8 +675,10 @@ export default function ReviewQueue() {
               </div>
               <p className="card-note">
                 A language model read a passage and drew a relationship from it. Approving it lets
-                that relationship shape answers, conflict checks and deadline tracking. Rejecting it
-                withdraws the claim and retracts anything already inferred from it.
+                that relationship shape answers, and lets this pack&rsquo;s rules run over it.
+                Rejecting it closes the claim with your reason attached. Nothing has been inferred
+                from it yet, because rules only ever fire on live facts, so a rejection has nothing
+                underneath it to withdraw.
               </p>
               <p className="card-note" style={{ marginTop: 10 }}>
                 Quotes the system confirmed are on the page they name do not appear here, and neither
