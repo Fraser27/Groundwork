@@ -23,10 +23,18 @@ What each document is built to make happen, because a demo whose facts do not co
 renders identically to one that demonstrates nothing:
 
 **`exception_on_superseded_policy`** -- the return approval relies on the Electronics
-provision of Section 2 by name (14-day opened window, 15% restocking fee). Policy
-Bulletin 2026-03, issued a fortnight earlier, withdrew that provision and replaced it
-with a stricter one. Neither document mentions the other. The approval was wrong by
-$299.99 and reads as routine on its own page.
+provision by name (14-day opened window, 15% restocking fee). Policy Bulletin 2026-03,
+issued a fortnight earlier, withdrew that provision and replaced it with a stricter one.
+Neither document mentions the other. The approval was wrong by $299.99 and reads as
+routine on its own page.
+
+Both documents cite that provision as "Provision 2.4 of the Return Policy Manual 2025",
+character for character, and the rule needs them to. The two `PolicyClause` claims join on
+the node id, which is minted from the words on the page, and nothing merges two spellings
+of one clause without a person asking for it. Described loosely -- "the Electronics
+provision of Section 2" in one document and "Section 2, Return Windows by Category" in the
+other -- the graph holds two clauses, the join finds nothing, and the rule reports no
+finding rather than failing. A numbered provision is how a real manual is cited anyway.
 
 **`exception_during_investigation`** -- loss prevention opened a file on Sam Parker on
 6 March. The returns desk granted a goodwill refund to Sam Parker on 16 March. Two
@@ -44,6 +52,14 @@ is in the warehouse table.** Every seeded return of Sam Parker's had its 15% fee
 correctly -- $194.99 on a $1,299.99 television, and so on. The refund here is a ninth
 return, in 2026, after the seeded history ends. A document contradicting the rows would
 make the demo incoherent rather than interesting.
+
+Every filename begins with a reference, because an upload with no organising unit is
+refused and the filename is where a person reads off what to type. Two of these are not
+case documents: the policy bulletin applies to every return, and the seller approval sits
+with Marketplace rather than Loss Prevention. They get their own references, `POL-2026-03`
+and `MEM-2026-0231`, both taken off the page. Filing them under LP-2026-0088 would put the
+supersession and the ownership chain inside the case they are meant to be found from,
+which is the one arrangement that demonstrates nothing.
 
 Ids are left to the extractor. These documents name entities in prose the way a real one
 does, because the point is to exercise extraction rather than to hand it a pre-parsed
@@ -71,11 +87,12 @@ _page = _legal_demo._page
 
 RETAIL: dict[str, list[tuple[str, str]]] = {
     # ── The supersession. Issued before the approval below, and never referenced by it. ──
-    "policy-bulletin-2026-03.pdf": [
+    "POL-2026-03-policy-bulletin.pdf": [
         ("head", "ANYCORP RETAIL"),
         ("body", "Returns and Customer Care -- Policy Bulletin"),
         ("space", ""),
         ("sub", "POLICY BULLETIN 2026-03"),
+        ("body", "Reference: POL-2026-03"),
         ("body", "Issued: 2 March 2026"),
         ("body", "Effective: 9 March 2026"),
         ("body", "Applies to: all stores, contact centre and online returns"),
@@ -86,15 +103,16 @@ RETAIL: dict[str, list[tuple[str, str]]] = {
             "body",
             "Policy Bulletin 2026-03 amends the Return Policy Manual 2025. Opened electronics "
             "accounted for 61% of refund value and 74% of confirmed abuse cases in the 2025 "
-            "financial year. The Electronics provision of Section 2, Return Windows by Category, "
-            "is the provision under which almost all of that value left the business.",
+            "financial year. Provision 2.4 of the Return Policy Manual 2025, the Electronics "
+            "opened-returns provision, is the one under which almost all of that value left the "
+            "business.",
         ),
         ("space", ""),
         ("sub", "2. PROVISION WITHDRAWN"),
         (
             "body",
-            "Policy Bulletin 2026-03 supersedes the Electronics opened-returns provision of "
-            "Section 2 of the Return Policy Manual 2025. That provision allowed an opened "
+            "Policy Bulletin 2026-03 supersedes Provision 2.4 of the Return Policy Manual 2025, "
+            "the Electronics opened-returns provision. That provision allowed an opened "
             "electronics item to be returned within a 14-day window from the purchase date "
             "subject to a 15% restocking fee. It is withdrawn in full and may not be relied on "
             "for any return accepted on or after 9 March 2026.",
@@ -209,10 +227,10 @@ RETAIL: dict[str, list[tuple[str, str]]] = {
         ("sub", "2. AUTHORITY RELIED ON"),
         (
             "body",
-            "This approval is made under the Electronics opened-returns provision of Section 2, "
-            "Return Windows by Category, of the Return Policy Manual 2025: a 14-day window from "
-            "the purchase date, subject to a 15% restocking fee. Return RTN-2026-00912 was lodged "
-            "on day 14 and so falls inside that window.",
+            "This approval is made under Provision 2.4 of the Return Policy Manual 2025, the "
+            "Electronics opened-returns provision: a 14-day window from the purchase date, "
+            "subject to a 15% restocking fee. Return RTN-2026-00912 was lodged on day 14 and so "
+            "falls inside that window.",
         ),
         (
             "body",
@@ -239,7 +257,7 @@ RETAIL: dict[str, list[tuple[str, str]]] = {
         ("body", "Curtis Lindgren, Returns Desk Supervisor, Store 118, Omaha NE"),
     ],
     # ── The ownership chain. Two links on purpose. ──
-    "merchant-onboarding-pixelperfect.pdf": [
+    "MEM-2026-0231-merchant-onboarding-pixelperfect.pdf": [
         ("head", "ANYCORP MARKETPLACE"),
         ("body", "Seller Onboarding -- Approval Memorandum"),
         ("space", ""),

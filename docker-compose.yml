@@ -67,7 +67,7 @@ services:
       GRAPH_USER: neo4j
       GRAPH_PASSWORD: ${GRAPH_PASSWORD:-groundwork-dev}
       GRAPH_IAM_AUTH: "false"
-      ONTOLOGY_PACK: ${ONTOLOGY_PACK:-legal}
+      ONTOLOGY_PACK: ${ONTOLOGY_PACK:-retail}
       # No JWT locally, so requests are served as this tenant. src/config.py
       # refuses to start with this set when ENVIRONMENT is not "local".
       AUTH_DEV_BYPASS_TENANT: ${AUTH_DEV_BYPASS_TENANT:-dev-tenant}
@@ -103,7 +103,7 @@ services:
       GRAPH_USER: neo4j
       GRAPH_PASSWORD: ${GRAPH_PASSWORD:-groundwork-dev}
       GRAPH_IAM_AUTH: "false"
-      ONTOLOGY_PACK: ${ONTOLOGY_PACK:-legal}
+      ONTOLOGY_PACK: ${ONTOLOGY_PACK:-retail}
       AUTH_DEV_BYPASS_TENANT: ${AUTH_DEV_BYPASS_TENANT:-dev-tenant}
       VECTOR_ENDPOINT: ${VECTOR_ENDPOINT:-}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}

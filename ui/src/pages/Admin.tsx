@@ -441,8 +441,9 @@ export default function Admin() {
               ))}
             </select>
             <p className="hint">
-              The platform is domain-agnostic. The legal pack is the default; the healthcare pack
-              exists to keep that claim honest.
+              The platform is domain-agnostic. Each pack declares its own vocabulary, rules and
+              organising unit, and the choice is per tenant, so this changes what this tenant may
+              write and what its captions call things.
             </p>
           </div>
           {ontology && (
@@ -998,9 +999,10 @@ export default function Admin() {
         </div>
         <p className="hint">
           Replay runs inline without model extraction, so it returns a report rather than a
-          spinner. A large corpus is better replayed by re-uploading. The demo documents are in{' '}
-          <code>sample/legal-demo.zip</code> and are uploaded through Documents like any other
-          file.{' '}
+          spinner. A large corpus is better replayed by re-uploading. There is one demo pack per
+          ontology, <code>sample/&lt;pack&gt;-demo.zip</code>, uploaded through Documents like any
+          other file. Take the one matching the pack above, since a document read under the wrong
+          vocabulary produces claims no rule matches.{' '}
           <a href="/docs/demo-data.html" target="_blank" rel="noreferrer">
             Read more about resetting and rebuilding
           </a>
