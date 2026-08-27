@@ -804,10 +804,46 @@ class TestTheRetailPackFindsWhatTheWorkshopPromises:
             self.SAM,
         )
 
+    def _resale_findings(self, report):
+        return {
+            (i.assertion.object_id, i.assertion.rule_id)
+            for i in report.inferences
+            if i.assertion.predicate == "RELATED_PARTY_RESALE"
+        }
+
     def test_control_is_walked_through_the_interposed_holding_company(self, retail_ctx):
         """Two hops, because that is the shape the demo memo describes and the shape a real ring
         takes. A one-hop premise would pass every other test in this class and miss the finding
-        the pack exists to make, since no record shows both ends of the chain."""
+        the pack exists to make, since no record shows both ends of the chain.
+
+        The middle is a `Company`, which is the honest kind for a vehicle the memo calls
+        non-trading, and the finding names only the storefront: the path's declared end is a
+        Merchant, so the ladder is walked through the holding company without concluding that
+        anyone resells through it.
+        """
+        report = self._run(
+            retail_ctx,
+            [
+                fact(f"case:{self.CASE}", "INVESTIGATES", self.SAM, matter=self.CASE),
+                fact(self.SAM, "CONTROLS", "company:parker-holdings-llc", matter="MEM-2026-0231"),
+                fact(
+                    "company:parker-holdings-llc",
+                    "CONTROLS",
+                    "merchant:pixelperfect-resale",
+                    matter="MEM-2026-0231",
+                ),
+            ],
+        )
+        assert self._resale_findings(report) == {
+            ("merchant:pixelperfect-resale", "related_party_resale")
+        }
+        assert all(i.assertion.subject_id == f"case:{self.CASE}" for i in report.inferences)
+
+    def test_a_merchant_in_the_middle_is_still_walked_through(self, retail_ctx):
+        """`Company` is the honest kind for a holding vehicle, not a required one: a chain may
+        legitimately run through a merchant that does trade here, and an extractor reading a memo
+        that says so should not have the chain silently stop. Kept alongside the case above because
+        this is the same-kind shape the other packs' chains are made of."""
         report = self._run(
             retail_ctx,
             [
@@ -821,14 +857,41 @@ class TestTheRetailPackFindsWhatTheWorkshopPromises:
                 ),
             ],
         )
-        # One conclusion per merchant reached, and the holding company is a merchant too.
-        found = {
-            (i.assertion.object_id, i.assertion.rule_id)
-            for i in report.inferences
-            if i.assertion.predicate == "RELATED_PARTY_RESALE"
+        # Both ends are Merchants here, so both are legitimate ends of the path.
+        assert self._resale_findings(report) == {
+            ("merchant:parker-holdings-llc", "related_party_resale"),
+            ("merchant:pixelperfect-resale", "related_party_resale"),
         }
-        assert ("merchant:pixelperfect-resale", "related_party_resale") in found
-        assert all(i.assertion.subject_id == f"case:{self.CASE}" for i in report.inferences)
+
+    def test_a_supersession_two_revisions_back_is_still_found(self, retail_ctx):
+        """Why `SUPERSEDES` is walked as a chain rather than a single edge. The desk cited the 2025
+        wording; a 2026 bulletin replaced the amendment that replaced it. A one-hop premise finds
+        the revision only when the desk happens to cite the most recent link, which is the citation
+        least likely to be stale in the first place."""
+        report = self._run(
+            retail_ctx,
+            [
+                fact(self.APPROVAL, "RELIES_ON", self.CLAUSE, matter=self.CASE),
+                fact(
+                    "document:pol-2026-03-policy-bulletin",
+                    "SUPERSEDES",
+                    "policyclause:provision-2-4a-interim-amendment",
+                    matter="POL-2026-03",
+                ),
+                fact(
+                    "policyclause:provision-2-4a-interim-amendment",
+                    "SUPERSEDES",
+                    self.CLAUSE,
+                    matter="POL-2026-03",
+                ),
+            ],
+        )
+        stale = {
+            i.assertion.object_id
+            for i in report.inferences
+            if i.assertion.predicate == "RELIES_ON_SUPERSEDED_POLICY"
+        }
+        assert self.CLAUSE in stale
 
     def test_a_cross_case_conclusion_belongs_to_no_single_case(self, retail_ctx):
         """The supersession sits under POL-2026-03 and the approval under the case, on purpose --

@@ -44,8 +44,11 @@ ordinary records ten days apart in two systems, and the join is the whole findin
 Northgate Holdings -> PixelPerfect Resale, so that walking `CONTROLS` as a bounded path
 is what finds the storefront. A one-hop rule finds only Northgate Holdings, which is a
 dormant holding company AnyCorp does not trade with, and misses the seller it actually
-pays out to. The registered address is Sam Parker's own, which is the detail a reviewer
-can check.
+pays out to. The memo says non-trading in those words, so Northgate is a `Company` and
+not a `Merchant` -- the pack carries both kinds because typing the vehicle as a seller
+would put a citation under a claim the same page contradicts, and the rule's declared end
+is a Merchant, so the finding names the storefront rather than the holding company. The
+registered address is Sam Parker's own, which is the detail a reviewer can check.
 
 One absence is deliberate and load-bearing. **No document waives a fee on a return that
 is in the warehouse table.** Every seeded return of Sam Parker's had its 15% fee charged

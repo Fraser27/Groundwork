@@ -103,6 +103,11 @@ entity_types:
     label: Merchant
     description: A seller or supplier trading through AnyCorp.
     help: Third-party sellers and drop-ship suppliers are both Merchants. The role is on the edge, not the node.
+  - id: Company
+    label: Company
+    label_plural: Companies
+    description: A registered company that does not itself trade through AnyCorp.
+    help: "The middle of an ownership ladder. A holding company that sells nothing here is not a Merchant, and calling it one would assert with a citation that it trades through AnyCorp, which is the opposite of what the memo says. It is not a Customer either, so the interposed link in a related-party chain needs a kind of its own."
   - id: Associate
     label: Associate
     description: An employee who handles or authorises a return.
@@ -231,9 +236,13 @@ governing_predicates:
     description: Belongs to this case.
   - id: CONTROLS
     label: controls
-    domain: [Customer, Merchant]
-    range: [Merchant]
-    description: Holds or directs this merchant.
+    # `Company` is on both ends because the interposed link in a real chain is a holding
+    # company that trades nowhere. Without a kind for it the extractor had two options and
+    # both were wrong: type a non-trading entity `Merchant`, which asserts with a citation
+    # that it sells here, or drop the edge, which breaks the chain the rule exists to walk.
+    domain: [Customer, Company, Merchant]
+    range: [Company, Merchant]
+    description: Holds or directs this company or merchant.
     help: The fact in the middle of a return-resale ring. Without it, "a customer we are investigating owns a storefront we pay out to" is two unrelated records and no rule can join them.
     # Control carries through a chain of holding companies, and a structure deep enough
     # to hide a related party is often one built to. Bounded, so a rule follows an
@@ -366,7 +375,13 @@ rules:
       # whole ("this bulletin replaces section 3.1") or through one of its own clauses,
       # and both are the same fact to a reader. Typing it would silently miss whichever
       # shape the extractor did not choose.
-      - "(x)-[:SUPERSEDES]->(c:PolicyClause)"
+      #
+      # Walked as a chain for the reason `SUPERSEDES` is declared transitive at all: a 2026
+      # bulletin may replace a 2025 amendment that replaced the clause this approval cites,
+      # and a decision taken under the original wording is no less stale for having been
+      # superseded twice. A one-hop premise would find the revision only if the desk
+      # happened to cite the most recent link in the chain.
+      - "(x)-[:SUPERSEDES*1..3]->(c:PolicyClause)"
     then: "(d)-[:RELIES_ON_SUPERSEDED_POLICY]->(c)"
     min_premise_class: EXTRACTED_MODEL
   - id: exception_during_investigation
