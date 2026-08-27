@@ -25,6 +25,7 @@ import type {
   ResolutionTier,
 } from '../api'
 import { HELP, ROUTER_LAYERS, PART_PROVENANCE_LABEL, TIERS } from '../epistemic'
+import { fillUnit, useUnitLabel } from '../useUnitLabel'
 import {
   droppedTiers,
   isForbidden,
@@ -330,6 +331,7 @@ function Layer({
   decided: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const unit = useUnitLabel()
   const meta = layer.kind in ROUTER_LAYERS ? ROUTER_LAYERS[layer.kind] : null
   const items = layer.items ?? []
 
@@ -414,7 +416,7 @@ function Layer({
         <p className="qtrace-layer-reason dim">
           {layer.hit_count > 0
             ? `${layer.hit_count} matched, but the trace carries no detail of them.`
-            : `Nothing here matched. ${meta ? meta.meaning : ''}`}
+            : `Nothing here matched. ${meta ? fillUnit(meta.meaning, unit) : ''}`}
         </p>
       )}
     </div>
@@ -834,6 +836,7 @@ function GateStep({
   blocks: QueryBlock[]
   usedFactCount: number
 }) {
+  const unit = useUnitLabel()
   const screens = blocks.filter((b) => b.rule === 'ethical_screen')
   const withheld = blocks.filter((b) => (b.effect ?? 'withhold') === 'withhold')
   const degraded = Boolean(gate?.degraded)
@@ -900,8 +903,8 @@ function GateStep({
         !degraded && (
           <p className="qtrace-note">
             Nothing was refused for this question. That is a result the wall produced, not an
-            absence of one: had a screened matter matched, it would be named here rather than
-            quietly left out.
+            absence of one: had a screened {unit.lower} matched, it would be named here rather
+            than quietly left out.
           </p>
         )
       ) : (
@@ -975,7 +978,7 @@ function GateStep({
                     <span className="withheld-field-label">Who to contact</span>
                     {b.contact ?? (
                       <span className="dim">
-                        No contact was given. Ask your risk team about this matter.
+                        No contact was given. Ask your risk team about this {unit.lower}.
                       </span>
                     )}
                   </div>

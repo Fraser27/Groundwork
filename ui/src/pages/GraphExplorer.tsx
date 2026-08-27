@@ -27,6 +27,7 @@ import { getTenantId } from '../auth'
 import { EPISTEMIC, EPISTEMIC_ORDER, HELP } from '../epistemic'
 import { buildLayerIndex } from '../graphLayers'
 import { useProvenance } from '../useProvenance'
+import { useUnitLabel } from '../useUnitLabel'
 import ConfidenceBar from '../components/ConfidenceBar'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
@@ -82,6 +83,7 @@ function cssVar(name: string): string {
 
 export default function GraphExplorer() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [searchParams, setSearchParams] = useSearchParams()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -859,11 +861,11 @@ export default function GraphExplorer() {
           )}
           <div className="toolbar-field">
             <label>
-              Matter
+              {unit.singular}
               <FieldHelp text={HELP.matterWall} />
             </label>
             <select value={matterFilter} onChange={(e) => setMatterFilter(e.target.value)}>
-              <option value="__all__">All matters</option>
+              <option value="__all__">All {unit.lowerPlural}</option>
               {matters
                 .filter((m) => !m.walled)
                 .map((m) => (

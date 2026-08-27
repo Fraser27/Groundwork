@@ -24,11 +24,12 @@ import { EmptyState, ErrorState, Spinner } from '../components/Shared'
 import TraceDialog from '../components/TraceDialog'
 import { type TraceView, traceOf } from '../trace'
 import { useProvenance } from '../useProvenance'
+import { fillUnit, useUnitLabel } from '../useUnitLabel'
 
 const EXAMPLES = [
   'Does acting for Calder create a conflict?',
   'What were fees billed by practice area last quarter?',
-  'Which open matters rely on authority that has been overruled?',
+  'Which open {units} rely on authority that has been superseded?',
 ]
 
 /** Turns that carry a full governance trace, so the row says so before it is opened. */
@@ -40,6 +41,7 @@ function kindLabel(event: RetrievalEvent): string {
 
 export default function Retrieval() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [question, setQuestion] = useState('')
   const [events, setEvents] = useState<RetrievalEvent[]>([])
   const [running, setRunning] = useState(false)
@@ -141,14 +143,17 @@ export default function Retrieval() {
         {events.length === 0 && !running && (
           <div className="hint" style={{ marginTop: 4 }}>
             Try one of these:{' '}
-            {EXAMPLES.map((e, i) => (
-              <span key={e}>
-                {i > 0 && ' · '}
-                <button className="link-button" onClick={() => setQuestion(e)}>
-                  {e}
-                </button>
-              </span>
-            ))}
+            {EXAMPLES.map((raw, i) => {
+              const e = fillUnit(raw, unit)
+              return (
+                <span key={raw}>
+                  {i > 0 && ' · '}
+                  <button className="link-button" onClick={() => setQuestion(e)}>
+                    {e}
+                  </button>
+                </span>
+              )
+            })}
           </div>
         )}
       </div>

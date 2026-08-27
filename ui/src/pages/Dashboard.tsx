@@ -7,9 +7,11 @@ import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import { ErrorState, IngestPill, Spinner } from '../components/Shared'
 import { epiStyle, fmtDateTime, fmtNum } from '../format'
+import { useUnitLabel } from '../useUnitLabel'
 
 export default function Dashboard() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -118,12 +120,12 @@ export default function Dashboard() {
         </div>
         <div className="stat-card">
           <div className="label">
-            Matters
+            {unit.plural}
             <FieldHelp text={HELP.matterWall} />
           </div>
           <div className="value accent">{fmtNum(stats.matters)}</div>
           <div className="sub">
-            <Link to="/matters">Browse matters</Link>
+            <Link to="/matters">Browse {unit.lowerPlural}</Link>
           </div>
         </div>
         <div className="stat-card">

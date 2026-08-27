@@ -14,6 +14,7 @@ import { HELP } from '../epistemic'
 import FieldHelp from '../components/FieldHelp'
 import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDateTime } from '../format'
+import { fillUnit, useUnitLabel } from '../useUnitLabel'
 
 interface Form {
   metric_id: string
@@ -85,11 +86,12 @@ const AGGREGATION_HELP: Record<Metric['aggregation'], string> = {
   semi_additive:
     'A balance. It may be summed across dimensions but not across time, adding month-end work in progress across twelve months produces a meaningless number.',
   non_additive:
-    'Never summable. A distinct count of open matters cannot be added across periods, because the same matter appears in several of them.',
+    'Never summable. A distinct count of open {units} cannot be added across periods, because the same {unit} appears in several of them.',
 }
 
 export default function Metrics() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [tables, setTables] = useState<TableSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -323,7 +325,7 @@ export default function Metrics() {
                             ? 'tag-orange'
                             : 'tag-red'
                       }`}
-                      title={AGGREGATION_HELP[m.aggregation]}
+                      title={fillUnit(AGGREGATION_HELP[m.aggregation], unit)}
                     >
                       {m.aggregation.replace('_', '-')}
                     </span>
@@ -511,7 +513,7 @@ export default function Metrics() {
                   <option value="semi_additive">Semi-additive (a balance)</option>
                   <option value="non_additive">Non-additive</option>
                 </select>
-                <p className="hint">{AGGREGATION_HELP[form.aggregation]}</p>
+                <p className="hint">{fillUnit(AGGREGATION_HELP[form.aggregation], unit)}</p>
               </div>
             </div>
 

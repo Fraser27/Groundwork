@@ -1,5 +1,5 @@
 /**
- * The access trail: who changed whose access to which matter, why, and when.
+ * The access trail: who changed whose access to which organising unit, why, and when.
  *
  * Read-only by construction — there is no mutating call in this file, and nothing is
  * passed in that could make one. That is the point: the trail is the compliance
@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, type AccessEvent } from '../api'
 import { getTenantId } from '../auth'
 import { ACCESS_ACTION_LABEL, HELP } from '../epistemic'
+import { fillUnit, useUnitLabel } from '../useUnitLabel'
 import { fmtDateTime } from '../format'
 import FieldHelp from './FieldHelp'
 import { EmptyState, ErrorState, Spinner } from './Shared'
@@ -47,6 +48,7 @@ export default function AccessAudit({
   const [error, setError] = useState('')
   const [action, setAction] = useState<(typeof ACTIONS)[number]>('ALL')
 
+  const unit = useUnitLabel()
   const scopeKey = `${matterId ?? ''}|${userId ?? ''}|${refreshKey}`
 
   useEffect(() => {
@@ -101,7 +103,7 @@ export default function AccessAudit({
               className={`access-tab${action === a ? ' active' : ''}`}
               onClick={() => setAction(a)}
             >
-              {a === 'ALL' ? 'Everything' : ACCESS_ACTION_LABEL[a]}
+              {a === 'ALL' ? 'Everything' : fillUnit(ACCESS_ACTION_LABEL[a], unit)}
             </button>
           ))}
         </div>
@@ -127,7 +129,7 @@ export default function AccessAudit({
               <th>When</th>
               <th>Change</th>
               <th>Person affected</th>
-              {!matterId && <th>Matter</th>}
+              {!matterId && <th>{unit.singular}</th>}
               <th>
                 Made by
                 <FieldHelp text="The signed-in person who made the change. Recorded from the verified session, not typed in." />
@@ -148,7 +150,7 @@ export default function AccessAudit({
                     style={{ ['--audit-colour' as string]: ACTION_COLOUR[e.action] }}
                   >
                     <span className="audit-action-bar" aria-hidden="true" />
-                    {ACCESS_ACTION_LABEL[e.action] ?? e.action}
+                    {fillUnit(ACCESS_ACTION_LABEL[e.action] ?? e.action, unit)}
                   </span>
                   {typeof e.detail?.role === 'string' && (
                     <div className="dim" style={{ fontSize: 11, marginTop: 2 }}>

@@ -135,7 +135,7 @@ export default function Matters() {
     return (
       <>
         <button className="back-link btn-ghost" style={{ border: 'none', background: 'none', cursor: 'pointer' }} onClick={() => setSelectedId(null)}>
-          ← Back to matters
+          ← Back to {unit.lowerPlural}
         </button>
 
         <div className="page-header">
@@ -151,7 +151,7 @@ export default function Matters() {
               <button
                 className="btn btn-danger btn-sm"
                 onClick={() => setWiping(selected.matter_id)}
-                title="Withdraw every fact read out of this matter's documents"
+                title={`Withdraw every fact read out of this ${unit.lower}'s documents`}
               >
                 Withdraw facts
               </button>
@@ -237,7 +237,7 @@ export default function Matters() {
               {matterDocs.length === 0 && (
                 <tr>
                   <td colSpan={5} className="empty-state">
-                    No documents on this matter yet.
+                    No documents on this {unit.lower} yet.
                   </td>
                 </tr>
               )}
@@ -248,7 +248,7 @@ export default function Matters() {
         <div className="card">
           <div className="card-header">
             <h3>
-              Facts on this matter
+              Facts on this {unit.lower}
               <FieldHelp text={HELP.epistemicClass} />
             </h3>
             <Link to="/provenance" className="btn btn-ghost btn-sm">
@@ -287,7 +287,7 @@ export default function Matters() {
               {matterAssertions.length === 0 && (
                 <tr>
                   <td colSpan={4} className="empty-state">
-                    No facts recorded on this matter yet.
+                    No facts recorded on this {unit.lower} yet.
                   </td>
                 </tr>
               )}
@@ -334,7 +334,7 @@ export default function Matters() {
             <h2>{unit.plural}</h2>
             <p>
               {unit.plural} are subgraphs of one tenant-wide graph, not separate graphs. A conflict
-              check is by definition cross-{unit.singular.toLowerCase()}, and a shared party is the
+              check is by definition cross-{unit.lower}, and a shared party is the
               signal it reads.
             </p>
           </div>
@@ -343,7 +343,7 @@ export default function Matters() {
 
       {error && (
         <ErrorState
-          title={`Could not load ${unit.plural.toLowerCase()}`}
+          title={`Could not load ${unit.lowerPlural}`}
           detail={error}
           onRetry={retry}
         />
@@ -353,15 +353,17 @@ export default function Matters() {
         <div className="withheld-block">
           <div className="withheld-block-head">
             <h3>
-              {withheld.length} matter{withheld.length === 1 ? '' : 's'} withheld from you
+              {withheld.length} {withheld.length === 1 ? unit.lower : unit.lowerPlural} withheld
+              from you
               <FieldHelp text={HELP.ethicalScreen} />
             </h3>
             <span className="tag tag-red">Screened</span>
           </div>
           <p className="withheld-block-note">
-            You cannot read these matters, their documents, or anything recorded on them. They are
-            named here on purpose: if they were simply hidden, a conflict check could come back
-            clean because the matching matter was invisible, and someone would proceed on it.
+            You cannot read these {unit.lowerPlural}, their documents, or anything recorded on
+            them. They are named here on purpose: if they were simply hidden, a conflict check could
+            come back clean because the matching {unit.lower} was invisible, and someone would
+            proceed on it.
             Nothing here can be opened, and none of it appears in the list below.
           </p>
           <div className="withheld-list">
@@ -381,7 +383,7 @@ export default function Matters() {
                     w.contact
                   ) : (
                     <span className="dim">
-                      No contact was given. Ask your risk team about this matter.
+                      No contact was given. Ask your risk team about this {unit.lower}.
                     </span>
                   )}
                 </div>
@@ -393,7 +395,7 @@ export default function Matters() {
 
       <div className="search-bar">
         <input
-          placeholder={`Filter by ${unit.singular.toLowerCase()} id, name or client…`}
+          placeholder={`Filter by ${unit.lower} id, name or client…`}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
@@ -408,11 +410,11 @@ export default function Matters() {
         <table className="data-table data-table-hover">
           <thead>
             <tr>
-              {/* No Client or Status column. A matter record carries a reference, a name and its
+              {/* No Client or Status column. The record carries a reference, a name and its
                   timestamps -- nothing sends either of those, so both rendered as an empty tag and
                   a dash on every row. A column that can never hold a value is worse than absent:
                   it reads as missing data rather than as a field that does not exist. */}
-              <th>Matter</th>
+              <th>{unit.singular}</th>
               <th className="num">Documents</th>
               <th className="num">Facts</th>
               <th className="num">
@@ -457,10 +459,16 @@ export default function Matters() {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={6}>
-                  <EmptyState title={matters.length === 0 ? 'No matters yet' : 'No matters match'}>
+                  <EmptyState
+                    title={
+                      matters.length === 0
+                        ? `No ${unit.lowerPlural} yet`
+                        : `No ${unit.lowerPlural} match`
+                    }
+                  >
                     {matters.length === 0
-                      ? 'Matters arrive from the case management system as declared records. None have been loaded for this tenant.'
-                      : 'Clear the filter to see every matter you can read.'}
+                      ? `${unit.plural} arrive from the system of record as declared records. None have been loaded for this tenant.`
+                      : `Clear the filter to see every ${unit.lower} you can read.`}
                   </EmptyState>
                 </td>
               </tr>

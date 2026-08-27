@@ -18,6 +18,7 @@ import { CreateMatterDialog, LinkDocumentsDialog } from '../components/MatterDia
 import WipeDialog from '../components/WipeDialog'
 import { EmptyState, ErrorState, IngestPill, Pipeline, Spinner, Toast } from '../components/Shared'
 import { fmtBytes, fmtDateTime, fmtNum } from '../format'
+import { useUnitLabel } from '../useUnitLabel'
 
 /** The user asked for 30s. On-demand refresh is the Refresh button and every upload. */
 const POLL_INTERVAL_MS = 30_000
@@ -45,6 +46,7 @@ interface ActiveIngest {
 
 export default function Documents() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [docs, setDocs] = useState<DocumentSummary[]>([])
   const [matters, setMatters] = useState<Matter[]>([])
   const [floor, setFloor] = useState(0.8)
@@ -171,7 +173,7 @@ export default function Documents() {
       // Guarded here as well as by the disabled drop zone, because a drag-and-drop can reach this
       // without the button. An upload with no matter produced facts nobody could attribute, and
       // it failed silently: the pipeline ran and the facts were simply unusable afterwards.
-      showToast('Choose a matter first. A document has to be filed under one.', 'error')
+      showToast(`Choose a ${unit.lower} first. A document has to be filed under one.`, 'error')
       return
     }
     setUploading(true)
@@ -225,15 +227,17 @@ export default function Documents() {
           </h3>
           <div className="toolbar-field" style={{ marginBottom: 0 }}>
             <label>
-              Attach to matter
-              <FieldHelp text="Required. Every fact read out of this document inherits the matter, and both the Matters and Access pages group facts by it - so a document filed under nothing produces facts nobody can attribute or staff." />
+              Attach to {unit.lower}
+              <FieldHelp
+                text={`Required. Every fact read out of this document inherits the ${unit.lower}, and both the ${unit.plural} and Access pages group facts by it - so a document filed under nothing produces facts nobody can attribute or staff.`}
+              />
             </label>
-            {/* A real list, not free text. A matter is a record now, and the API refuses an
+            {/* A real list, not free text. The unit is a record now, and the API refuses an
                 upload naming one that does not exist: a mistyped reference would otherwise become
-                a second matter that nothing queries, and a conflict check split across the two
+                a second record that nothing queries, and a conflict check split across the two
                 returns half its rows while looking perfectly clean. */}
             <select value={uploadMatter} onChange={(e) => setUploadMatter(e.target.value)}>
-              <option value="">Choose a matter…</option>
+              <option value="">Choose a {unit.lower}…</option>
               {matters
                 .filter((m) => !m.walled)
                 .map((m) => (
@@ -249,7 +253,7 @@ export default function Documents() {
             style={{ alignSelf: 'end' }}
             onClick={() => setCreatingMatter(true)}
           >
-            New matter
+            New {unit.lower}
           </button>
         </div>
         <div
@@ -277,7 +281,7 @@ export default function Documents() {
               ? 'Uploading…'
               : uploadMatter
                 ? 'Drop files here, or click to choose'
-                : 'Choose a matter first'}
+                : `Choose a ${unit.lower} first`}
           </strong>
           {uploadMatter ? (
             <>
@@ -286,8 +290,9 @@ export default function Documents() {
             </>
           ) : (
             <>
-              Every fact read out of a document inherits its matter. Filing under nothing produces
-              facts that cannot be grouped, staffed or screened, so a matter is required.
+              Every fact read out of a document inherits its {unit.lower}. Filing under nothing
+              produces facts that cannot be grouped, staffed or screened, so a {unit.lower} is
+              required.
             </>
           )}
           <input
@@ -390,9 +395,9 @@ export default function Documents() {
           </select>
         </div>
         <div className="toolbar-field">
-          <label>Matter</label>
+          <label>{unit.singular}</label>
           <select value={matterFilter} onChange={(e) => setMatterFilter(e.target.value)}>
-            <option value="__all__">All matters</option>
+            <option value="__all__">All {unit.lowerPlural}</option>
             {matters
               .filter((m) => !m.walled)
               .map((m) => (
@@ -417,7 +422,7 @@ export default function Documents() {
               {picked.size} document{picked.size === 1 ? '' : 's'} selected
             </span>
             <button className="btn btn-primary btn-sm" onClick={() => setLinking(true)}>
-              File under a matter
+              File under a {unit.lower}
             </button>
             <button className="btn btn-ghost btn-sm" onClick={() => setPicked(new Set())}>
               Clear
@@ -440,7 +445,7 @@ export default function Documents() {
                 />
               </th>
               <th>File</th>
-              <th>Matter</th>
+              <th>{unit.singular}</th>
               <th>
                 State
                 <FieldHelp text={HELP.ingestState} />
@@ -506,7 +511,7 @@ export default function Documents() {
                   <EmptyState title={docs.length === 0 ? 'No documents yet' : 'No documents match'}>
                     {docs.length === 0
                       ? 'Upload a file above to start the pipeline.'
-                      : 'Clear the search or the state and matter filters.'}
+                      : `Clear the search or the state and ${unit.lower} filters.`}
                   </EmptyState>
                 </td>
               </tr>
@@ -549,7 +554,7 @@ export default function Documents() {
                     </div>
                   </div>
                   <div className="detail-field">
-                    <div className="label">Matter</div>
+                    <div className="label">{unit.singular}</div>
                     <div className="value">{detail.matter_id || 'Unassigned'}</div>
                   </div>
                   <div className="detail-field">

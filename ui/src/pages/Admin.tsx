@@ -10,7 +10,7 @@ import {
   type TenantUser,
 } from '../api'
 import { getTenantId } from '../auth'
-import { forgetUnitLabel } from '../useUnitLabel'
+import { forgetUnitLabel, useUnitLabel } from '../useUnitLabel'
 import { HELP } from '../epistemic'
 import ConfidenceBar from '../components/ConfidenceBar'
 import FieldHelp from '../components/FieldHelp'
@@ -37,6 +37,7 @@ function modelNote(settings: TenantSettings, modelId?: string): string {
 
 export default function Admin() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [settings, setSettings] = useState<TenantSettings | null>(null)
   const [retrieval, setRetrieval] = useState<RetrievalGovernance | null>(null)
   const [fieldHelp, setFieldHelp] = useState<Record<string, string>>({})
@@ -413,7 +414,8 @@ export default function Admin() {
           </div>
           <p className="card-note">
             Every read is filtered to this tenant, and there is no way to express a query that is not.
-            Matters are subgraphs within it, filtered by your grants rather than stored separately.
+            {' '}{unit.plural} are subgraphs within it, filtered by your grants rather than stored
+            separately.
           </p>
         </div>
 
@@ -782,7 +784,7 @@ export default function Admin() {
           <div className="form-group">
             <label>
               Catalog enrichment
-              <FieldHelp text="Writes plain-language descriptions for tables and columns, which are then given to the model that generates SQL. Glue says a column is mtr_stat_cd varchar(2); this is what says it is a matter status. A cheap model does this well, because it is describing names and types rather than reasoning over them. Every description it proposes waits for review before any query can use it." />
+              <FieldHelp text="Writes plain-language descriptions for tables and columns, which are then given to the model that generates SQL. Glue says a column is mtr_stat_cd varchar(2); this is what says it is a {unit} status. A cheap model does this well, because it is describing names and types rather than reasoning over them. Every description it proposes waits for review before any query can use it." />
             </label>
             <select
               value={settings.enrichment_model ?? ''}

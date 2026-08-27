@@ -45,6 +45,7 @@ import ProvenancePanel from '../components/ProvenancePanel'
 import QueryTrace from '../components/QueryTrace'
 import { ErrorState, Spinner, TierBadge } from '../components/Shared'
 import { entityLabel, epiStyle } from '../format'
+import { fillUnit, useUnitLabel } from '../useUnitLabel'
 
 /** Tier 2 explains a fact by the terms it matched; tier 3 walked to it, so distance is the
  *  explanation -- ten edges read alike otherwise, quoting indistinguishable from inferring. */
@@ -65,13 +66,14 @@ const EXAMPLES: { q: string; tier: ResolutionTier }[] = [
   { q: 'What were fees billed by practice area last quarter?', tier: 1 },
   { q: 'Does acting for Halveston create a conflict?', tier: 2 },
   {
-    q: 'Which open matters have unbilled work and an adverse party we also act for?',
+    q: 'Which open {units} have unbilled work and an adverse party we also act for?',
     tier: 3,
   },
 ]
 
 export default function QueryBuilder() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [question, setQuestion] = useState('')
   const [matterId, setMatterId] = useState('')
   const [asOf, setAsOf] = useState('')
@@ -199,8 +201,9 @@ export default function QueryBuilder() {
       {contextError && (
         <div className="banner banner-warn">
           <span>
-            <strong>Could not load the matter list or the trust floor.</strong> {contextError}. You
-            can still ask, but the matter filter is empty and the default floor is in use.
+            <strong>Could not load the {unit.lower} list or the trust floor.</strong>{' '}
+            {contextError}. You can still ask, but the {unit.lower} filter is empty and the default
+            floor is in use.
           </span>
         </div>
       )}
@@ -211,7 +214,7 @@ export default function QueryBuilder() {
           <textarea
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder="e.g. Which matters cite authority that has since been overruled?"
+            placeholder={`e.g. Which ${unit.lowerPlural} cite a policy that has since been superseded?`}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && question.trim()) ask(question)
             }}
@@ -222,11 +225,11 @@ export default function QueryBuilder() {
         <div className="toolbar" style={{ marginBottom: 12 }}>
           <div className="toolbar-field">
             <label>
-              Matter
+              {unit.singular}
               <FieldHelp text={HELP.matterWall} />
             </label>
             <select value={matterId} onChange={(e) => setMatterId(e.target.value)}>
-              <option value="">All matters I can see</option>
+              <option value="">All {unit.lowerPlural} I can see</option>
               {matters
                 .filter((m) => !m.walled)
                 .map((m) => (
@@ -280,7 +283,7 @@ export default function QueryBuilder() {
             Search every lane, not just the first that can answer
             <FieldHelp text="Normally the question stops at the lowest tier that can answer it, which is right when a governed metric matches exactly. This runs the graph, the documents and the catalogue as well, and reports each separately rather than merging them, because a compiled figure, a quoted passage and a model's reading are not the same kind of claim. A matching governed metric still short-circuits: it is exact, and fanning out would add latency and nothing else." />
             <span className="dim" style={{ display: 'block', fontSize: 11.5 }}>
-              Slower. Matter and as-at filters do not apply to this route.
+              Slower. {unit.singular} and as-at filters do not apply to this route.
             </span>
           </span>
         </label>
@@ -319,20 +322,25 @@ export default function QueryBuilder() {
           <span className="card-note">Each takes a different route through the system.</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          {EXAMPLES.map((ex) => (
-            <button
-              key={ex.q}
-              className="btn btn-ghost btn-sm"
-              style={{ justifyContent: 'flex-start', textAlign: 'left', whiteSpace: 'normal' }}
-              onClick={() => {
-                setQuestion(ex.q)
-                ask(ex.q)
-              }}
-            >
-              <TierBadge tier={ex.tier} />
-              {ex.q}
-            </button>
-          ))}
+          {EXAMPLES.map((ex) => {
+            // Filled before it is asked, not just before it is shown: the question reaches the
+            // router as typed, and `{units}` is not a word anything would match.
+            const q = fillUnit(ex.q, unit)
+            return (
+              <button
+                key={ex.q}
+                className="btn btn-ghost btn-sm"
+                style={{ justifyContent: 'flex-start', textAlign: 'left', whiteSpace: 'normal' }}
+                onClick={() => {
+                  setQuestion(q)
+                  ask(q)
+                }}
+              >
+                <TierBadge tier={ex.tier} />
+                {q}
+              </button>
+            )
+          })}
         </div>
       </div>
 

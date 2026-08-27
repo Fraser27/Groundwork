@@ -28,11 +28,13 @@ import ProvenancePanel, { SourceSpan } from '../components/ProvenancePanel'
 import ReasonerReportPanel from '../components/ReasonerReportPanel'
 import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { epiStyle, fmtDateTime } from '../format'
+import { useUnitLabel } from '../useUnitLabel'
 
 type Decision = 'approved' | 'rejected' | 'corrected'
 
 export default function ReviewQueue() {
   const tenant = getTenantId()
+  const unit = useUnitLabel()
   const [pending, setPending] = useState<Assertion[]>([])
   const [matters, setMatters] = useState<Matter[]>([])
   const [floor, setFloor] = useState(0.8)
@@ -350,11 +352,11 @@ export default function ReviewQueue() {
       <div className="toolbar">
         <div className="toolbar-field">
           <label>
-            Matter
+            {unit.singular}
             <FieldHelp text={HELP.matterWall} />
           </label>
           <select value={matterFilter} onChange={(e) => setMatterFilter(e.target.value)}>
-            <option value="__all__">All matters</option>
+            <option value="__all__">All {unit.lowerPlural}</option>
             {matters
               .filter((m) => !m.walled)
               .map((m) => (

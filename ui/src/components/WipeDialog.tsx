@@ -1,5 +1,5 @@
 /**
- * Confirm withdrawing the facts read out of a document, or a whole matter.
+ * Confirm withdrawing the facts read out of a document, or a whole organising unit.
  *
  * The dialogue exists to correct a wrong mental model rather than to add friction. "Delete" makes
  * a lawyer think the record is gone, and it is not: the facts are closed, an as-of read before
@@ -13,6 +13,7 @@
 import { useState } from 'react'
 
 import FieldHelp from './FieldHelp'
+import { useUnitLabel } from '../useUnitLabel'
 
 export default function WipeDialog({
   scope,
@@ -31,6 +32,7 @@ export default function WipeDialog({
   onCancel: () => void
   onSubmit: (reason: string) => void
 }) {
+  const unit = useUnitLabel()
   const [reason, setReason] = useState('')
   const ready = reason.trim().length > 0
   const isMatter = scope === 'matter'
@@ -39,14 +41,14 @@ export default function WipeDialog({
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>
-          Withdraw the facts from {isMatter ? 'matter' : ''} {target}?
+          Withdraw the facts from {isMatter ? unit.lower : ''} {target}?
         </h3>
         <p className="modal-sub">
           {typeof count === 'number'
             ? `${count} fact${count === 1 ? '' : 's'} will stop shaping answers.`
             : 'Every fact read out of it will stop shaping answers.'}{' '}
           {isMatter
-            ? 'This covers every document filed under the matter.'
+            ? `This covers every document filed under the ${unit.lower}.`
             : 'The file itself stays where it is.'}
         </p>
 
@@ -76,14 +78,14 @@ export default function WipeDialog({
         <div className="form-group">
           <label>
             Reason, required
-            <FieldHelp text="Written for whoever reads the file in a year. Say why these facts should not stand: “extracted before the model was corrected” or “this matter was loaded by mistake” both explain themselves; “cleanup” does not." />
+            <FieldHelp text="Written for whoever reads the file in a year. Say why these facts should not stand: “extracted before the model was corrected” or “this {unit} was loaded by mistake” both explain themselves; “cleanup” does not." />
           </label>
           <textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder={
               isMatter
-                ? 'This matter was loaded into the wrong tenant.'
+                ? `This ${unit.lower} was loaded into the wrong tenant.`
                 : 'Re-reading with the corrected extraction model.'
             }
             autoFocus

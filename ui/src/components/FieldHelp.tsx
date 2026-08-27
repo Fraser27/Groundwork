@@ -15,6 +15,8 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
+import { useUnitText } from '../useUnitLabel'
+
 const GAP = 8
 const MARGIN = 10
 const MAX_WIDTH = 320
@@ -26,9 +28,14 @@ interface Position {
 }
 
 export default function FieldHelp({
-  text,
-  title,
+  text: rawText,
+  title: rawTitle,
 }: {
+  /**
+   * May contain `{unit}` / `{units}` / `{Unit}` / `{Units}`, substituted with whatever this
+   * tenant's pack calls the unit work is organised by. Help text is written as a `const` in
+   * `epistemic.ts` and cannot call a hook, so the placeholder is how it stays pack-neutral.
+   */
   text: string
   /** Optional bolded lead-in, for terms that need naming as well as explaining. */
   title?: string
@@ -38,6 +45,9 @@ export default function FieldHelp({
    */
   align?: 'center' | 'right'
 }) {
+  const fill = useUnitText()
+  const text = fill(rawText)
+  const title = rawTitle ? fill(rawTitle) : rawTitle
   const label = title ? `${title}: ${text}` : text
   const anchorRef = useRef<HTMLSpanElement>(null)
   const tipRef = useRef<HTMLSpanElement>(null)
