@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Metric, type TableSummary } from '../api'
-import { getTenantId } from '../auth'
+import { getTenantId, isPlatformAdmin } from '../auth'
 import { HELP } from '../epistemic'
 import FieldHelp from '../components/FieldHelp'
 import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
@@ -92,6 +92,9 @@ const AGGREGATION_HELP: Record<Metric['aggregation'], string> = {
 export default function Metrics() {
   const tenant = getTenantId()
   const unit = useUnitLabel()
+  // Presentation only. `require_admin` answers 403 whatever the browser drew, so hiding the
+  // control is about not offering an action that will fail rather than about preventing it.
+  const admin = isPlatformAdmin()
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [tables, setTables] = useState<TableSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -101,6 +104,7 @@ export default function Metrics() {
   const [editing, setEditing] = useState<Metric | null>(null)
   const [form, setForm] = useState<Form>(EMPTY)
   const [saving, setSaving] = useState(false)
+  const [seeding, setSeeding] = useState(false)
   const [sql, setSql] = useState<Record<string, string>>({})
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
 
@@ -177,6 +181,35 @@ export default function Metrics() {
     }
   }
 
+  /**
+   * Load the pack that ships for this tenant's ontology.
+   *
+   * Here rather than only in the API because an empty Metrics page gives a reader nothing to
+   * read: a definition is easier to understand by editing one than by inventing one, and the
+   * shapes worth studying -- a hard time-grain restriction, a ratio composed from two other
+   * metrics -- are not the ones a first attempt at the form produces.
+   *
+   * Drafts, so nothing it loads answers a question until somebody approves it, and metrics
+   * authored here are left alone.
+   */
+  const seed = async () => {
+    setSeeding(true)
+    try {
+      const r = await api.seedMetrics(tenant)
+      showToast(
+        r.created === 0
+          ? `Nothing to load: all ${r.skipped} example metrics are already here.`
+          : `Loaded ${r.created} example metric${r.created === 1 ? '' : 's'} as drafts. They name a fictional company's tables, so read each one against your own catalog before approving it.`,
+        r.created === 0 ? 'info' : 'success',
+      )
+      load()
+    } catch (e) {
+      showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
+    } finally {
+      setSeeding(false)
+    }
+  }
+
   const toggleSql = async (m: Metric) => {
     if (sql[m.metric_id]) {
       setSql((s) => {
@@ -235,6 +268,12 @@ export default function Metrics() {
         >
           New metric
         </button>
+        {admin && (
+          <button className="btn btn-ghost" onClick={seed} disabled={seeding}>
+            {seeding ? 'Loading…' : 'Load examples'}
+            <FieldHelp text="Loads the example metrics that ship for this tenant's ontology pack, as drafts. They name a fictional company's tables, so each one has to be read against your own catalog before it is approved. Anything you authored here is left alone." />
+          </button>
+        )}
         <div className="toolbar-field" style={{ flex: 1, minWidth: 240 }}>
           <label>&nbsp;</label>
           <input

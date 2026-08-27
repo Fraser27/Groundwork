@@ -1826,6 +1826,17 @@ export const api = {
     request<{ metric_id: string; sql: string }>(`/tenants/${tenant}/metrics/${id}/compile`, {
       method: 'POST',
     }),
+  /**
+   * Load the example pack shipped for this tenant's ontology, as drafts.
+   *
+   * Always drafts from here. The endpoint takes `approve`, and offering that to a button would
+   * make one click put definitions naming a fictional company's tables into service.
+   */
+  seedMetrics: (tenant: string) =>
+    request<{ created: number; skipped: number; note: string }>(
+      `/tenants/${tenant}/metrics/seed`,
+      { method: 'POST' },
+    ),
 
   /**
    * @deprecated Use `compose`, or drive the agent through `runRetrieval`.
