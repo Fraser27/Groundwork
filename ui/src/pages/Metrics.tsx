@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Metric, type TableSummary } from '../api'
+import { api, type CompiledMetric, type Metric, type TableSummary } from '../api'
 import { getTenantId, isPlatformAdmin } from '../auth'
 import { HELP } from '../epistemic'
 import FieldHelp from '../components/FieldHelp'
@@ -26,6 +26,9 @@ interface Form {
   time_grain_column: string
   time_grains: string
   aggregation: Metric['aggregation']
+  value_type: string
+  unit: string
+  format: string
   filters: string
   synonyms: string
 }
@@ -40,9 +43,14 @@ const EMPTY: Form = {
   time_grain_column: '',
   time_grains: 'month, quarter, year',
   aggregation: 'additive',
+  value_type: 'number',
+  unit: '',
+  format: '',
   filters: '',
   synonyms: '',
 }
+
+const VALUE_TYPES = ['number', 'currency', 'percent', 'count', 'duration']
 
 const toForm = (m: Metric): Form => ({
   metric_id: m.metric_id,
@@ -54,6 +62,9 @@ const toForm = (m: Metric): Form => ({
   time_grain_column: m.time_grain_column || '',
   time_grains: m.time_grains.join(', '),
   aggregation: m.aggregation,
+  value_type: m.value_type || 'number',
+  unit: m.unit || '',
+  format: m.format || '',
   filters: m.filters.join('\n'),
   synonyms: m.synonyms.join(', '),
 })
@@ -71,9 +82,12 @@ const fromForm = (f: Form): Partial<Metric> => ({
   expression: f.expression,
   source_table: f.source_table,
   grain: list(f.grain),
-  time_grain_column: f.time_grain_column || null,
+  time_grain_column: f.time_grain_column,
   time_grains: list(f.time_grains),
   aggregation: f.aggregation,
+  value_type: f.value_type,
+  unit: f.unit,
+  format: f.format,
   filters: f.filters
     .split('\n')
     .map((x) => x.trim())
@@ -87,6 +101,38 @@ const AGGREGATION_HELP: Record<Metric['aggregation'], string> = {
     'A balance. It may be summed across dimensions but not across time, adding month-end work in progress across twelve months produces a meaningless number.',
   non_additive:
     'Never summable. A distinct count of open {units} cannot be added across periods, because the same {unit} appears in several of them.',
+}
+
+/**
+ * What the compiler noticed and did not refuse.
+ *
+ * Fan-out inflation over a join, a result that must not be summed again, base metrics in
+ * different units. Each is a way the figure can be wrong while the SQL is perfectly valid, so
+ * they belong beside the SQL rather than in a log nobody reads.
+ */
+function CompilerWarnings({ warnings }: { warnings: string[] }) {
+  if (!warnings || warnings.length === 0) return null
+  return (
+    <div
+      className="banner banner-warn"
+      style={{ marginBottom: 0, borderRadius: 0, border: 'none' }}
+    >
+      <span>
+        <strong>
+          Compiles, with {warnings.length === 1 ? 'a caveat' : `${warnings.length} caveats`}.
+        </strong>{' '}
+        {warnings.length === 1 ? (
+          warnings[0]
+        ) : (
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        )}
+      </span>
+    </div>
+  )
 }
 
 export default function Metrics() {
@@ -105,12 +151,28 @@ export default function Metrics() {
   const [form, setForm] = useState<Form>(EMPTY)
   const [saving, setSaving] = useState(false)
   const [seeding, setSeeding] = useState(false)
-  const [sql, setSql] = useState<Record<string, string>>({})
+  const [sql, setSql] = useState<Record<string, CompiledMetric>>({})
+  const [preview, setPreview] = useState<CompiledMetric | null>(null)
+  const [previewing, setPreviewing] = useState(false)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 4000)
+  }
+
+  // Any edit discards the compiled SQL on screen. Leaving it up would show an author SQL that no
+  // longer matches the definition they are about to save, which is worse than showing none.
+  const update = (patch: Partial<Form>) => {
+    setForm((f) => ({ ...f, ...patch }))
+    setPreview(null)
+  }
+
+  const openModal = (m: Metric | null) => {
+    setEditing(m)
+    setForm(m ? toForm(m) : EMPTY)
+    setPreview(null)
+    setModal(true)
   }
 
   const load = () => {
@@ -143,19 +205,44 @@ export default function Metrics() {
     setSaving(true)
     try {
       const body = fromForm(form)
-      if (editing) {
-        await api.updateMetric(tenant, editing.metric_id, body)
-        showToast(`Updated ${form.name}. Saved as a draft, approve it to make it answerable.`)
-      } else {
-        await api.createMetric(tenant, body)
-        showToast(`Created ${form.name} as a draft.`)
-      }
+      const saved = editing
+        ? await api.updateMetric(tenant, editing.metric_id, body)
+        : await api.createMetric(tenant, body)
+      // An author who skipped the preview still has to hear the caveats, so the count goes in
+      // the toast and the SQL button carries the text.
+      const caveats = saved.warnings?.length
+        ? ` It compiles with ${saved.warnings.length === 1 ? 'a caveat' : `${saved.warnings.length} caveats`}, open SQL to read ${saved.warnings.length === 1 ? 'it' : 'them'}.`
+        : ''
+      showToast(
+        editing
+          ? `Updated ${form.name}. Saved as a draft, approve it to make it answerable.${caveats}`
+          : `Created ${form.name} as a draft.${caveats}`,
+      )
       setModal(false)
       load()
     } catch (e) {
       showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
     } finally {
       setSaving(false)
+    }
+  }
+
+  /**
+   * Compile the form as it stands, without saving it.
+   *
+   * The point of a deterministic compiler is that a human can read the SQL before the definition
+   * is allowed to answer anything, and after saving is too late: an approved metric is already
+   * the sanctioned answer. Refusals come back as the same 422 the save would give.
+   */
+  const runPreview = async () => {
+    setPreviewing(true)
+    try {
+      setPreview(await api.previewMetric(tenant, fromForm(form)))
+    } catch (e) {
+      setPreview(null)
+      showToast((e as Error).message.replace(/^\d+:\s*/, ''), 'error')
+    } finally {
+      setPreviewing(false)
     }
   }
 
@@ -221,7 +308,7 @@ export default function Metrics() {
     }
     try {
       const res = await api.compileMetric(tenant, m.metric_id)
-      setSql((s) => ({ ...s, [m.metric_id]: res.sql }))
+      setSql((s) => ({ ...s, [m.metric_id]: res }))
     } catch (e) {
       showToast(
         `Could not compile ${m.name}: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
@@ -258,14 +345,7 @@ export default function Metrics() {
       </div>
 
       <div className="toolbar">
-        <button
-          className="btn btn-primary"
-          onClick={() => {
-            setEditing(null)
-            setForm(EMPTY)
-            setModal(true)
-          }}
-        >
+        <button className="btn btn-primary" onClick={() => openModal(null)}>
           New metric
         </button>
         {admin && (
@@ -406,11 +486,7 @@ export default function Metrics() {
                     <button
                       className="btn btn-ghost btn-sm"
                       style={{ marginRight: 5 }}
-                      onClick={() => {
-                        setEditing(m)
-                        setForm(toForm(m))
-                        setModal(true)
-                      }}
+                      onClick={() => openModal(m)}
                     >
                       Edit
                     </button>
@@ -428,8 +504,9 @@ export default function Metrics() {
                 {sql[m.metric_id] && (
                   <tr key={`${m.metric_id}-sql`}>
                     <td colSpan={7} style={{ padding: 0 }}>
+                      <CompilerWarnings warnings={sql[m.metric_id].warnings} />
                       <pre className="code-block" style={{ margin: 0, borderRadius: 0, border: 'none' }}>
-                        {sql[m.metric_id]}
+                        {sql[m.metric_id].sql}
                       </pre>
                     </td>
                   </tr>
@@ -468,7 +545,7 @@ export default function Metrics() {
                 <input
                   value={form.metric_id}
                   disabled={!!editing}
-                  onChange={(e) => setForm({ ...form, metric_id: e.target.value })}
+                  onChange={(e) => update({ metric_id: e.target.value })}
                   placeholder="m_005"
                 />
               </div>
@@ -476,7 +553,7 @@ export default function Metrics() {
                 <label>Name</label>
                 <input
                   value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  onChange={(e) => update({ name: e.target.value })}
                   placeholder="fees_billed"
                 />
               </div>
@@ -489,7 +566,7 @@ export default function Metrics() {
               </label>
               <input
                 value={form.definition}
-                onChange={(e) => setForm({ ...form, definition: e.target.value })}
+                onChange={(e) => update({ definition: e.target.value })}
                 placeholder="Total fees invoiced, excluding disbursements and VAT."
               />
             </div>
@@ -497,13 +574,13 @@ export default function Metrics() {
             <div className="form-group">
               <label>
                 SQL expression
-                <FieldHelp text="The aggregate that computes the figure, e.g. SUM(i.fee_amount). This is the only SQL anyone writes; the surrounding query is compiled." />
+                <FieldHelp text="The aggregate that computes the figure, e.g. SUM(fee_amount). This is the only SQL anyone writes; the surrounding query is compiled. Name columns unqualified: the compiler assigns the table alias, so a prefix written here may not match the one it emits. Preview SQL shows exactly what will run." />
               </label>
               <input
                 className="input-mono"
                 value={form.expression}
-                onChange={(e) => setForm({ ...form, expression: e.target.value })}
-                placeholder="SUM(i.fee_amount)"
+                onChange={(e) => update({ expression: e.target.value })}
+                placeholder="SUM(fee_amount)"
               />
             </div>
 
@@ -511,7 +588,7 @@ export default function Metrics() {
               <label>Source table</label>
               <select
                 value={form.source_table}
-                onChange={(e) => setForm({ ...form, source_table: e.target.value })}
+                onChange={(e) => update({ source_table: e.target.value })}
               >
                 <option value="">Select a table…</option>
                 {tables.map((t) => (
@@ -533,7 +610,7 @@ export default function Metrics() {
                 </label>
                 <input
                   value={form.grain}
-                  onChange={(e) => setForm({ ...form, grain: e.target.value })}
+                  onChange={(e) => update({ grain: e.target.value })}
                   placeholder="matter_id, practice_area"
                 />
               </div>
@@ -544,9 +621,7 @@ export default function Metrics() {
                 </label>
                 <select
                   value={form.aggregation}
-                  onChange={(e) =>
-                    setForm({ ...form, aggregation: e.target.value as Metric['aggregation'] })
-                  }
+                  onChange={(e) => update({ aggregation: e.target.value as Metric['aggregation'] })}
                 >
                   <option value="additive">Additive</option>
                   <option value="semi_additive">Semi-additive (a balance)</option>
@@ -565,7 +640,7 @@ export default function Metrics() {
                 <input
                   className="input-mono"
                   value={form.time_grain_column}
-                  onChange={(e) => setForm({ ...form, time_grain_column: e.target.value })}
+                  onChange={(e) => update({ time_grain_column: e.target.value })}
                   placeholder="issued_date"
                 />
               </div>
@@ -576,7 +651,7 @@ export default function Metrics() {
                 </label>
                 <input
                   value={form.time_grains}
-                  onChange={(e) => setForm({ ...form, time_grains: e.target.value })}
+                  onChange={(e) => update({ time_grains: e.target.value })}
                   placeholder="month, quarter, year"
                 />
                 <p className="hint">
@@ -585,16 +660,59 @@ export default function Metrics() {
               </div>
             </div>
 
+            <div className="form-row-3">
+              <div className="form-group">
+                <label>
+                  Value type
+                  <FieldHelp text="What kind of quantity this is. Presentation only, it never changes the compiled SQL." />
+                </label>
+                <select
+                  value={form.value_type}
+                  onChange={(e) => update({ value_type: e.target.value })}
+                >
+                  {VALUE_TYPES.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>
+                  Unit
+                  <FieldHelp text="The unit the figure is in, e.g. GBP or hours. Not decoration: when a metric is composed from others, the compiler warns if their units differ, and it can only do that for metrics that declare one." />
+                </label>
+                <input
+                  className="input-mono"
+                  value={form.unit}
+                  onChange={(e) => update({ unit: e.target.value })}
+                  placeholder="GBP"
+                />
+              </div>
+              <div className="form-group">
+                <label>
+                  Display format
+                  <FieldHelp text="How the figure is written for a reader. Never applied to the stored value." />
+                </label>
+                <input
+                  className="input-mono"
+                  value={form.format}
+                  onChange={(e) => update({ format: e.target.value })}
+                  placeholder="£#,##0"
+                />
+              </div>
+            </div>
+
             <div className="form-group">
               <label>
                 Fixed filters
-                <FieldHelp text="Conditions always applied, one per line. These are part of the definition, a caller cannot remove them, so the figure cannot be quietly widened." />
+                <FieldHelp text="Conditions always applied, one per line. These are part of the definition, a caller cannot remove them, so the figure cannot be quietly widened. Name columns unqualified; the compiler assigns the table alias." />
               </label>
               <textarea
                 className="input-mono"
                 value={form.filters}
-                onChange={(e) => setForm({ ...form, filters: e.target.value })}
-                placeholder="i.status = 'ISSUED'"
+                onChange={(e) => update({ filters: e.target.value })}
+                placeholder="status = 'ISSUED'"
               />
             </div>
 
@@ -605,12 +723,38 @@ export default function Metrics() {
               </label>
               <input
                 value={form.synonyms}
-                onChange={(e) => setForm({ ...form, synonyms: e.target.value })}
+                onChange={(e) => update({ synonyms: e.target.value })}
                 placeholder="billings, revenue, turnover"
               />
             </div>
 
+            {preview && (
+              <div className="form-group">
+                <label>
+                  Compiled SQL
+                  <FieldHelp text="Compiled from this definition with no model involved, so the same definition always gives this same query. Nothing has been saved." />
+                </label>
+                <CompilerWarnings warnings={preview.warnings} />
+                <pre className="code-block" style={{ margin: 0, maxHeight: 220, overflow: 'auto' }}>
+                  {preview.sql}
+                </pre>
+                <p className="hint">
+                  Read this before saving. Once the metric is approved, this is the query that
+                  answers the question, and no model rewrites it.
+                </p>
+              </div>
+            )}
+
             <div className="modal-actions">
+              <button
+                className="btn btn-ghost"
+                style={{ marginRight: 'auto' }}
+                onClick={runPreview}
+                disabled={previewing || !form.name || !form.expression}
+                title="Compile this definition to SQL without saving it."
+              >
+                {previewing ? 'Compiling…' : 'Preview SQL'}
+              </button>
               <button className="btn btn-ghost" onClick={() => setModal(false)}>
                 Cancel
               </button>

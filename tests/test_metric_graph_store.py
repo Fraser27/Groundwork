@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from src.metrics.compiler import compile_metric
 from src.metrics.graph_store import (
     SOURCE_AUTHORED,
     STATUS_APPROVED,
@@ -26,7 +27,7 @@ from src.metrics.graph_store import (
     STATUS_DRAFT,
     GraphMetricStore,
 )
-from src.metrics.models import MetricDefinition, MetricParameter
+from src.metrics.models import MetricDefinition, MetricParameter, MetricRegistry, StaticCatalog
 
 TENANT = "demo-firm"
 OTHER = "other-firm"
@@ -166,6 +167,73 @@ class TestRoundTrip:
 
     def test_an_unknown_metric_is_none(self, store):
         assert store.get_metric(TENANT, "nope") is None
+
+    def test_the_unit_survives(self, store):
+        """`_to_params` dropped value_type, unit and format, so the shipped pack's units never
+        reached the graph. See `TestUnitMismatch` for why that is not cosmetic."""
+        store.save_metric(
+            TENANT,
+            a_metric(value_type="currency", unit="GBP", format="£#,##0"),
+            updated_by="alice",
+        )
+        got = store.get_metric(TENANT, "m_001")
+        assert (got.value_type, got.unit, got.format) == ("currency", "GBP", "£#,##0")
+
+    def test_the_unit_survives_a_snapshot_too(self, store):
+        """A snapshot that loses the unit restores a metric the compiler cannot check."""
+        store.save_metric(TENANT, a_metric(unit="GBP"), updated_by="alice")
+        store.save_metric(TENANT, a_metric(unit="GBP", expression="SUM(net)"), updated_by="bob")
+        assert store.get_version(TENANT, "m_001", 1).unit == "GBP"
+
+
+class TestUnitMismatch:
+    """The reason `unit` has to survive the store.
+
+    `compiler.py` warns when a derived metric composes bases with different units, and it reads
+    that off each base definition. Every base read from the graph had `unit=""`, so composing a
+    currency with a count warned about nothing: a dead check that looks like a passing one.
+    """
+
+    def _ratio(self) -> MetricDefinition:
+        return MetricDefinition(
+            metric_id="m_ratio",
+            name="fees_per_matter",
+            type="derived",
+            expression="fees_billed / NULLIF(matter_count, 0)",
+            base_metrics=["m_money", "m_count"],
+            aggregation="non_additive",
+        )
+
+    def _compile_from(self, store, *, money_unit: str, count_unit: str):
+        store.save_metric(
+            TENANT,
+            a_metric("m_money", name="fees_billed", unit=money_unit),
+            updated_by="alice",
+        )
+        store.save_metric(
+            TENANT,
+            a_metric(
+                "m_count",
+                name="matter_count",
+                expression="COUNT(1)",
+                source_table="legal_ops.matters",
+                unit=count_unit,
+            ),
+            updated_by="alice",
+        )
+        registry = MetricRegistry.from_list(store.list_metrics(TENANT))
+        return compile_metric(self._ratio(), StaticCatalog(tables={}), registry=registry)
+
+    def test_it_fires_for_metrics_read_back_from_the_store(self, store):
+        result = self._compile_from(store, money_unit="GBP", count_unit="matters")
+        assert result.is_valid
+        assert any("different units" in w for w in result.warnings)
+
+    def test_it_stays_quiet_when_the_units_agree(self, store):
+        """Otherwise the check is noise rather than a signal."""
+        result = self._compile_from(store, money_unit="GBP", count_unit="GBP")
+        assert result.is_valid
+        assert not any("different units" in w for w in result.warnings)
 
 
 class TestTenantScoping:

@@ -26,7 +26,12 @@ from src.api.deps import (
 )
 from src.constants import SELECTABLE_MODELS
 from src.discovery.catalog_store import CatalogTable
-from src.discovery.enrichment import DESCRIBED_AS, description_node, is_catalog_claim
+from src.discovery.enrichment import (
+    CONCERNS_TOPIC,
+    DESCRIBED_AS,
+    description_node,
+    is_catalog_claim,
+)
 from src.discovery.enrichment_run import (
     MAX_TABLES_PER_RUN,
     STATE_RUNNING,
@@ -34,9 +39,10 @@ from src.discovery.enrichment_run import (
     run_enrichment,
     subject_ids_for,
 )
-from src.discovery.glue_scanner import scan_catalog
+from src.discovery.glue_scanner import parse_catalog_node_id, scan_catalog, table_node_id
 from src.graph.assertions import (
     DESCRIPTIVE_CONFIDENCE,
+    SIGNED_OFF_STATES,
     EpistemicClass,
     ReviewState,
     SourceLocator,
@@ -250,6 +256,11 @@ async def get_ontology(domain: str) -> dict[str, Any]:
     }
 
 
+#: What the explorer calls the group for kinds no pack declares. `Ontology.layer_of` reports
+#: "unknown" for those, so the two names are reconciled here rather than in the UI.
+UNDECLARED_LAYER = "__undeclared__"
+
+
 @router.get("/tenants/{tenant}/graph/neighbourhood")
 async def neighbourhood(
     services: ServicesDep,
@@ -257,6 +268,7 @@ async def neighbourhood(
     node_id: Annotated[str | None, Query()] = None,
     depth: Annotated[int, Query(ge=1, le=3)] = 2,
     limit: Annotated[int, Query(ge=1, le=2000)] = 400,
+    layer: Annotated[str | None, Query(max_length=64)] = None,
 ) -> dict[str, Any]:
     """Edges around a node, or an overview of the graph when no node is named.
 
@@ -268,13 +280,19 @@ async def neighbourhood(
     The overview is capped: a firm's whole graph is not a diagram, and drawing ten thousand edges
     produces an unreadable hairball that also freezes the browser. Governing edges are kept
     first, because those are the ones a conflict check or a privilege wall reads.
+
+    `layer` applies that cap *within* one half of the graph instead of across the whole of it.
+    Catalog edges are all descriptive, so a whole-graph cap sorted governing-first truncated a
+    firm's schema away before any client-side filter could see it, and asking for the catalog then
+    showed an empty or arbitrary slice of it. Only the overview takes it: a neighbourhood is
+    already narrowed by the node it centres on.
     """
     ctx, _ = principal
     settings = services.settings_for(ctx.tenant_id)
     records = [r for r in services.review_queue.visible(ctx) if r.is_current]
 
     if node_id is None:
-        return _graph_overview(services, ctx, records, settings, limit)
+        return _graph_overview(services, ctx, records, settings, limit, layer)
 
     frontier = {node_id}
     seen_nodes: set[str] = set()
@@ -327,12 +345,17 @@ def _graph_overview(
     records: list[Any],
     settings: Any,
     limit: int,
+    layer: str | None = None,
 ) -> dict[str, Any]:
     """The whole tenant graph, capped, for a first look with nothing selected.
 
     Governing edges first: if the cap bites, the edges worth keeping are the ones that drive a
     consequence, not the subject-matter tags. Sorted by confidence within that, so a truncated
     view shows the firmest facts rather than an arbitrary slice.
+
+    `layer` narrows before the cap, and `truncated`/`total_edges` then describe the narrowed set.
+    Reporting the whole graph's total against a filtered slice would tell a reader their catalog
+    view is complete when most of it was cut.
     """
     edges: list[dict[str, Any]] = []
     onto = services.ontology_for(ctx.tenant_id)
@@ -353,6 +376,15 @@ def _graph_overview(
             }
         )
 
+    if layer:
+        # Either endpoint, not both, matching the explorer: the edge joining a table to a matter
+        # is what makes this one graph rather than two, so it belongs to both views.
+        edges = [
+            e
+            for e in edges
+            if layer in (_layer_of(onto, e["source"]), _layer_of(onto, e["target"]))
+        ]
+
     edges.sort(key=lambda e: (not e["governing"], -e["confidence"]))
     kept = edges[:limit]
     node_ids = {e["source"] for e in kept} | {e["target"] for e in kept}
@@ -362,19 +394,34 @@ def _graph_overview(
         "edges": kept,
         "truncated": len(edges) > len(kept),
         "total_edges": len(edges),
+        "layer": layer,
         "confidence_floor": settings.min_confidence_floor,
     }
+
+
+def _layer_of(onto: Any, entity_id: str) -> str:
+    """The layer this id's kind is declared under, named as the explorer names it."""
+    found = onto.layer_of(entity_id)
+    return UNDECLARED_LAYER if found == "unknown" else found
 
 
 def _node(entity_id: str) -> dict[str, Any]:
     kind, _, rest = entity_id.partition(":")
     if not rest:
         kind, rest = "entity", entity_id
-    return {
+    node: dict[str, Any] = {
         "id": entity_id,
         "type": kind,
         "label": rest.replace("-", " ").replace("_", " "),
     }
+    ref = parse_catalog_node_id(entity_id)
+    if ref is not None:
+        # `demo glue:anycorp.returns` is not a table name. Fixed here rather than in the UI,
+        # which owns no id format, and the database is sent as its own field for the same reason.
+        node["label"] = ref.label
+        if ref.database:
+            node["database"] = ref.database
+    return node
 
 
 # ── Structured catalog ───────────────────────────────────────────────────────
@@ -382,6 +429,12 @@ def _node(entity_id: str) -> dict[str, Any]:
 # Schemas, never rows. A scan records what tables exist and what shape they are; the
 # rows stay in Athena and are queried in place. That is the whole reason the graph can
 # hold "structured" and "unstructured" together without copying a warehouse into it.
+
+#: What may be said about an empty catalog. Three states, because two of them look identical from
+#: the cache alone and asserting the wrong one is the bug `catalog_status` exists to fix.
+CATALOG_SCANNED = "scanned"
+CATALOG_NEVER_SCANNED = "never_scanned"
+CATALOG_UNKNOWN = "unknown"
 
 
 @router.get("/tenants/{tenant}/tables")
@@ -407,11 +460,13 @@ async def get_table(services: ServicesDep, principal: TenantDep, full_name: str)
         ) from None
 
     pending = _pending_descriptions(services, ctx, full_name)
-    return {
+    detail = {
         **_table_summary(table),
         "description_source": sources.get(""),
         "pending_description": pending.get(""),
         "pending_enrichment": len(pending),
+        "synonyms": _approved_synonyms(services, ctx, table),
+        "topics": _approved_topics(services, ctx, full_name),
         "columns": [
             {
                 "name": c.name,
@@ -428,6 +483,91 @@ async def get_table(services: ServicesDep, principal: TenantDep, full_name: str)
         "scanned_at": table.scanned_at,
         "location": table.location,
     }
+
+    # Present and empty when the lineage was readable and nothing measures this table, absent when
+    # it could not be read. The page claims "no approved metric reads this table" on the first and
+    # says nothing on the second, so an empty list must never stand in for an unanswered question.
+    metrics = _metrics_measuring(services, ctx.tenant_id, full_name)
+    if metrics is not None:
+        detail["metrics"] = metrics
+    return detail
+
+
+def _metrics_measuring(
+    services: Any, tenant_id: str, full_name: str
+) -> list[dict[str, str]] | None:
+    """Approved metrics whose SQL reads this table, or None if the lineage was not readable.
+
+    Approved only, which the graph read cannot say on its own: `MetricDefinition` carries no status,
+    so the ids are intersected with the approved list. A draft counted here would make the page's
+    claim about approved coverage false.
+    """
+    if services.graph is None:
+        return None
+    try:
+        from src.metrics.graph_store import GraphMetricStore
+
+        store = GraphMetricStore(services.graph)
+        approved = {m.metric_id for m in store.list_metrics(tenant_id, approved_only=True)}
+        measuring = store.metrics_measuring(tenant_id, full_name)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("could not read metric lineage for %s: %s", full_name, e)
+        return None
+    return [
+        {"metric_id": m.metric_id, "name": m.name, "definition": m.definition}
+        for m in measuring
+        if m.metric_id in approved
+    ]
+
+
+def _approved_synonyms(services: Any, ctx: Any, table: CatalogTable) -> list[str]:
+    """Other names a reviewer signed off for this table.
+
+    Keyed by graph id on the way in and by nothing on the way out: the id is built here with
+    `table_node_id` rather than parsed, the same rule `catalog_overlay` states.
+    """
+    store = services.catalog_graph_store()
+    if store is None:
+        return []
+    try:
+        by_subject = store.approved_synonyms(ctx)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("could not read synonyms for %s: %s", table.full_name, e)
+        return []
+    return list(by_subject.get(table_node_id(table.source_id, table.full_name), ()))
+
+
+def _approved_topics(services: Any, ctx: Any, full_name: str) -> list[str]:
+    """Subject matter a reviewer signed off for this table.
+
+    `CONCERNS_TOPIC` is shared with document extraction, so the predicate alone does not say what a
+    topic is about: `is_catalog_claim` checks the locator, without which every topic a filing
+    mentions would appear on a table page.
+    """
+    try:
+        records = services.review_queue.live_assertions(ctx)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("could not read topics for %s: %s", full_name, e)
+        return []
+
+    found: set[str] = set()
+    for record in records:
+        a = record.assertion
+        if a.predicate != CONCERNS_TOPIC or a.review_state not in SIGNED_OFF_STATES:
+            continue
+        if not is_catalog_claim(a) or a.source_locator.table != full_name:
+            continue
+        found.add(_term_label(a.object_id))
+    return sorted(found)
+
+
+def _term_label(node_id: str) -> str:
+    """`topic:client-billing` to "client billing", the way `_node` labels any built id.
+
+    From the id rather than the node's `name` property, because no scoped read returns it.
+    """
+    _, _, slug = node_id.partition(":")
+    return (slug or node_id).replace("-", " ").replace("_", " ")
 
 
 def _pending_descriptions(
@@ -465,8 +605,9 @@ async def list_sources(services: ServicesDep, principal: TenantDep) -> list[dict
     source in order to press Scan on it.
     """
     ctx, _ = principal
+    catalog = services.catalog_reader()
     for source_id in services.config.structured.glue_databases or []:
-        services.catalog.register_source(ctx.tenant_id, source_id, name=source_id)
+        catalog.register_source(ctx.tenant_id, source_id, name=source_id)
     return [
         {
             "source_id": s.source_id,
@@ -479,8 +620,49 @@ async def list_sources(services: ServicesDep, principal: TenantDep) -> list[dict
             "last_scanned_at": s.last_scanned_at,
             "errors": s.errors,
         }
-        for s in services.catalog.sources(ctx.tenant_id)
+        for s in catalog.sources(ctx.tenant_id)
     ]
+
+
+@router.get("/tenants/{tenant}/catalog/status")
+async def catalog_status(services: ServicesDep, principal: TenantDep) -> dict[str, Any]:
+    """Whether this firm's catalog is empty because nothing was scanned, or because it could not
+    be read.
+
+    The Tables page inferred "no catalogue scan has been run" from an empty list, which cannot tell
+    those apart: the store is process-local, so a redeploy produced the same empty list over a graph
+    holding every table. That is the same failure `HELP.reasonerStates` names for the conflict
+    checker, where "no conflict found" and "no conflict could be looked for" must never render
+    alike.
+
+    A separate endpoint rather than a field on `/tables`, which returns a bare array the UI is
+    already shipped against.
+    """
+    ctx, _ = principal
+    confirmed = services.hydrate_catalog(ctx.tenant_id)
+    catalog = services.catalog_reader()
+    tables = len(catalog.tables(ctx.tenant_id))
+    sources = len(catalog.sources(ctx.tenant_id))
+
+    if tables:
+        state, note = CATALOG_SCANNED, "A catalog scan has been recorded for this firm."
+    elif confirmed:
+        state, note = (
+            CATALOG_NEVER_SCANNED,
+            (
+                "Nothing has been scanned yet. The durable copy holds no table for this firm, so "
+                "there is nothing to recover: register a source and run a scan."
+            ),
+        )
+    else:
+        state, note = (
+            CATALOG_UNKNOWN,
+            (
+                "The catalog could not be read. The graph did not answer, so an empty list here "
+                "is not a claim that nothing has been scanned. Check the graph, then reload."
+            ),
+        )
+    return {"state": state, "note": note, "tables": tables, "sources": sources}
 
 
 @router.get("/tenants/{tenant}/settings")
@@ -616,7 +798,7 @@ async def glue_databases(services: ServicesDep, principal: TenantDep) -> dict[st
     # than making the user remember.
     scanned: set[str] = set()
     try:
-        for table in services.catalog.tables(principal[0].tenant_id):
+        for table in services.catalog_reader().tables(principal[0].tenant_id):
             if table.database:
                 scanned.add(table.database)
     except Exception as e:
@@ -830,6 +1012,7 @@ async def set_description(
     services: ServicesDep,
     principal: TenantDep,
     full_name: str,
+    background: BackgroundTasks,
     body: Annotated[DescriptionRequest, Body()],
 ) -> dict[str, Any]:
     """Write a description a person typed. Live immediately.
@@ -904,6 +1087,7 @@ async def set_description(
     job_id = f"describe-{full_name}"
     services.review_queue.stage(ctx, [assertion], job_id=job_id)
     live = services.review_queue.promote(ctx, job_id=job_id)
+    background.add_task(reindex_tables, services, ctx)
 
     return {
         "subject_id": subject_id,
@@ -920,7 +1104,10 @@ async def set_description(
 
 @router.post("/tenants/{tenant}/tables/{full_name:path}/enrichment/approve")
 async def approve_table_enrichment(
-    services: ServicesDep, principal: TenantDep, full_name: str
+    services: ServicesDep,
+    principal: TenantDep,
+    full_name: str,
+    background: BackgroundTasks,
 ) -> dict[str, Any]:
     """Approve every pending description, synonym and topic for one table.
 
@@ -948,6 +1135,10 @@ async def approve_table_enrichment(
             failed[assertion_id] = str(e)
 
     promoted = services.review_queue.promote(ctx) if approved else []
+    # After the response. An approval that 500s because Bedrock is slow to embed would be worse
+    # than a routing index that is a moment stale, and the approval itself is already durable.
+    if approved:
+        background.add_task(reindex_tables, services, ctx)
     return {
         "table": full_name,
         "pending": len(ids),
@@ -955,9 +1146,33 @@ async def approve_table_enrichment(
         "live": len(promoted),
         "failed": failed,
         "note": (
-            "Approved descriptions now reach the model that writes SQL for ungoverned questions."
+            "Approved descriptions now reach the model that writes SQL for ungoverned questions. "
+            "The words just approved reach tier selection once the index refresh finishes, a "
+            "moment behind this response."
         ),
     }
+
+
+def reindex_tables(services: Any, ctx: Any) -> None:
+    """Re-describe the table layer after a description or a synonym changed.
+
+    Without this, approving a description changes nothing a question can reach until somebody
+    presses Rebuild: the routing index holds the words that were embedded, not the words that are
+    approved now.
+
+    Tables only. A catalog approval cannot change a metric definition or a fact, and the entity
+    layer is the expensive one.
+    """
+    indexer = build_router_indexer(services)
+    if indexer is None:
+        return
+    try:
+        report = indexer.rebuild(ctx, metrics=False, tables=True, entities=False)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("table layer not reindexed for %s: %s", ctx.tenant_id, e)
+        return
+    if report.errors:
+        logger.warning("table layer reindexed with errors for %s: %s", ctx.tenant_id, report.errors)
 
 
 class RouterRebuildRequest(BaseModel):

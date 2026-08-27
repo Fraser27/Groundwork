@@ -137,7 +137,17 @@ class Services:
 
     catalog: CatalogStore = field(default_factory=CatalogStore)
     """What the last Glue scan found. A cache over Glue, not a source of truth — losing it
-    costs a re-scan, which is why it is in-memory."""
+    costs a re-scan, which is why it is in-memory.
+
+    Read through `catalog_reader()` or `enriched_catalog()`, never directly: those reload it from
+    the graph, and this store starts empty in every new process."""
+
+    catalog_confirmed: dict[str, bool] = field(default_factory=dict)
+    """Per tenant: did the durable copy answer when the catalog cache was last reloaded?
+
+    Absent means it has not been tried. False is not the same as an empty catalog and must not be
+    reported as one: "nobody has scanned" is a claim only something authoritative can support, and
+    an empty cache on its own supports "this process has not been told"."""
 
     routing_index: Any | None = None
     """Where the tier router's semantic descriptions live. None without a vector endpoint, in
@@ -203,18 +213,91 @@ class Services:
 
         return CatalogGraphStore(self.graph)
 
+    def hydrate_catalog(self, tenant_id: str) -> bool:
+        """Reload this tenant's catalog cache from the graph if it has not been. True if the
+        durable copy answered.
+
+        Called on read rather than at boot: the MCP sidecar has no lifespan, and a tenant that
+        never asks costs nothing.
+
+        False for both a missing graph and an unreachable one, and `catalog_confirmed` is what
+        keeps those apart from a cache that is empty because nothing was ever scanned.
+
+        A failed read is left retryable, per `mark_hydrated`: it costs one refused read per page
+        load while the graph is down, and the alternative is a task that reports "cannot say"
+        forever after the graph comes back. No graph at all is marked instead, because
+        `connect_graph` runs once per process and there is nothing to retry.
+        """
+        store = self.catalog_graph_store()
+        if store is None:
+            self.catalog.mark_hydrated(tenant_id)
+            self.catalog_confirmed[tenant_id] = False
+            return False
+        if self.catalog.is_hydrated(tenant_id):
+            return self.catalog_confirmed.get(tenant_id, False)
+        from src.discovery.catalog_hydrate import hydrate_once
+
+        ctx = AuthContext(user_id="catalog", tenant_id=tenant_id)
+        try:
+            hydrate_once(self.catalog, store, ctx)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("catalog not reloaded from the graph for %s: %s", tenant_id, exc)
+            self.catalog_confirmed[tenant_id] = False
+            return False
+        self.catalog_confirmed[tenant_id] = True
+        return True
+
+    def catalog_reader(self) -> Any:
+        """The raw catalog, reloaded from the graph on first read of each tenant.
+
+        Two callers want the scanned shape without the description overlay: the firewall's
+        allowlist and the metric compiler's schema. A description cannot change which tables exist
+        or what type a column is, and a graph outage must not be able to shrink the allowlist.
+        """
+        return _HydratingCatalog(self)
+
+    def catalog_synonyms(self) -> Any | None:
+        """Approved synonyms per table `full_name` for a tenant, or None with no graph.
+
+        Keyed by `full_name` and not by graph id, because `sql_generation` must not learn the id
+        format: `catalog_overlay` establishes that ids are built, never parsed.
+
+        Memoised per provider, and a provider lives as long as the resolver that holds it, so one
+        request. `Planner` runs two lanes that each ask, which would otherwise be two graph reads
+        for one answer, while a cache outliving the request would hide a synonym just approved.
+        """
+        store = self.catalog_graph_store()
+        if store is None:
+            return None
+        from src.discovery.glue_scanner import table_node_id
+
+        cache: dict[str, dict[str, list[str]]] = {}
+
+        def synonyms_for(ctx: AuthContext) -> dict[str, list[str]]:
+            hit = cache.get(ctx.tenant_id)
+            if hit is not None:
+                return hit
+            by_subject = store.approved_synonyms(ctx)
+            found = {}
+            for table in self.catalog_reader().tables(ctx.tenant_id):
+                names = by_subject.get(table_node_id(table.source_id, table.full_name))
+                if names:
+                    found[table.full_name] = list(names)
+            cache[ctx.tenant_id] = found
+            return found
+
+        return synonyms_for
+
     def enriched_catalog(self) -> Any:
         """The catalog with approved descriptions layered on.
 
         Every read path uses this rather than `self.catalog`, so the schema the SQL generator is
-        given and the schema the Tables page shows are the same text. The raw store is deliberately
-        kept for two callers: the firewall's allowlist and the metric compiler's schema. A
-        description cannot change which tables exist or what type a column is, and a graph outage
-        must not be able to shrink the allowlist.
+        given and the schema the Tables page shows are the same text.
         """
+        reader = self.catalog_reader()
         store = self.catalog_graph_store()
         if store is None:
-            return self.catalog
+            return reader
         from src.discovery.catalog_overlay import EnrichedCatalog
 
         # Tenant scope with no matter filter, which is correct here and worth stating because it is
@@ -222,7 +305,7 @@ class Services:
         # describes a column, not a case: `enrich_tables` sets no `matter_id`, so these assertions
         # are tenant-level and a matter allowlist would filter on a property none of them carry.
         return EnrichedCatalog(
-            self.catalog,
+            reader,
             store,
             lambda tenant_id: AuthContext(user_id="catalog", tenant_id=tenant_id),
         )
@@ -284,6 +367,7 @@ class Services:
             catalog=self.enriched_catalog(),
             sql_lane=self.build_sql_lane(tenant_id) if tenant_id else None,
             router=self.build_tier_router(),
+            synonyms_for=self.catalog_synonyms(),
         )
 
     def build_planner(self, tenant_id: str = "", *, synthesise: bool = True) -> Any:
@@ -314,6 +398,7 @@ class Services:
             # runs. The router's decision is part of the trace rather than a filter on it.
             router=self.build_tier_router(),
             sql_lane=self.build_sql_lane(tenant_id) if tenant_id else None,
+            synonyms_for=self.catalog_synonyms(),
         )
 
     def build_sql_lane(self, tenant_id: str) -> Any | None:
@@ -361,6 +446,40 @@ class Services:
         )
 
 
+class _HydratingCatalog:
+    """`CatalogStore` that reloads a tenant from the graph before the first read.
+
+    A wrapper at the seam rather than a `hydrate_once` call in each route, because a route added
+    later cannot forget one it never had to write. Both processes serving this container reach the
+    catalog through `Services`, so both get it.
+
+    Everything else falls through to the real store, including the writes: `record_scan` marks the
+    tenant hydrated itself, so a scan is not undone by a later reload.
+    """
+
+    def __init__(self, services: Services) -> None:
+        self._services = services
+
+    def tables(self, tenant_id: str) -> Any:
+        self._services.hydrate_catalog(tenant_id)
+        return self._services.catalog.tables(tenant_id)
+
+    def table(self, tenant_id: str, full_name: str) -> Any:
+        self._services.hydrate_catalog(tenant_id)
+        return self._services.catalog.table(tenant_id, full_name)
+
+    def sources(self, tenant_id: str) -> Any:
+        self._services.hydrate_catalog(tenant_id)
+        return self._services.catalog.sources(tenant_id)
+
+    def with_sources(self, tenant_id: str, full_name: str) -> Any:
+        self._services.hydrate_catalog(tenant_id)
+        return self._services.catalog.with_sources(tenant_id, full_name)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._services.catalog, name)
+
+
 def load_example_pack(domain: str = "legal") -> list[Any]:
     """The shipped example metrics for one ontology pack, for seeding a demo.
 
@@ -406,7 +525,7 @@ def build_metric_matcher(services: Services, tenant_id: str) -> MetricMatcher | 
     try:
         from src.metrics.models import TableSchema
 
-        for table in services.catalog.tables(tenant_id):
+        for table in services.catalog_reader().tables(tenant_id):
             tables[table.full_name] = TableSchema(
                 full_name=table.full_name,
                 columns={c.name: c.data_type for c in table.columns},
@@ -460,7 +579,7 @@ def build_athena_executor(
         allowed = {t for t in allowed_tables if t}
     else:
         try:
-            allowed = {t.full_name for t in services.catalog.tables(tenant_id)}
+            allowed = {t.full_name for t in services.catalog_reader().tables(tenant_id)}
         except Exception as e:
             logger.debug("no catalog for the firewall allowlist: %s", e)
             allowed = set()
@@ -491,7 +610,14 @@ def build_router_indexer(services: Services) -> Any | None:
     `build_metric_matcher` runs per request rather than at startup.
     """
     indexer = services.router_indexer
-    if indexer is None or services.graph is None:
+    if indexer is None:
+        return None
+    # The enriched catalog, not the raw store: an approved description is most of what makes a table
+    # findable, and the raw store carries only whatever comment Glue happened to hold. Swapped only
+    # when it is this container's own store, so an injected catalog stays the one that was injected.
+    if indexer.catalog is services.catalog:
+        indexer.catalog = services.enriched_catalog()
+    if services.graph is None:
         return indexer
     indexer.graph = services.graph
     if indexer.metric_store is None:
@@ -707,7 +833,8 @@ def build_services(config: GroundworkConfig | None = None) -> Services:
         from src.query.router_indexer import RouterIndexer
 
         # No graph and no metric store yet: both are attached by `build_router_indexer` once the
-        # lifespan hook has connected. The catalog store exists from the start.
+        # lifespan hook has connected, and it swaps this raw store for the enriched catalog at the
+        # same time. The raw store is what an indexer built without that call still reads.
         router_indexer = RouterIndexer(
             routing_index,
             embedder=embedder,

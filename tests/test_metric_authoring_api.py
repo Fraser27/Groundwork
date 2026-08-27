@@ -180,6 +180,94 @@ class TestPreview:
         assert len(r.json()["detail"]) > len("this definition does not compile: ")
 
 
+class TestWarningsReachTheAuthor:
+    """A caveat is not a refusal, which is exactly why it is easy to drop.
+
+    Fan-out inflation over a join, a result that must not be re-summed, base metrics in different
+    units: each is a way the figure comes out wrong while the SQL stays valid.
+    """
+
+    def test_preview_reports_them(self, client):
+        r = client.post(f"{BASE}/preview", json=a_body(aggregation="non_additive"))
+        assert any("non_additive" in w for w in r.json()["warnings"])
+
+    def test_a_save_reports_them_too(self, graph_client):
+        """An author who skipped the preview still has to be told."""
+        r = graph_client.post(BASE, json=a_body(aggregation="non_additive"))
+        assert any("non_additive" in w for w in r.json()["warnings"])
+
+    def test_an_edit_reports_them_too(self, graph_client):
+        graph_client.post(BASE, json=a_body())
+        r = graph_client.put(f"{BASE}/m_new", json=a_body(aggregation="non_additive"))
+        assert any("non_additive" in w for w in r.json()["warnings"])
+
+
+class TestAnAuthorsTypoReadsAsARefusal:
+    """Every one of these was an opaque 500.
+
+    `to_definition()` sat outside the try in `_compile_or_422`, so model validation escaped as
+    an unhandled error. A missing source_table and an unparseable expression are the same thing
+    to an author, and both have to come back as something they can act on.
+    """
+
+    @pytest.mark.parametrize(
+        ("over", "fragment"),
+        [
+            ({"source_table": ""}, "source_table"),
+            ({"name": "total fees"}, "identifier"),
+            ({"time_grains": ["fortnight"]}, "time grain"),
+            ({"time_grain_column": "invoice-date"}, "time_grain_column"),
+            ({"source_table": "legal-ops.invoices"}, "table name"),
+        ],
+    )
+    def test_it_is_a_422_naming_the_field(self, client, over, fragment):
+        r = client.post(f"{BASE}/preview", json=a_body(**over))
+        assert r.status_code == 422
+        assert fragment in r.json()["detail"]
+
+    def test_the_message_is_not_raw_pydantic_json(self, client):
+        """It goes straight into a toast, so the type tag and the docs URL are noise."""
+        detail = client.post(f"{BASE}/preview", json=a_body(name="total fees")).json()["detail"]
+        assert "errors.pydantic.dev" not in detail
+        assert "input_value" not in detail
+
+
+class TestNoTimeAxis:
+    """Leaving the time axis blank is the default, so this path has to work.
+
+    `time_grain_column` is optional on the definition but was typed `str` on the way in, which
+    made the common case a hard 422 for any client sending an explicit null.
+    """
+
+    def test_a_metric_with_no_time_axis_is_created(self, graph_client):
+        r = graph_client.post(BASE, json=a_body(time_grain_column=None))
+        assert r.status_code == 201, r.text
+        assert r.json()["time_grain_column"] is None
+
+    def test_the_apis_own_response_body_is_a_valid_request_body(self, graph_client):
+        """Fetch then save is exactly what the edit form does. `_out` renders an unset field as
+        null, so a round trip that 422s means no metric without a time axis can be edited."""
+        graph_client.post(BASE, json=a_body())
+        fetched = graph_client.get(f"{BASE}/m_new").json()
+        assert fetched["time_grain_column"] is None
+        assert fetched["owner"] is None
+
+        r = graph_client.put(f"{BASE}/m_new", json=fetched)
+        assert r.status_code == 200, r.text
+
+    def test_the_round_trip_keeps_the_presentation_fields(self, graph_client):
+        """A save that quietly drops `unit` disables the compiler's unit-mismatch check for
+        anything an author edits."""
+        graph_client.post(BASE, json=a_body(value_type="currency", unit="GBP", format="£#,##0"))
+        fetched = graph_client.get(f"{BASE}/m_new").json()
+        saved = graph_client.put(f"{BASE}/m_new", json=fetched).json()
+        assert (saved["value_type"], saved["unit"], saved["format"]) == (
+            "currency",
+            "GBP",
+            "£#,##0",
+        )
+
+
 class TestWritesRequireTheGraph:
     def test_creating_without_a_graph_is_refused(self, client):
         """Accepting a definition that will not persist is worse than refusing it."""

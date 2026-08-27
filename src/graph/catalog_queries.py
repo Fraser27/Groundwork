@@ -77,9 +77,72 @@ WHERE {scope}
 RETURN s.entity_id AS subject_id, t.name AS name
 """
 
+#: The tenant's configured sources, for rebuilding the catalog cache after a restart.
+#:
+#: Scoped with `node_scope`, not `edge_scope`: a source that has been registered but never scanned
+#: has no `HAS_TABLE` edge, and scoping on one would hide exactly the source an operator needs to
+#: see in order to press Scan.
+SOURCES_FOR_TENANT = """
+MATCH (s:DataSource)
+WHERE {scope}
+RETURN s.source_id AS source_id,
+       s.type AS type,
+       s.last_scanned_at AS last_scanned_at
+ORDER BY s.source_id
+"""
+
+#: A tenant's tables, reached through the `HAS_TABLE` edge that declared each one.
+#:
+#: Through the edge rather than by matching `(t:Table {tenant_id})`: the edge is the assertion, so a
+#: table only appears here if something declared it, and the source it belongs to comes from the
+#: traversal instead of from a property that could disagree with it.
+#:
+#: `edge_scope` defaults are left alone, and unlike `APPROVED_DESCRIPTIONS` that is not an
+#: approved-only read: a catalog edge is DECLARED at confidence 1.0 and so lands AUTO_ASSERTED,
+#: which is in `SIGNED_OFF_STATES` and clears the floor. Passing `include_pending` here would only
+#: widen this to states a catalog edge never occupies.
+#:
+#: `recorded_at` is on the `:Assertion` node rather than the edge, and it is the only record of when
+#: the scan ran, so a source node written before `last_scanned_at` existed can still date itself.
+TABLES_FOR_TENANT = """
+MATCH (s:DataSource)-[r:HAS_TABLE]->(t:Table)
+WHERE {scope}
+OPTIONAL MATCH (a:Assertion)
+WHERE a.tenant_id = r.tenant_id AND a.assertion_id = r.assertion_id
+RETURN s.source_id AS source_id,
+       t.full_name AS full_name,
+       t.name AS name,
+       t.database AS database,
+       t.description AS description,
+       t.catalog_type AS catalog_type,
+       t.location AS location,
+       a.recorded_at AS scanned_at
+ORDER BY t.full_name
+"""
+
+#: A tenant's columns, with the parent table's `full_name` so rows can be grouped.
+#:
+#: The parent comes from the `HAS_COLUMN` edge, not from `c.table`. Same reason as above, and here
+#: it matters more: the string property is a convenience copy, while the edge is what a provenance
+#: read can be pointed at.
+COLUMNS_FOR_TENANT = """
+MATCH (t:Table)-[r:HAS_COLUMN]->(c:Column)
+WHERE {scope}
+RETURN t.full_name AS full_name,
+       c.name AS name,
+       c.data_type AS data_type,
+       c.description AS description,
+       c.is_partition AS is_partition,
+       c.is_primary_key AS is_primary_key
+ORDER BY t.full_name, c.name
+"""
+
 #: Every statement in this module, so the shape tests can be parametrised over it. A statement
 #: added without a tenant filter then fails a test rather than being noticed in review.
 ALL_CATALOG_QUERIES = {
     "APPROVED_DESCRIPTIONS": APPROVED_DESCRIPTIONS,
     "APPROVED_SYNONYMS": APPROVED_SYNONYMS,
+    "SOURCES_FOR_TENANT": SOURCES_FOR_TENANT,
+    "TABLES_FOR_TENANT": TABLES_FOR_TENANT,
+    "COLUMNS_FOR_TENANT": COLUMNS_FOR_TENANT,
 }

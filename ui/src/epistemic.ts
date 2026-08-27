@@ -188,6 +188,10 @@ export const HELP = {
     'Which vocabulary of entities, relationships and rules this tenant uses. The platform is domain-agnostic; the legal pack is simply the default.',
   graphLayer:
     'Which half of the graph an entity belongs to: facts read out of your documents, or schema declared by a system of record such as a Glue catalogue. They are one graph on purpose, so a metric over a table can be reconciled against a fact from a page, but you can read one at a time. Click a heading to isolate it. Edges that join the two stay drawn, because that join is the point.',
+  catalogDetail:
+    'The schema view opens at database and table level, because that is the shape somebody reads, and a table brings its columns, its descriptions and a model’s guesses at synonyms and topics with it. Add each back when you want it. What comes back is not equally solid: the columns and the tables were declared by the catalogue, while synonyms and topics were proposed by a model and stay pending until a reviewer approves them, so those are drawn faintly and never shape an answer while they are.',
+  catalogDatabase:
+    'Narrows the schema view to one database in the scanned source. Facts read out of your documents are unaffected, so an edge joining a table to a {unit} stays drawn and you can still see what the schema is used for.',
   ingestState:
     'Where a document is in the pipeline. Its text becomes searchable as soon as it is parsed, but anything a model read into it waits for review before it can shape an answer.',
   supersede:

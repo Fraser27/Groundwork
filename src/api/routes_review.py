@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.api.deps import (
@@ -27,6 +27,7 @@ from src.api.deps import (
     require_reviewer,
     scope_violation_to_http,
 )
+from src.api.routes_catalog import reindex_tables
 from src.discovery.enrichment import is_catalog_claim
 from src.documents.review import AssertionNotFound, ReviewError
 from src.documents.storage import (
@@ -295,6 +296,7 @@ class ApproveManyRequest(BaseModel):
 async def approve_many(
     services: ServicesDep,
     principal: TenantDep,
+    background: BackgroundTasks,
     body: Annotated[ApproveManyRequest, Body()],
 ) -> dict[str, Any]:
     """Approve several claims and draw what they jointly imply, once.
@@ -314,6 +316,7 @@ async def approve_many(
 
     approved: list[AssertionOut] = []
     failed: list[dict[str, str]] = []
+    catalog_approved = False
     for assertion_id in body.assertion_ids:
         try:
             record = services.review_queue.approve(ctx, assertion_id, note=body.note)
@@ -323,11 +326,16 @@ async def approve_many(
             failed.append({"assertion_id": assertion_id, "reason": str(e)})
             continue
         _settle_document(services, ctx, record)
+        catalog_approved = catalog_approved or is_catalog_claim(record.assertion)
         approved.append(_to_out(record, floor))
 
     # Once, after every approval has landed, so a conflict whose premises were approved together
     # is drawn from all of them rather than from however many happened to be live mid-loop.
     inferred = _infer_after_review(services, ctx) if approved else 0
+    # A description can be approved here as well as through the catalog route, and the routing
+    # index holds the words that were embedded rather than the words approved now.
+    if catalog_approved:
+        background.add_task(reindex_tables, services, ctx)
     return {
         "approved": [a.model_dump() for a in approved],
         "failed": failed,
@@ -339,6 +347,7 @@ async def approve_many(
 async def approve(
     services: ServicesDep,
     principal: TenantDep,
+    background: BackgroundTasks,
     assertion_id: str,
 ) -> AssertionOut:
     require_reviewer(principal)
@@ -355,6 +364,8 @@ async def approve(
         # is — already rejected, retracted by a cascade, or auto-asserted.
         raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
     _settle_document(services, ctx, record)
+    if is_catalog_claim(record.assertion):
+        background.add_task(reindex_tables, services, ctx)
     # Approval is the moment a premise becomes usable, so it is the moment a conclusion resting on
     # it becomes drawable. Ingest cannot do this job alone: a conflict's premises are
     # EXTRACTED_MODEL, so they are PENDING when the document lands and `live_assertions` rightly

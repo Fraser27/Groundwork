@@ -25,7 +25,7 @@ import {
 } from '../api'
 import { getTenantId } from '../auth'
 import { EPISTEMIC, EPISTEMIC_ORDER, HELP } from '../epistemic'
-import { buildLayerIndex } from '../graphLayers'
+import { buildLayerIndex, CATALOG_DETAIL_KINDS, CATALOG_LAYER } from '../graphLayers'
 import { useProvenance } from '../useProvenance'
 import { useUnitLabel } from '../useUnitLabel'
 import ConfidenceBar from '../components/ConfidenceBar'
@@ -50,6 +50,9 @@ const NODE_COLOURS: Record<string, string> = {
   source: '#475569',
   table: '#64748b',
   column: '#94a3b8',
+  metric: '#2563eb',
+  synonym: '#a1a1aa',
+  description: '#a8a29e',
 }
 
 const NODE_RADIUS: Record<string, number> = {
@@ -65,6 +68,9 @@ const NODE_RADIUS: Record<string, number> = {
   source: 12,
   table: 9,
   column: 6,
+  metric: 10,
+  synonym: 6,
+  description: 6,
 }
 
 const FALLBACK_COLOUR = '#6c8cff'
@@ -150,10 +156,52 @@ export default function GraphExplorer() {
   const [includePending, setIncludePending] = useState(true)
   const [governingOnly, setGoverningOnly] = useState(false)
   const [requestedLayer, setRequestedLayer] = useState('__all__')
+  const [requestedDatabase, setRequestedDatabase] = useState('__all__')
+  const [shownDetail, setShownDetail] = useState<ReadonlySet<string>>(new Set())
+  const [capped, setCapped] = useState<{ truncated: boolean; total: number }>({
+    truncated: false,
+    total: 0,
+  })
+
+  // Separate from the graph load, and deliberately not fatal: the layer control is a
+  // convenience, and losing it must not cost a reader the graph itself. Domain comes from the
+  // tenant's settings, so a healthcare tenant groups by the healthcare pack without a rebuild.
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getSettings(tenant)
+      .then((s) => (cancelled ? null : api.ontology(s.ontology_domain)))
+      .then((o) => {
+        if (!cancelled && o) setOnto(o)
+      })
+      .catch(() => setOnto(null))
+    return () => {
+      cancelled = true
+    }
+  }, [tenant, reloadKey])
+
+  const layers = useMemo(() => buildLayerIndex(onto), [onto])
+
+  /** Selectable layers, from the pack rather than from the loaded nodes. The cap now applies
+   *  within a layer, so a layer absent from one response is not a layer absent from the graph,
+   *  and a list derived from the response would delete the chip that gets you back. */
+  const layerChips = useMemo(() => (layers.loaded ? layers.order : []), [layers])
+
+  /** Derived, not stored: a layer this pack does not declare — a stale choice, or a pack that
+   *  failed to load — would hide the whole graph while the control that set it is not rendered. */
+  const layerFilter =
+    requestedLayer !== '__all__' && layerChips.includes(requestedLayer) ? requestedLayer : '__all__'
 
   useEffect(() => {
     Promise.all([
-      api.neighbourhood(tenant, { depth: 2 }),
+      // Isolating a layer asks the server to cap within it, so the schema of a busy firm is not
+      // truncated away by the governing-first ordering before this page can filter it. The wider
+      // cap goes with it: a table brings its columns, and most of them are hidden here anyway.
+      api.neighbourhood(tenant, {
+        depth: 2,
+        layer: layerFilter === '__all__' ? undefined : layerFilter,
+        limit: layerFilter === '__all__' ? undefined : 2000,
+      }),
       api.listMatters(tenant),
       api.getSettings(tenant),
     ])
@@ -174,30 +222,12 @@ export default function GraphExplorer() {
         setMatters(m.matters)
         setFloor(s.min_confidence)
         setMinConf(0)
+        setCapped({ truncated: n.truncated ?? false, total: n.total_edges ?? n.edges.length })
         setError('')
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tenant, reloadKey])
-
-  // Separate from the graph load, and deliberately not fatal: the layer control is a
-  // convenience, and losing it must not cost a reader the graph itself. Domain comes from the
-  // tenant's settings, so a healthcare tenant groups by the healthcare pack without a rebuild.
-  useEffect(() => {
-    let cancelled = false
-    api
-      .getSettings(tenant)
-      .then((s) => (cancelled ? null : api.ontology(s.ontology_domain)))
-      .then((o) => {
-        if (!cancelled && o) setOnto(o)
-      })
-      .catch(() => setOnto(null))
-    return () => {
-      cancelled = true
-    }
-  }, [tenant, reloadKey])
-
-  const layers = useMemo(() => buildLayerIndex(onto), [onto])
+  }, [tenant, reloadKey, layerFilter])
 
   const nodeIndex = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
 
@@ -233,12 +263,43 @@ export default function GraphExplorer() {
       })
   }, [nodes, layers])
 
-  /** Derived, not stored: a layer with no nodes in it — a stale choice, or a pack that failed to
-   *  load — would hide the whole graph while the control that set it is no longer rendered. */
-  const layerFilter =
-    requestedLayer !== '__all__' && layerGroups.some((g) => g.layer === requestedLayer)
-      ? requestedLayer
+  /** Databases present in the loaded catalog nodes. The API sends the name as its own field:
+   *  the id format belongs to the scanner, and this page parses no id. */
+  const catalogDatabases = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const n of nodes) {
+      if (n.database) counts.set(n.database, (counts.get(n.database) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [nodes])
+
+  /** Derived, not stored, for the same reason as the layer: a database that is not in this
+   *  response would blank the view while the control that chose it is no longer rendered. */
+  const databaseFilter =
+    requestedDatabase !== '__all__' && catalogDatabases.some(([d]) => d === requestedDatabase)
+      ? requestedDatabase
       : '__all__'
+
+  /** The detail kinds actually present, with what turning one on would add. */
+  const detailKinds = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const n of nodes) counts.set(n.type, (counts.get(n.type) ?? 0) + 1)
+    return CATALOG_DETAIL_KINDS.map((d) => ({
+      ...d,
+      count: d.types.reduce((s, t) => s + (counts.get(t) ?? 0), 0),
+    })).filter((d) => d.count > 0)
+  }, [nodes])
+
+  /** Kinds the reader has not asked for. Only in the schema view: a topic on a document is a fact
+   *  about the document, and hiding it there would answer a question nobody asked. */
+  const hiddenTypes = useMemo(() => {
+    const out = new Set<string>()
+    if (layerFilter !== CATALOG_LAYER) return out
+    for (const d of CATALOG_DETAIL_KINDS) {
+      if (!shownDetail.has(d.key)) for (const t of d.types) out.add(t)
+    }
+    return out
+  }, [layerFilter, shownDetail])
 
   const visibleEdges = useMemo(
     () =>
@@ -257,6 +318,20 @@ export default function GraphExplorer() {
           const a = layerByNode.get(e.source)
           const b = layerByNode.get(e.target)
           if (a !== layerFilter && b !== layerFilter) return false
+        }
+        if (hiddenTypes.size > 0) {
+          // The edge goes, not just the node: a column's description would otherwise drag the
+          // column back onto the canvas, since what is drawn is derived from the edges.
+          const a = nodeIndex.get(e.source)?.type
+          const b = nodeIndex.get(e.target)?.type
+          if ((a && hiddenTypes.has(a)) || (b && hiddenTypes.has(b))) return false
+        }
+        if (databaseFilter !== '__all__') {
+          // Only catalog nodes carry a database, so an edge between two facts is untouched. This
+          // narrows the schema half without hiding what a table is used for.
+          const a = nodeIndex.get(e.source)?.database
+          const b = nodeIndex.get(e.target)?.database
+          if ((a || b) && a !== databaseFilter && b !== databaseFilter) return false
         }
         if (matterFilter !== '__all__') {
           // The assertion carries the matter, not the node — nodes are derived from entity
@@ -278,6 +353,9 @@ export default function GraphExplorer() {
       matterFilter,
       layerFilter,
       layerByNode,
+      hiddenTypes,
+      databaseFilter,
+      nodeIndex,
       highlighted,
     ],
   )
@@ -758,6 +836,14 @@ export default function GraphExplorer() {
       return next
     })
 
+  const toggleDetail = (key: string) =>
+    setShownDetail((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+
   const selectedNodeObj = selectedNode ? nodeIndex.get(selectedNode) : null
   const selectedNodeEdges = selectedNode
     ? visibleEdges.filter((e) => e.source === selectedNode || e.target === selectedNode)
@@ -833,7 +919,7 @@ export default function GraphExplorer() {
 
       <div className="graph-toolbar">
         <div className="graph-toolbar-left">
-          {layerGroups.length > 1 && (
+          {layerChips.length > 1 && (
             <div className="toolbar-field">
               <label>
                 Layer
@@ -846,17 +932,61 @@ export default function GraphExplorer() {
                 >
                   All
                 </button>
-                {layerGroups.map((g) => (
+                {layerChips.map((l) => {
+                  const loaded = layerGroups.find((g) => g.layer === l)?.total ?? 0
+                  return (
+                    <button
+                      key={l}
+                      className={`chip-toggle${layerFilter === l ? ' active' : ''}`}
+                      onClick={() => setRequestedLayer(l)}
+                      title={`${loaded} ${loaded === 1 ? 'entity' : 'entities'} in this view`}
+                    >
+                      {layers.labelOf(l)}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          {layerFilter === CATALOG_LAYER && detailKinds.length > 0 && (
+            <div className="toolbar-field">
+              <label>
+                Include
+                <FieldHelp text={HELP.catalogDetail} />
+              </label>
+              <div className="chip-toggles">
+                {detailKinds.map((d) => (
                   <button
-                    key={g.layer}
-                    className={`chip-toggle${layerFilter === g.layer ? ' active' : ''}`}
-                    onClick={() => setRequestedLayer(g.layer)}
-                    title={`${g.total} ${g.total === 1 ? 'entity' : 'entities'}`}
+                    key={d.key}
+                    className={`chip-toggle${shownDetail.has(d.key) ? ' active' : ''}`}
+                    onClick={() => toggleDetail(d.key)}
+                    aria-pressed={shownDetail.has(d.key)}
+                    title={d.help}
                   >
-                    {g.label}
+                    {d.label}
+                    <span className="chip-toggle-count">{d.count}</span>
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+          {catalogDatabases.length > 1 && (
+            <div className="toolbar-field">
+              <label>
+                Database
+                <FieldHelp text={HELP.catalogDatabase} />
+              </label>
+              <select
+                value={databaseFilter}
+                onChange={(e) => setRequestedDatabase(e.target.value)}
+              >
+                <option value="__all__">All databases</option>
+                {catalogDatabases.map(([name, count]) => (
+                  <option key={name} value={name}>
+                    {name} ({count})
+                  </option>
+                ))}
+              </select>
             </div>
           )}
           <div className="toolbar-field">
@@ -914,6 +1044,9 @@ export default function GraphExplorer() {
           <span className="graph-stats">
             {visibleNodeIds.size} entities, {visibleEdges.length} assertions
             {minConf > 0 && ` · above ${minConf.toFixed(2)}`}
+            {/* The cap was reported and never shown, so a truncated graph read as a complete one.
+                Against the layer's own total when one is isolated, which is what was capped. */}
+            {capped.truncated && ` · capped at ${edges.length} of ${capped.total}`}
           </span>
         </div>
       </div>

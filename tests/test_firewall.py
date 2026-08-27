@@ -445,7 +445,14 @@ class TestTheExecutorIsBuiltFromConfig:
             def tables(self, tenant_id):
                 return [type("T", (), {"full_name": name})() for name in tables]
 
-        return type("S", (), {"config": cfg, "catalog": Catalog()})()
+        # `catalog_reader()` is how the container hands the catalog out now: the same rows, reloaded
+        # from the graph first, so the allowlist survives a restart that empties the cache.
+        catalog = Catalog()
+        return type(
+            "S",
+            (),
+            {"config": cfg, "catalog": catalog, "catalog_reader": lambda self: catalog},
+        )()
 
     def test_no_bucket_means_no_executor(self):
         """Rather than an executor that fails on first use: absent is the honest state for a

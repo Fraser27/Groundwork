@@ -1914,6 +1914,7 @@ code, pre { font-family: var(--mono); }
   border-color: var(--chip-colour, var(--accent));
   color: var(--text);
 }
+.chip-toggle-count { font-size: 10.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
 /* ── Misc ──────────────────────────────────────────────────────────────── */
 

@@ -408,6 +408,13 @@ export interface Column {
   is_primary_key: boolean
 }
 
+/** A governed metric whose SQL reads this table. */
+export interface TableMetric {
+  metric_id: string
+  name: string
+  definition: string
+}
+
 export interface TableDetail extends TableSummary {
   columns: Column[]
   /** The catalog scan that declared this table. */
@@ -417,6 +424,11 @@ export interface TableDetail extends TableSummary {
   pending_description?: PendingDescription | null
   /** How many proposals across this table and its columns are waiting for review. */
   pending_enrichment?: number
+  /** Metrics compiled against this table. Always sent, so absent means unanswered, not none. */
+  metrics?: TableMetric[]
+  /** Other wording that resolves to this table. */
+  synonyms?: string[]
+  topics?: string[]
 }
 
 /** Progress of a catalog enrichment run. In-memory server side, so it resets on a deploy. */
@@ -570,10 +582,39 @@ export interface Metric {
   synonyms: string[]
   status: 'draft' | 'approved' | 'deprecated'
   version: number
+  /** What kind of quantity this is, e.g. currency or percent. Presentation only. */
+  value_type?: string
+  /**
+   * The unit the figure is in, e.g. GBP or hours.
+   *
+   * Not decoration. The compiler warns when a derived metric composes base metrics with
+   * different units, and it reads that off this field, so an unset unit means the check on
+   * combining a currency with a count silently passes.
+   */
+  unit?: string
+  /** A display pattern, e.g. £#,##0. Never applied to the stored figure. */
+  format?: string
   owner?: string | null
   updated_by?: string | null
   updated_at?: string | null
 }
+
+/**
+ * A compiled metric definition, saved or not.
+ *
+ * `warnings` is the part that is easy to drop and expensive to drop: fan-out inflation over a
+ * join, a semi-additive refusal and a unit mismatch are all reported here and nowhere else.
+ */
+export interface CompiledMetric {
+  metric_id: string
+  sql: string
+  source_table?: string
+  warnings: string[]
+  note?: string
+}
+
+/** A saved definition with the SQL it compiled to, and whatever the compiler flagged on the way. */
+export type SavedMetric = Metric & { sql: string; warnings: string[]; note: string }
 
 // ── Query resolution ─────────────────────────────────────────────────────────
 
@@ -996,6 +1037,9 @@ export interface GraphNode {
   label: string
   /** The id prefix: `party:acme` -> `party`. Lowercase; `EntityDef.slug` is what it matches. */
   type: string
+  /** Catalog nodes only: the database the table or column belongs to. Sent rather than parsed out
+   *  of the id, because the scanner owns that format and this side owns none of it. */
+  database?: string
 }
 
 export interface GraphEdge {
@@ -1018,6 +1062,9 @@ export interface Neighbourhood {
    *  rather than drawn in full, and a truncated view should say so. */
   truncated?: boolean
   total_edges?: number
+  /** Echoed back when a layer was requested. Both counts above then describe that layer alone,
+   *  which is the only honest total to compare against once the cap is applied inside one. */
+  layer?: string | null
   confidence_floor?: number
 }
 
@@ -1811,9 +1858,9 @@ export const api = {
 
   listMetrics: (tenant: string) => request<Metric[]>(`/tenants/${tenant}/metrics`),
   createMetric: (tenant: string, m: Partial<Metric>) =>
-    request<Metric>(`/tenants/${tenant}/metrics`, { method: 'POST', body: JSON.stringify(m) }),
+    request<SavedMetric>(`/tenants/${tenant}/metrics`, { method: 'POST', body: JSON.stringify(m) }),
   updateMetric: (tenant: string, id: string, m: Partial<Metric>) =>
-    request<Metric>(`/tenants/${tenant}/metrics/${id}`, {
+    request<SavedMetric>(`/tenants/${tenant}/metrics/${id}`, {
       method: 'PUT',
       body: JSON.stringify(m),
     }),
@@ -1823,8 +1870,20 @@ export const api = {
       body: JSON.stringify({ status }),
     }),
   compileMetric: (tenant: string, id: string) =>
-    request<{ metric_id: string; sql: string }>(`/tenants/${tenant}/metrics/${id}/compile`, {
+    request<CompiledMetric>(`/tenants/${tenant}/metrics/${id}/compile`, {
       method: 'POST',
+    }),
+  /**
+   * Compile a definition that has not been saved.
+   *
+   * The affordance that makes a deterministic compiler worth having: an author reads the SQL
+   * their definition produces before anyone can be answered with it. No model is involved, so
+   * the SQL shown here is the SQL that will run.
+   */
+  previewMetric: (tenant: string, m: Partial<Metric>) =>
+    request<CompiledMetric>(`/tenants/${tenant}/metrics/preview`, {
+      method: 'POST',
+      body: JSON.stringify(m),
     }),
   /**
    * Load the example pack shipped for this tenant's ontology, as drafts.
@@ -1897,10 +1956,13 @@ export const api = {
       node_id?: string
       matter_id?: string
       depth?: number
+      limit?: number
       min_confidence?: number
       as_of?: string
       include_pending?: boolean
       include_suggestions?: boolean
+      /** Caps the overview within one half of the graph instead of across the whole of it. */
+      layer?: string
     },
   ) => request<Neighbourhood>(`/tenants/${tenant}/graph/neighbourhood${q(opts)}`),
 

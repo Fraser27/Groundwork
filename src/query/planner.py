@@ -34,6 +34,7 @@ never labelled plain "governed" when a model contributed.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -269,6 +270,7 @@ class Planner:
         synthesiser: Any | None = None,
         router: Any | None = None,
         sql_lane: Any | None = None,
+        synonyms_for: Callable[[AuthContext], Mapping[str, Sequence[str]]] | None = None,
     ) -> None:
         self._metrics = metric_matcher
         self._graph = graph_reader
@@ -281,6 +283,9 @@ class Planner:
         # The `SqlLane` from `sql_generation`, which `Resolver` is also given. One module, so the
         # two endpoints cannot disagree about whether a question got model-written SQL.
         self._sql = sql_lane
+        # Injected so this layer never learns where approved synonyms live. Absent means table
+        # selection is word overlap alone, which is what it was before synonyms were readable.
+        self._synonyms_for = synonyms_for
         self.blocked: list[BlockedQuery] = []
 
     def plan(
@@ -603,7 +608,7 @@ class Planner:
                 "description": t.description,
                 "columns": [c.name for c in t.columns],
             }
-            for t in relevant_tables(question, tables)
+            for t in relevant_tables(question, tables, synonyms=self._synonyms(ctx))
         ]
         if not relevant:
             return None
@@ -633,7 +638,7 @@ class Planner:
         if not tables:
             return None
 
-        result = self._sql.run(question, tables=tables)
+        result = self._sql.run(question, tables=tables, synonyms=self._synonyms(ctx))
         if result is None:
             return None
         return Part(
@@ -644,6 +649,22 @@ class Planner:
             sql=result.generated.sql,
             error=result.error,
         )
+
+    def _synonyms(self, ctx: AuthContext) -> Mapping[str, Sequence[str]] | None:
+        """Approved synonyms per table `full_name`, or None.
+
+        Degrades rather than raises: synonyms widen table selection, so a graph that cannot be
+        reached must cost the widening and nothing else. The catalog and SQL lanes both read this,
+        because a reader shown one list of schema while a query was written over another could not
+        check the query against it.
+        """
+        if self._synonyms_for is None:
+            return None
+        try:
+            return self._synonyms_for(ctx)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("no approved synonyms for table selection: %s", e)
+            return None
 
     # ── Grounding ────────────────────────────────────────────────────────────
 
