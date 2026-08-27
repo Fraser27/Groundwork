@@ -125,8 +125,15 @@ function persist(tenant: string, w: Wording, questions: string[]): void {
 // after a reload -- the second half of "Facilities is only seen when I refreshed".
 const listeners = new Set<() => void>()
 
+// Bumped by `forgetUnitLabel`. A fetch started before a pack switch resolves after it, and its
+// `.then` would write the old pack's wording straight back into the cache and localStorage that
+// were just cleared -- so the admin switches pack, the app repaints, and one round trip later the
+// previous pack's word returns with nothing left to invalidate it.
+let generation = 0
+
 /** Drop the cached wording and re-read it everywhere, for a pack the admin just switched. */
 export function forgetUnitLabel(tenant: string = getTenantId()): void {
+  generation += 1
   cache.delete(tenant)
   inFlight.delete(tenant)
   try {
@@ -142,6 +149,7 @@ export function forgetUnitLabel(tenant: string = getTenantId()): void {
 function load(tenant: string): Promise<Pack> {
   const running = inFlight.get(tenant)
   if (running) return running
+  const started = generation
   const p = api
     .getSettings(tenant)
     .then((s) => {
@@ -150,12 +158,21 @@ function load(tenant: string): Promise<Pack> {
       // fallbacks here would be legal ones, which is the whole problem being fixed.
       const questions = s.example_questions ?? []
       const pack: Pack = { unit: derive(wording), questions }
-      cache.set(tenant, pack)
-      persist(tenant, wording, questions)
+      if (started === generation) {
+        cache.set(tenant, pack)
+        persist(tenant, wording, questions)
+      }
+      // Returned either way. The caller is `usePack`, which discards a resolution it no longer
+      // wants; what must not happen is this reply outliving the switch in shared state.
       return pack
     })
     .catch(() => ({ unit: derive(FALLBACK), questions: [] }))
-    .finally(() => inFlight.delete(tenant))
+    // Only if this is still the registered fetch. `forgetUnitLabel` dropped ours and a
+    // replacement may already sit under this tenant, which an unconditional delete would evict
+    // and so let a third fetch start against the same pack.
+    .finally(() => {
+      if (inFlight.get(tenant) === p) inFlight.delete(tenant)
+    })
   inFlight.set(tenant, p)
   return p
 }
