@@ -16,8 +16,13 @@
 # them to a role group, and writes the matching row into TenantTable so the API can
 # actually resolve them.
 #
-#   ./scripts/create-admin-user.sh                 # interactive prompts
-#   ./scripts/create-admin-user.sh you@example.com  # email as an argument, still prompts for the rest
+#   ./scripts/create-admin-user.sh you@example.com
+#   ./scripts/create-admin-user.sh you@example.com reviewer,matter-owner
+#   REGION=eu-west-1 HOME_TENANT=acme ./scripts/create-admin-user.sh you@example.com
+#
+# Non-interactive: everything but the email has a default, and nothing supplied is ever
+# confirmed back. The email is prompted for only when there is no argument *and* a
+# terminal to prompt on, so this is safe to run from nohup, SSM or user data.
 #
 # Non-idempotent by design where it matters: re-running for an existing email reuses the
 # Cognito user (rather than failing) and still (re)writes the tenant binding, since that is
@@ -28,12 +33,7 @@ set -euo pipefail
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\n\033[31mFAILED: %s\033[0m\n' "$*" >&2; exit 1; }
-ask() {
-  # ask <prompt> <default>. Empty input keeps the default.
-  local __reply
-  read -r -p "$1 [$2]: " __reply || true
-  echo "${__reply:-$2}"
-}
+usage() { printf 'usage: %s <email> [role[,role...]]\n' "$0" >&2; exit 1; }
 
 # One trap, registered once: a second `trap ... EXIT` later would silently replace this
 # one and leak whatever the first was cleaning up.
@@ -96,36 +96,48 @@ else
   note "installed $(aws --version 2>&1)"
 fi
 
-# ── 2. Prompts ───────────────────────────────────────────────────────────────────
+# ── 2. Parameters ────────────────────────────────────────────────────────────────
 say "User details"
 
 EMAIL="${1:-}"
-[ -n "$EMAIL" ] || EMAIL="$(ask "Email address" "")"
+if [ -z "$EMAIL" ]; then
+  # The one value with no defensible default. Prompted only if there is a terminal:
+  # under nohup or SSM there is not, and blocking on a read nobody can answer is worse
+  # than saying what the argument should have been.
+  [ -t 0 ] || usage
+  read -r -p "Email address: " EMAIL || true
+fi
 [[ "$EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] \
   || die "'$EMAIL' does not look like an email address"
 
 # AWS_REGION before AWS_DEFAULT_REGION, matching the CLI's own precedence. CloudShell sets
 # only the former, from the console's Region selector, so reading just the latter would
-# offer us-east-1 to someone who opened CloudShell somewhere else entirely.
-REGION="$(ask "AWS region" "${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}")"
-TENANT_ID="$(ask "Tenant id" "${HOME_TENANT:-demo-firm}")"
+# fall back to us-east-1 for someone who opened CloudShell somewhere else entirely.
+REGION="${REGION:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}"
 
-echo
-echo "  Roles: 1) platform-admin  2) matter-owner  3) reviewer"
-ROLE_CHOICE="$(ask "Role [1-3, comma-separated for more than one]" "1")"
+# Matches the `homeTenant` default in cdk/lib/config.ts. A user bound to any other tenant
+# cannot reach the Platform page, so getting this wrong looks like missing permissions.
+TENANT_ID="${TENANT_ID:-${HOME_TENANT:-demo-firm}}"
 
+# Defaults to platform-admin: this creates the *first* user, and a first user who can
+# administer nothing leaves the deployment with no way in. Every argument after the email
+# is taken, and comma or space both separate, so no form silently drops a role.
+ROLES_RAW="${*:2}"
 ROLE_GROUPS=()
-IFS=',' read -ra _choices <<<"$ROLE_CHOICE"
-for c in "${_choices[@]}"; do
-  case "$(echo "$c" | tr -d '[:space:]')" in
-    1) ROLE_GROUPS+=("platform-admin") ;;
-    2) ROLE_GROUPS+=("matter-owner") ;;
-    3) ROLE_GROUPS+=("reviewer") ;;
+IFS=', ' read -ra _requested <<<"${ROLES_RAW:-${ROLES:-platform-admin}}"
+for r in "${_requested[@]}"; do
+  case "$r" in
+    platform-admin | matter-owner | reviewer) ROLE_GROUPS+=("$r") ;;
     "") ;;
-    *) die "unknown role choice '$c'" ;;
+    *) die "unknown role '$r'. Choose from: platform-admin, matter-owner, reviewer" ;;
   esac
 done
 [ "${#ROLE_GROUPS[@]}" -gt 0 ] || die "at least one role is required"
+
+note "email     $EMAIL"
+note "region    $REGION"
+note "tenant    $TENANT_ID"
+note "roles     ${ROLE_GROUPS[*]}"
 
 # ── 3. Credentials ───────────────────────────────────────────────────────────────
 say "Checking AWS credentials"
@@ -133,7 +145,6 @@ say "Checking AWS credentials"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)" \
   || die "No usable AWS credentials. Run 'aws configure' or export a profile."
 note "account   $ACCOUNT"
-note "region    $REGION"
 
 # ── 4. Discover the deployed stacks ──────────────────────────────────────────────
 say "Reading the deployed stacks"
