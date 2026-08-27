@@ -267,7 +267,10 @@ class Reasoner:
             candidates = [
                 f
                 for f in by_predicate.get(pattern.predicate, ())
-                if accepts(f, rule.min_premise_class) and self._matches_declared_types(pattern, f)
+                if accepts(f, rule.min_premise_class)
+                # A path's declared types constrain where it starts and where it ends, so they
+                # are checked on the walk's endpoints rather than here -- see `_match`.
+                and (pattern.is_path or self._matches_declared_types(pattern, f))
             ]
             grown: list[tuple[dict[str, str], list[Assertion]]] = []
             for binding, used in partial:
@@ -359,9 +362,35 @@ class Reasoner:
 
         An ordinary premise is `max_hops == 1`, so it is literally the one-hop case of the walk
         and needs no separate branch.
+
+        For a path, the pattern's types describe its two ends and say nothing about what it passes
+        through. Checking them edge by edge before walking meant a chain could only be built from
+        hops that were each individually a whole path, so `(cu:Customer)-[:CONTROLS*1..3]->
+        (mm:Merchant)` never got past one hop: the interposed Merchant->Merchant link failed the
+        Customer subject check and was dropped from the candidates. The bound is unreachable and
+        the rule quietly becomes a one-hop rule -- which for retail's `related_party_resale` is
+        the whole finding, since a return-resale ring is built through a holding company
+        *precisely* so that no single record shows both ends.
+
+        Invisible in the other packs only because their chains are same-kind on both ends
+        (Party->Party, Counterparty->Counterparty), so every intermediate hop happened to satisfy
+        a check that was asking the wrong question.
+
+        Intermediate hops are not unconstrained: they must use the declared predicate, and
+        `build_assertion` already refused any edge outside that predicate's own domain and range
+        at write time.
         """
         if not pattern.is_path:
             return [(f.subject_id, f.object_id, [f]) for f in candidates]
+
+        def ends_match(start: str, end: str) -> bool:
+            for declared, entity_id in ((pattern.subject_type, start), (pattern.object_type, end)):
+                if (
+                    declared is not None
+                    and self.ontology.entity_kind_of(entity_id) != declared.lower()
+                ):
+                    return False
+            return True
 
         # (start, current end, facts, nodes on this path). `visited` is per path rather than
         # global, mirroring `expand()`: two paths may legitimately share a node, but one path
@@ -370,7 +399,9 @@ class Reasoner:
         walks: list[tuple[str, str, list[Assertion], set[str]]] = [
             (f.subject_id, f.object_id, [f], {f.subject_id, f.object_id}) for f in candidates
         ]
-        out: list[tuple[str, str, list[Assertion]]] = [(s, e, c) for s, e, c, _ in walks]
+        out: list[tuple[str, str, list[Assertion]]] = [
+            (s, e, c) for s, e, c, _ in walks if ends_match(s, e)
+        ]
 
         for _ in range(pattern.max_hops - 1):
             extended: list[tuple[str, str, list[Assertion], set[str]]] = []
@@ -382,7 +413,9 @@ class Reasoner:
                     extended.append((start, f.object_id, [*chain, f], visited | {f.object_id}))
             if not extended:
                 break
-            out.extend((s, e, c) for s, e, c, _ in extended)
+            # Every reached end is offered, but the walk continues from all of them: a chain
+            # whose current end is the wrong kind is not a match and is still a prefix of one.
+            out.extend((s, e, c) for s, e, c, _ in extended if ends_match(s, e))
             walks = extended
         return out
 
