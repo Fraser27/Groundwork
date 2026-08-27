@@ -722,7 +722,7 @@ class TestTheApiReportsWhatTheWallDid:
         from src.query.metric_matcher import MetricMatcher
 
         matcher = MetricMatcher(
-            load_metrics("sample/metrics.yaml").metrics, StaticCatalog(tables={})
+            load_metrics("sample/metrics/legal.yaml").metrics, StaticCatalog(tables={})
         )
         res = Resolver(metric_matcher=matcher).resolve(
             ctx, "fees billed by month", GovernanceSettings(), execute=False

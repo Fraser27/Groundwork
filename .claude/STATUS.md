@@ -33,7 +33,7 @@ Roughly 75% complete. What remains is the integration layer — see "Not done" b
 ### Structured pipeline (agent-built, Rosetta lineage)
 `src/discovery/glue_scanner.py`, `src/discovery/enrichment.py`,
 `src/metrics/{models,compiler,loader}.py`, `src/query/firewall.py`,
-`src/executors/athena.py`, `sample/metrics.yaml` (6 legal metrics).
+`src/executors/athena.py`, `sample/metrics/legal.yaml` (6 legal metrics), `sample/metrics/retail.yaml` (5 retail metrics).
 
 ### Unstructured pipeline (agent-built, COA lineage)
 `src/documents/{models,ingest,parse,chunk,embed,review,retract}.py`,

@@ -22,7 +22,7 @@ from src.metrics.models import (
     StaticCatalog,
 )
 
-SAMPLE = Path(__file__).resolve().parents[1] / "sample" / "metrics.yaml"
+SAMPLE = Path(__file__).resolve().parents[1] / "sample" / "metrics" / "legal.yaml"
 
 CATALOG = StaticCatalog.from_dicts(
     {
@@ -112,6 +112,68 @@ class TestSamplePack:
         assert parses(result.sql), result.sql
 
 
+class TestTheRetailPackCompilesAgainstTheWorkshopTables:
+    """The retail examples name `iceberg_db.returns` and `iceberg_db.orders`, which is what the
+    workshop's Iceberg lab actually builds. A seeded metric that will not compile is discovered
+    when a participant approves it and asks a question, by which point the lab has stalled.
+    """
+
+    #: The columns the workshop's Iceberg tables carry, written out rather than read from Glue.
+    #: Only the ones these metrics touch -- an unknown column is permissive in `StaticCatalog`,
+    #: so a fuller schema would test less.
+    RETAIL_CATALOG = StaticCatalog.from_dicts(
+        {
+            "iceberg_db.returns": {
+                "return_id": "string",
+                "order_id": "string",
+                "customer_id": "string",
+                "return_date": "date",
+                "return_category": "string",
+                "refund_amount": "decimal(18,2)",
+                "restocking_fee": "decimal(18,2)",
+                "return_status": "string",
+                "product_condition": "string",
+            },
+            "iceberg_db.orders": {
+                "order_id": "string",
+                "customer_id": "string",
+                "order_date": "date",
+                "total_amount": "decimal(18,2)",
+                "status": "string",
+            },
+        }
+    )
+
+    @pytest.fixture(scope="class")
+    def retail(self) -> MetricRegistry:
+        result = load_metrics(SAMPLE.parent / "retail.yaml")
+        assert not result.errors, result.errors
+        return result.registry
+
+    @pytest.mark.parametrize("metric_id", ["rm_001", "rm_002", "rm_003", "rm_004", "rm_005"])
+    def test_every_retail_metric_compiles_to_valid_sql(self, retail, metric_id):
+        result = compile_metric(metric(retail, metric_id), self.RETAIL_CATALOG, registry=retail)
+        assert result.is_valid, result.errors
+        assert parses(result.sql), result.sql
+
+    def test_the_ratio_is_not_integer_divided(self, retail):
+        """Both bases are COUNT(DISTINCT ...), and Presto integer-divides two bigints -- so
+        without the cast every customer's return rate is exactly 0. A clean-looking book, which
+        is the one wrong answer nobody questions."""
+        sql = compile_metric(metric(retail, "rm_005"), self.RETAIL_CATALOG, registry=retail).sql
+        assert "CAST(returns_accepted AS DOUBLE)" in sql
+        assert "NULLIF(orders_placed, 0)" in sql
+
+    def test_the_ratio_is_composed_from_the_two_governed_measures(self, retail):
+        """Derived rather than a third SQL expression, so changing what counts as a return
+        changes the rate. A hand-written numerator would keep answering the old definition."""
+        rate = metric(retail, "rm_005")
+        assert rate.type == "derived"
+        assert set(rate.base_metrics) == {"returns_accepted", "orders_placed"}
+        # A ratio is never summable, whatever its parts are.
+        assert rate.aggregation == "non_additive"
+
+
 class TestDeterminism:
     """No LLM means byte-identical SQL for identical inputs. This is the product claim."""
 
@@ -179,9 +241,7 @@ class TestTimeGrain:
 
     def test_declared_grains_supply_the_coarsest_default(self, registry):
         """A metric restricted to month+ must not leak its finer base grain."""
-        result = compile_metric(
-            metric(registry, "lm_005"), CATALOG, dimensions=["closed_date"]
-        )
+        result = compile_metric(metric(registry, "lm_005"), CATALOG, dimensions=["closed_date"])
         assert result.time_grain == "year"
         assert "DATE_TRUNC('year', closed_date)" in result.sql
 
@@ -600,9 +660,7 @@ class TestDerived:
 
 class TestOrderAndLimit:
     def test_order_by_must_name_an_output_column(self, registry):
-        result = compile_metric(
-            metric(registry, "lm_001"), CATALOG, order_by=["(SELECT 1)"]
-        )
+        result = compile_metric(metric(registry, "lm_001"), CATALOG, order_by=["(SELECT 1)"])
         assert not result.is_valid
         assert "Invalid order_by" in result.errors[0]
 
@@ -647,9 +705,7 @@ class TestSchemaResolution:
         assert "practice_group" in result.sql
 
     def test_joined_table_columns_are_resolvable(self, registry):
-        result = compile_metric(
-            metric(registry, "lm_005"), CATALOG, dimensions=["practice_group"]
-        )
+        result = compile_metric(metric(registry, "lm_005"), CATALOG, dimensions=["practice_group"])
         assert result.is_valid, result.errors
         assert "practice_group" in result.sql
 

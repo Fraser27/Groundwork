@@ -1,0 +1,177 @@
+# Governed retail metrics for AnyCorp.
+#
+# These name the Iceberg tables the workshop builds -- `iceberg_db.returns`,
+# `iceberg_db.orders`, `iceberg_db.customers` -- so they compile against a catalog a
+# participant actually has. Seeded as drafts; nothing answers until someone approves it.
+#
+# The fields that carry governance weight, rather than just describing the number:
+#
+#   time_grains       the ONLY grains this metric may be served at. Non-empty is a
+#                     hard restriction: ask for a grain outside it and compilation
+#                     fails rather than quietly answering at the wrong one.
+#   time_grain_column the single column time_grains governs. Grouping by any other
+#                     time-like column is refused as a bypass.
+#   aggregation       additive / semi_additive / non_additive. Drives whether the
+#                     compiler will let the measure be rolled up across time.
+#   parameters        the closed set of columns a caller may filter on.
+#
+# Why a return rate is defined here and not left to a model: "return rate" has at least
+# three defensible readings -- returns per order, refunded value over order value, and the
+# precomputed `customers.return_rate` column that the operational system maintains on its
+# own schedule. All three are reasonable, they disagree, and a 42% figure is what gets an
+# account suspended. Which one AnyCorp means is a decision, and this file is where the
+# decision is recorded.
+
+version: "1.0"
+
+metrics:
+  # A flow: money refunded in a period. Freely summable across any dimension, which is
+  # what additive means and why every grain is allowed.
+  - metric_id: rm_001
+    name: refund_value
+    synonyms: ["refunds", "refunded amount", "money refunded", "refund total"]
+    definition: >
+      Value refunded to customers on completed returns, before restocking fees are
+      deducted. Excludes returns still pending and returns the desk rejected.
+    type: simple
+    expression: "SUM(refund_amount)"
+    source_table: iceberg_db.returns
+    filters: ["return_status = 'completed'"]
+    grain: ["return_date", "return_category", "product_condition"]
+    time_grain_column: return_date
+    time_grains: ["day", "week", "month", "quarter", "year"]
+    parameters:
+      - column: return_category
+        description: "Restrict to one classification, e.g. 'serial_returner'."
+      - column: product_condition
+        description: "'unopened', 'opened', 'damaged' or 'missing_parts'."
+      - column: customer_id
+        description: One customer's refunds.
+      - column: return_date
+        operator: BETWEEN
+        description: Return date range.
+    aggregation: additive
+    value_type: currency
+    unit: USD
+    format: "$#,##0.00"
+    owner: returns-operations
+
+  # The fee that should have been charged and often was not. Separate from refund_value
+  # rather than netted against it: "we refunded $1,300 and waived the $195 fee" is two
+  # facts a reviewer needs apart, and netting them hides the second.
+  - metric_id: rm_002
+    name: restocking_fees_charged
+    synonyms: ["restocking fees", "fees charged on returns", "restocking revenue"]
+    definition: >
+      Restocking fees actually charged on completed returns. A return accepted under the
+      electronics provision carries a 15% fee, so a zero here on an opened electronics
+      return is a waiver somebody granted.
+    type: simple
+    expression: "SUM(restocking_fee)"
+    source_table: iceberg_db.returns
+    filters: ["return_status = 'completed'"]
+    grain: ["return_date", "return_category", "product_condition"]
+    time_grain_column: return_date
+    time_grains: ["day", "week", "month", "quarter", "year"]
+    parameters:
+      - column: return_category
+        description: "Restrict to one classification, e.g. 'fraud'."
+      - column: customer_id
+        description: One customer's fees.
+      - column: return_date
+        operator: BETWEEN
+        description: Return date range.
+    aggregation: additive
+    value_type: currency
+    unit: USD
+    format: "$#,##0.00"
+    owner: returns-operations
+
+  # The numerator of the return rate, kept as its own metric so the ratio below is
+  # composed from two governed definitions rather than a second SQL expression that could
+  # drift from them.
+  - metric_id: rm_003
+    name: returns_accepted
+    synonyms: ["number of returns", "return count", "returns processed"]
+    definition: >
+      Count of returns the desk completed. Counts returns, not returned items: one return
+      of three items is one return.
+    type: simple
+    expression: "COUNT(DISTINCT return_id)"
+    source_table: iceberg_db.returns
+    filters: ["return_status = 'completed'"]
+    grain: ["return_date", "return_category"]
+    time_grain_column: return_date
+    time_grains: ["day", "week", "month", "quarter", "year"]
+    parameters:
+      - column: return_category
+        description: One classification.
+      - column: customer_id
+        description: One customer's returns.
+      - column: return_date
+        operator: BETWEEN
+        description: Return date range.
+    # Distinct counts do not add up: the same return cannot appear twice, but two months
+    # of distinct counts summed is not the distinct count of the two months together.
+    aggregation: non_additive
+    value_type: number
+    format: "#,##0"
+    owner: returns-operations
+
+  # The denominator. Orders placed, not orders delivered -- a return is measured against
+  # the order that produced it, and a cancelled order can produce none.
+  - metric_id: rm_004
+    name: orders_placed
+    synonyms: ["order count", "number of orders", "orders"]
+    definition: >
+      Count of orders that were not cancelled. The denominator of the return rate, so it
+      deliberately includes orders with no return at all.
+    type: simple
+    expression: "COUNT(DISTINCT order_id)"
+    source_table: iceberg_db.orders
+    filters: ["status <> 'cancelled'"]
+    grain: ["order_date", "status"]
+    time_grain_column: order_date
+    time_grains: ["day", "week", "month", "quarter", "year"]
+    parameters:
+      - column: status
+        description: "'pending', 'completed' or 'shipped'."
+      - column: customer_id
+        description: One customer's orders.
+      - column: order_date
+        operator: BETWEEN
+        description: Order date range.
+    aggregation: non_additive
+    value_type: number
+    format: "#,##0"
+    owner: commerce-analytics
+
+  # The number that gets an account suspended, and therefore the one worth governing
+  # hardest. Derived, so it is arithmetic over two governed measures rather than a third
+  # opinion about what a return is: change `returns_accepted` and this follows.
+  #
+  # Not the `customers.return_rate` column, deliberately. That column is maintained by the
+  # operational system on its own schedule, so it answers "what did the source system last
+  # think" rather than "what is true of the rows in this period" -- and it cannot be
+  # filtered to a date range at all.
+  - metric_id: rm_005
+    name: return_rate
+    synonyms: ["return %", "rate of returns", "returns per order", "return ratio"]
+    definition: >
+      Completed returns as a share of orders placed. A ratio, so it is never summed: a
+      customer's rate over the year is recomputed from that year's rows, not averaged from
+      twelve monthly rates.
+    type: derived
+    # Cast, because both bases are integer counts and Athena integer-divides them: without
+    # this every customer's rate is exactly 0, which reads as a clean book rather than as an
+    # arithmetic error.
+    expression: "CAST(returns_accepted AS DOUBLE) / NULLIF(orders_placed, 0)"
+    base_metrics: ["returns_accepted", "orders_placed"]
+    grain: ["customer_id"]
+    parameters:
+      - column: customer_id
+        description: One customer's rate.
+    aggregation: non_additive
+    value_type: percent
+    format: "0.0%"
+    owner: loss-prevention

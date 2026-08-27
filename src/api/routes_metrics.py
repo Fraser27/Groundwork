@@ -418,11 +418,17 @@ async def seed_metrics(
     # Read from disk rather than from `services.metric_matcher`. That attribute is a test
     # seam and is None in a running system, because the matcher is built per request from
     # the tenant's approved metrics now that definitions live in the graph.
-    pack = load_example_pack()
+    # This tenant's pack, not a global one. A metric names real tables, so the examples worth
+    # offering depend on the vocabulary the tenant chose -- and the retail pack's examples point
+    # at tables a legal deployment does not have, in both directions.
+    domain = services.ontology_for(ctx.tenant_id).domain
+    pack = load_example_pack(domain)
     if not pack:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "the example metric pack could not be read, so there is nothing to seed",
+            f"no example metrics ship for the {domain} pack, so there is nothing to seed. "
+            "Author one on the Metrics page instead: a metric names tables in your own catalog, "
+            "which is why there is nothing domain-neutral to offer here.",
         )
 
     counts = store.seed_from_pack(
@@ -435,11 +441,11 @@ async def seed_metrics(
         **counts,
         "approved": approve,
         "note": (
-            "Seeded from the example pack as "
+            f"Seeded the {domain} example pack as "
             + ("approved" if approve else "drafts")
-            + ". These are examples for a fictional firm and reference tables such as "
-            "legal_ops.invoices, so check each one against your own catalog before "
-            "approving it. Metrics you authored in the app were left alone."
+            + ". These are examples for a fictional company and name specific tables, so check "
+            "each one against your own catalog before approving it. Metrics you authored in the "
+            "app were left alone."
         ),
     }
 

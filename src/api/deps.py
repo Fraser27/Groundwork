@@ -42,13 +42,18 @@ from src.user_admin import UserAdmin
 
 logger = logging.getLogger(__name__)
 
-#: Example metrics for a fictional firm, used only to seed a demo. The real store is the
 #: How many refused questions to keep per tenant. Enough to see a pattern worth writing a
 #: metric for, bounded so a firm asking thousands cannot exhaust the task's memory.
 MAX_BLOCKED_PER_TENANT = 200
 
+#: Example metrics, one file per ontology pack, used only to seed a demo. The real store is the
 #: graph, so this is not a configuration point and there is deliberately no env var for it.
-EXAMPLE_METRICS_PATH = FsPath(__file__).resolve().parents[2] / "sample" / "metrics.yaml"
+#:
+#: Per pack because a metric names real tables. Seeding `legal_ops.invoices` into a retail
+#: deployment gives a reader six approved-looking definitions that compile to SQL against tables
+#: their catalog does not have -- which is worse than an empty Metrics page, because it looks like
+#: the semantic layer is already populated.
+EXAMPLE_METRICS_DIR = FsPath(__file__).resolve().parents[2] / "sample" / "metrics"
 
 
 @dataclass
@@ -356,20 +361,24 @@ class Services:
         )
 
 
-def load_example_pack() -> list[Any]:
-    """The shipped example metrics, for seeding a demo.
+def load_example_pack(domain: str = "legal") -> list[Any]:
+    """The shipped example metrics for one ontology pack, for seeding a demo.
 
     Not the metric store. Metrics live in the graph with version history, authored through
     the app, because that is what makes "what did this definition mean when it answered"
-    answerable. This file is examples for a fictional firm, and `POST /metrics/seed` loads
-    them as drafts for someone to look at.
+    answerable. These files are examples for a fictional company, and `POST /metrics/seed`
+    loads them as drafts for someone to look at.
+
+    Empty for a pack with no file, which is the honest answer: a metric names a table, so
+    there is nothing domain-neutral to offer instead.
     """
-    if not EXAMPLE_METRICS_PATH.exists():
+    path = EXAMPLE_METRICS_DIR / f"{domain}.yaml"
+    if not path.exists():
         return []
     try:
-        return load_metrics(EXAMPLE_METRICS_PATH).metrics
+        return load_metrics(path).metrics
     except Exception as e:
-        logger.warning("example metric pack failed to load: %s", e)
+        logger.warning("example metric pack %s failed to load: %s", domain, e)
         return []
 
 
