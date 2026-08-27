@@ -30,7 +30,23 @@ import { EmptyState, ErrorState, Spinner, Toast } from '../components/Shared'
 import { fmtDate } from '../format'
 import { fillUnit, useUnitLabel } from '../useUnitLabel'
 
-const ROLES = ['supervising partner', 'associate', 'paralegal', 'trainee', 'support'] as const
+/**
+ * Suggestions, not a vocabulary. The API takes `role` as free text (`routes_access.py`
+ * `AssignRequest.role: str = "member"`), stores it on the assignment and copies it into the audit
+ * detail. It grants nothing -- access comes from the assignment existing, so a trainee and a
+ * supervising partner read exactly the same facts. The role answers "why was this person staffed
+ * on", for whoever reads the trail later.
+ *
+ * So these are deliberately domain-neutral and the field is editable. The previous list was
+ * `supervising partner / associate / paralegal / trainee / support`, which offered a returns
+ * supervisor the word "paralegal" -- the same leak that put "Choose a matter" under a Facilities
+ * heading, except the API never enforced this one, so the fix is a better default rather than a
+ * new pack field.
+ */
+const ROLES = ['owner', 'reviewer', 'contributor', 'observer'] as const
+
+/** What the API assumes when no role is sent, so the field starts where the server would. */
+const DEFAULT_ROLE = 'contributor'
 
 type View = 'matter' | 'user'
 
@@ -62,7 +78,7 @@ export default function Access() {
   const [loadedKey, setLoadedKey] = useState<string | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
   const [addUser, setAddUser] = useState('')
-  const [addRole, setAddRole] = useState<string>(ROLES[1])
+  const [addRole, setAddRole] = useState<string>(DEFAULT_ROLE)
   const [refreshKey, setRefreshKey] = useState(0)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
 
@@ -156,7 +172,10 @@ export default function Access() {
   const doAssign = async () => {
     if (!matterId || !addUser) return
     try {
-      await api.assign(tenant, { user_id: addUser, matter_id: matterId, role: addRole })
+      // Trimmed, and blank falls back rather than storing an empty string: the field is typed
+      // into now, and `role: ''` would read in the trail as a role deliberately left off.
+      const role = addRole.trim() || DEFAULT_ROLE
+      await api.assign(tenant, { user_id: addUser, matter_id: matterId, role })
       showToast(`${userLabels[addUser] ?? addUser} added to ${matterLabels[matterId] ?? matterId}`)
     } catch {
       showToast('Could not add that person. Nothing was changed.', 'error')
@@ -372,16 +391,23 @@ export default function Access() {
                       <label>
                         Role
                         <FieldHelp
-                          text={`What this person does on the ${unit.lower}. It is recorded for the file and shown in the trail; it does not widen or narrow what they can read.`}
+                          text={`What this person does on the ${unit.lower}. It is recorded for the file and shown in the trail; it does not widen or narrow what they can read. Type your own word for it -- the suggestions are generic on purpose, because every organisation names these differently.`}
                         />
                       </label>
-                      <select value={addRole} onChange={(e) => setAddRole(e.target.value)}>
+                      {/* An input with suggestions rather than a closed list. The API does not
+                          validate `role`, so presenting four options as though it did was a
+                          smaller lie than the words themselves but still a lie. */}
+                      <input
+                        list="access-role-suggestions"
+                        value={addRole}
+                        onChange={(e) => setAddRole(e.target.value)}
+                        placeholder={DEFAULT_ROLE}
+                      />
+                      <datalist id="access-role-suggestions">
                         {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
+                          <option key={r} value={r} />
                         ))}
-                      </select>
+                      </datalist>
                     </div>
                     <button className="btn btn-primary" disabled={!addUser} onClick={doAssign}>
                       Add to {unit.lower}
