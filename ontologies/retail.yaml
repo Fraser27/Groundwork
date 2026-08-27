@@ -1,0 +1,380 @@
+# Retail returns and refund-abuse ontology.
+#
+# Written for the AnyCorp dataset used in the workshop: an Aurora-to-Iceberg lake of
+# customers, orders, products, returns and payment transactions, plus a scanned return
+# policy manual, a product manual, and the memos and letters a returns desk generates
+# around a disputed refund.
+#
+# The two-tier predicate split is the important part of this file, exactly as in the
+# legal pack.
+#
+# `governing` predicates drive decisions with money or conduct consequence: who
+# approved a refund, which policy clause a decision rested on, whether a clause was
+# still in force, who is under investigation, who controls a merchant. These are a
+# CLOSED set, validated at write time. If an extractor proposes `refund_granted_to`,
+# the write is REJECTED rather than quietly recorded -- because a return-abuse check
+# that returns no rows because of a synonym looks exactly like a clean customer.
+#
+# `descriptive` predicates are open, with exact-name grounding and no LLM. Sprawl here
+# costs retrieval precision, not a chargeback.
+#
+# The test for which tier a predicate belongs in: would a wrong answer here embarrass
+# you, or expose you? Embarrass -> descriptive. Expose -> governing. "Headphones are
+# in the audio category" is the first. "The desk waived a fee for a customer already
+# under investigation" is the second.
+
+domain: retail
+version: 1
+
+# Trailing words that are company-form noise rather than part of a merchant's name.
+# Used ONLY to ask a reviewer whether two ids are the same merchant -- never to rewrite
+# a stored id. A marketplace routinely carries a seller and its own trading subsidiary
+# as separate accounts, which is exactly what CONTROLS records, so collapsing them
+# would turn a related-party finding into a false single-seller one. Detect
+# aggressively, merge only by human act.
+entity_suffixes:
+  - ltd
+  - limited
+  - llc
+  - inc
+  - incorporated
+  - corp
+  - corporation
+  - co
+  - plc
+  - gmbh
+  - bv
+  - nv
+  - sa
+  - srl
+  - pty
+# Deliberately NOT here: `holdings`, `group`, `trading`, `retail`, `stores`, `resale`,
+# `marketplace`. Those are part of a name rather than its company form -- `Northgate
+# Holdings` and `Northgate Retail` are two registrations, and treating `holdings` as
+# noise makes them collide. A key that over-generates asks a reviewer a stupid
+# question; this one would ask a *misleading* one, and a reviewer who merges on it
+# loses the distinction that the whole related-party finding rests on.
+
+# `external_id: true` marks a kind whose id after the colon belongs to another system,
+# so it is preserved byte-for-byte instead of being normalised. `order:ORD-2026-00417`
+# is an order-management reference and `table:src-1:retail.returns` is a Glue name;
+# lowercasing either breaks the join back to the system that issued it. A Customer's or
+# Merchant's id, by contrast, is minted here from words on a page -- a memo names "Sam
+# Parker", not customer 47 -- so it is ours to canonicalise, which is what stops one
+# person becoming several nodes.
+entity_types:
+  - id: Case
+    label: Case
+    description: A returns or refund-abuse investigation file.
+    help: The organising unit of returns work. Documents, customers and returns hang off a Case, and access is scoped by it.
+    external_id: true
+    # What a reader navigates by. The scoping key stays `matter_id` everywhere in the
+    # code; this is only what it is called on screen.
+    organising_unit: true
+  - id: Customer
+    label: Customer
+    description: A person holding a shopping account.
+    help: "Minted from the name on a page, not from the warehouse key, because a memo says \"Sam Parker\" and never says 47. The warehouse row is reached by a governed metric; this node is what a document can be attached to."
+  - id: Order
+    label: Order
+    description: A purchase, as recorded by order management.
+    external_id: true
+  - id: Return
+    label: Return
+    description: A request to send goods back, and the refund decision on it.
+    help: The unit a policy clause is applied to. Whether a fee was charged, waived or refunded in full is recorded on the edges around it.
+    external_id: true
+  - id: Product
+    label: Product
+    description: A sellable item or SKU.
+  - id: Merchant
+    label: Merchant
+    description: A seller or supplier trading through AnyCorp.
+    help: Third-party sellers and drop-ship suppliers are both Merchants. The role is on the edge, not the node.
+  - id: Associate
+    label: Associate
+    description: An employee who handles or authorises a return.
+    help: Store associates, returns-desk staff and managers. Named because "who approved this" is a conduct question, and an approval with no author cannot be reviewed.
+  - id: Document
+    label: Document
+    description: A policy manual, bulletin, investigation memo, approval letter or product manual.
+    help: Documents are immutable in S3. What you see here is derived metadata plus extracted assertions.
+    # `document:doc-<hex>` -- assigned at ingest and used as a join key into S3 and the
+    # vector index.
+    external_id: true
+  - id: PolicyClause
+    label: Policy clause
+    description: A single provision of a return, refund or fraud-prevention policy.
+    help: "The thing a refund decision actually rests on: a window, a restocking-fee rate, a red-flag threshold. Kept separate from the manual that contains it because a bulletin supersedes one clause and leaves the rest of the manual in force."
+    label_plural: Policy clauses
+  - id: PaymentTransaction
+    label: Payment transaction
+    description: An authorisation, settlement or chargeback on an order.
+    help: Present so a chargeback recorded in the payments data has something in the graph to attach to. The amounts stay in the warehouse and are read by a governed metric.
+    external_id: true
+
+  # Structural, not commercial. Declared here because the vocabulary is closed and a
+  # scanner is held to it exactly as an extractor is. `layer: catalog` is what lets the
+  # graph be read one half at a time, without the UI hardcoding id prefixes.
+  - id: Source
+    label: Source
+    description: A system of record that was catalogued, such as an AWS Glue database.
+    help: Not a commercial entity. It is here so a schema declaration has something to hang off, and so the graph can be read as facts or as schema rather than as one tangle.
+    layer: catalog
+    external_id: true
+  - id: Table
+    label: Table
+    description: A table in a catalogued source.
+    help: Schema only. No rows enter the graph -- they stay in the lake and are queried in place when a question needs them.
+    layer: catalog
+    external_id: true
+  - id: Column
+    label: Column
+    description: A column in a catalogued table.
+    help: Its name, type and description are citable as facts declared by a system of record, which is what lets a governed metric compile against a real schema.
+    layer: catalog
+    external_id: true
+
+# ── Closed vocabulary. Write-time validation. No LLM may invent these. ────────
+governing_predicates:
+  - id: PLACED_ORDER
+    label: placed order
+    domain: [Customer]
+    range: [Order]
+    description: This customer placed this order.
+  - id: RETURN_OF
+    label: return of
+    domain: [Return]
+    range: [Order]
+    description: This return is against this order.
+    help: Kept closed so `return_for` and `refund_on` can never fragment it. A return-rate question that misses a synonym reads as a clean customer.
+  - id: RETURNED_ITEM
+    label: returned item
+    domain: [Return]
+    range: [Product]
+    description: The item sent back on this return.
+  - id: APPROVED_RETURN
+    label: approved return
+    domain: [Associate]
+    range: [Return]
+    description: This employee authorised the refund.
+    help: Governing because an approval is a conduct fact with money attached. Half of every abuse review is "who signed this off".
+  - id: APPROVES_EXCEPTION_FOR
+    label: approves exception for
+    domain: [Document]
+    range: [Customer]
+    description: This document grants a departure from policy in this customer's favour.
+    help: "Recorded from the document rather than from the approver, because \"this letter is the authority for the exception\" is the claim a review needs, and the signature is a separate fact (AUTHORISED_BY). Never model-extracted without review."
+  - id: AUTHORISED_BY
+    label: authorised by
+    domain: [Document]
+    range: [Associate]
+    description: The employee who signed this document.
+  - id: WAIVED_FEE_ON
+    label: waived fee on
+    domain: [Document]
+    range: [Return]
+    description: This document waived a restocking or handling fee that the policy would otherwise charge.
+    help: The money fact. Separate from APPROVES_EXCEPTION_FOR because a courtesy refund and a waived fee are different departures and a desk often makes only one of them.
+  - id: RELIES_ON
+    label: relies on
+    domain: [Document]
+    range: [PolicyClause]
+    description: This document rests on this policy provision.
+    help: "Asserts the decision was taken under this clause. A quote check can only confirm the clause reference *appears* on the page, never that it was relied on rather than mentioned in passing -- so this always needs review."
+  - id: SUPERSEDES
+    label: supersedes
+    # Either end may be a bulletin as a whole or a single clause within one. A bulletin
+    # that replaces one paragraph is a clause-level supersession; a reissued manual is a
+    # document-level one, and both are the same fact to a reader.
+    domain: [Document, PolicyClause]
+    range: [Document, PolicyClause]
+    description: Replaces the earlier policy provision.
+    help: Governing because acting under a withdrawn clause is a substantive error, not a style one.
+    # Policy revision carries through a chain: a 2026 bulletin replaces a 2025 amendment
+    # that replaced the 2024 clause, and a decision taken under the 2024 wording is no
+    # less stale for having been superseded twice. Bounded, so a rule follows a revision
+    # history rather than assuming it reaches everywhere.
+    transitive: true
+  - id: CONTAINS_CLAUSE
+    label: contains clause
+    domain: [Document]
+    range: [PolicyClause]
+    description: This document includes the provision.
+  - id: GOVERNED_BY
+    label: governed by
+    domain: [Return, Order, Case]
+    range: [PolicyClause]
+    description: Subject to this policy provision.
+  - id: INVESTIGATES
+    label: investigates
+    domain: [Case]
+    range: [Customer]
+    description: This case is examining this customer's returns.
+    help: "One half of the exception-during-investigation finding. Recorded from the case rather than between two people, because \"we have an open file on them\" is the claim a review needs."
+  - id: RELATES_TO_CASE
+    label: relates to case
+    domain: [Document, Customer, Return, Order, Merchant]
+    range: [Case]
+    description: Belongs to this case.
+  - id: CONTROLS
+    label: controls
+    domain: [Customer, Merchant]
+    range: [Merchant]
+    description: Holds or directs this merchant.
+    help: The fact in the middle of a return-resale ring. Without it, "a customer we are investigating owns a storefront we pay out to" is two unrelated records and no rule can join them.
+    # Control carries through a chain of holding companies, and a structure deep enough
+    # to hide a related party is often one built to. Bounded, so a rule follows an
+    # ownership ladder rather than assuming it reaches everywhere.
+    transitive: true
+  - id: RELATED_PARTY_OF
+    label: related party of
+    # Symmetric, so the declared kinds on the two ends must match exactly: the pair is
+    # byte-sorted before storage, which makes the ends interchangeable, and unequal
+    # kinds would let canonicalisation mint an orientation the pack never intended.
+    domain: [Customer, Merchant]
+    range: [Customer, Merchant]
+    description: The two are connected other than at arm's length -- household, shared address, or common control.
+    help: Weaker than CONTROLS and deliberately undirected. "They live at the same address" says nothing about who directs whom.
+    symmetric: true
+  - id: SELLS
+    label: sells
+    domain: [Merchant]
+    range: [Product]
+    description: This merchant supplies this item.
+  - id: CHARGEBACK_ON
+    label: chargeback on
+    domain: [PaymentTransaction]
+    range: [Order]
+    description: A card issuer reversed the payment on this order.
+    help: Governing because a chargeback is a consequential fact a returns review reads, and because it is the point where the payments data and the returns data have to agree.
+  # ── Conclusions. Only a rule writes these; no extractor may propose one. ────
+  #
+  # Governing, not descriptive, by the same test as everything else here: would a wrong
+  # answer embarrass you or expose you? A refund granted to a customer already under
+  # investigation is the second. Declaring them also means a rule whose `then` names an
+  # undeclared predicate fails at pack load, so a typo in a rule cannot mint a predicate
+  # that nothing queries.
+  #
+  # `blocks:` marks the ones that FORBID an answer rather than informing one, and names
+  # which end of the edge is tainted. It is a separate axis from `governing`: every block
+  # is governing, but most governing predicates are ordinary facts.
+  - id: RELIES_ON_SUPERSEDED_POLICY
+    label: relies on superseded policy
+    domain: [Document]
+    range: [PolicyClause]
+    description: This document rests on a policy clause that has since been replaced.
+    help: Inferred from a reliance on one page plus a supersession recorded on another. The decision was very likely right when it was taken, which is exactly why this is worth surfacing rather than treating as an error.
+    # The document only. The clause is still the real historic wording and withholding it
+    # would suppress "the 15% fee clause was withdrawn in March" -- the single fact the
+    # reader most needs to be told.
+    blocks: subject
+    # Told, not withheld. This is a quality finding, not a conduct one: nobody is harmed
+    # by seeing their own approval letter, and suppressing it hides the very decision that
+    # needs revisiting. A reader shown the letter and told its clause was withdrawn can
+    # act; a reader shown nothing cannot.
+    effect: notify
+  - id: EXCEPTION_AGAINST_OPEN_CASE
+    label: exception granted during an open investigation
+    domain: [Document]
+    range: [Customer]
+    description: A departure from policy was granted in favour of a customer with an open abuse investigation.
+    help: Inferred, never extracted. It carries the premises that produced it, so the answer to "why do you believe this" is the two documents it rests on -- the approval letter and the investigation memo, neither of which contains the finding on its own. Read as a question for a manager, not a verdict.
+    # The approval document, not the customer. Blacking out the customer would make their
+    # own file unanswerable -- "how many returns has Sam Parker had" would come back with
+    # nothing -- which withholds the evidence a manager needs in order to rule on the very
+    # thing being flagged.
+    blocks: subject
+    # Told, not withheld. Whether the exception was defensible is a manager's judgement,
+    # and they cannot make it from evidence they were never shown. The finding still
+    # appears in the trace, still names its premises, and still sorts first.
+    effect: notify
+  - id: RELATED_PARTY_RESALE
+    label: possible related-party resale
+    domain: [Case]
+    range: [Merchant]
+    description: A customer under investigation controls a merchant AnyCorp trades with.
+    help: Inferred from an investigation on one page plus an ownership chain on another. The pattern it looks for is goods returned as faulty and relisted through a storefront the same person controls. Control is followed up to three links, so an intermediate holding company does not hide it.
+    # The merchant, not the case. The case is the file the returns team is running and
+    # withholding it would withhold the work; the merchant is the counterparty a payout
+    # decision is about, which is the end this finding is a warning on.
+    blocks: object
+    # Told, not withheld. A suspended payout is a commercial decision for a person to
+    # take, and a merchant relationship suppressed from every answer is one nobody can
+    # investigate or clear.
+    effect: notify
+
+# ── Open, with exact-name grounding. No LLM adjudication. ─────────────────────
+descriptive_predicates:
+  - id: IN_CATEGORY
+    label: in category
+    description: Merchandise classification.
+  - id: HAS_LOYALTY_TIER
+    label: has loyalty tier
+    description: Membership tier as stated in a document.
+    help: The tier the warehouse holds is the system of record. This records what a page claimed, which is how "the letter called them Platinum and the account says Silver" becomes visible.
+  - id: HAS_RETURN_REASON
+    label: has return reason
+    description: The reason given for a return.
+  - id: HAS_RISK_RATING
+    label: has risk rating
+    description: Risk classification as stated in a document.
+  - id: CONCERNS_TOPIC
+    label: concerns topic
+    description: Subject-matter tag.
+  - id: MENTIONS
+    label: mentions
+    description: Named in the text without a stronger relationship being established.
+    help: The safe default when an extractor sees two entities together but cannot justify a governing predicate. The only predicate a quote check alone can support.
+  # Catalog enrichment. Descriptive, so approval lands these on the trust floor rather
+  # than in the answerable band: a description helps a model read a schema and must never
+  # outrank a fact with consequence. Deliberately no domain/range -- declaring either
+  # turns on endpoint validation, and no pack declares a Description entity kind, so
+  # every enrichment write would then be rejected.
+  - id: DESCRIBED_AS
+    label: described as
+    description: Plain-language description of a table or column, written by a person or proposed by a model.
+    help: A model's description waits for review like any other reading. Only an approved one reaches the query planner.
+  - id: HAS_SYNONYM
+    label: has synonym
+    description: Another name people use for this table, so a question using their word still finds it.
+
+# Rules materialise INFERRED edges. Each carries premises, so any conclusion unwinds
+# into a proof tree. Every rule here needs at least two documents to fire -- that is the
+# design, not an accident. A finding a single page contains is an extraction, and the
+# extractor should have made it.
+rules:
+  - id: exception_on_superseded_policy
+    version: v1
+    description: Flag an approval taken under a policy clause that a later bulletin replaced.
+    help: The returns desk waived a 15% restocking fee under the electronics clause, and a bulletin issued the month before had withdrawn that clause. Each document is unremarkable alone. Fires only on facts a person signed off, or a system of record declared.
+    when:
+      - "(d:Document)-[:RELIES_ON]->(c:PolicyClause)"
+      # The subject is deliberately untyped. A bulletin may carry the supersession as a
+      # whole ("this bulletin replaces section 3.1") or through one of its own clauses,
+      # and both are the same fact to a reader. Typing it would silently miss whichever
+      # shape the extractor did not choose.
+      - "(x)-[:SUPERSEDES]->(c:PolicyClause)"
+    then: "(d)-[:RELIES_ON_SUPERSEDED_POLICY]->(c)"
+    min_premise_class: EXTRACTED_MODEL
+  - id: exception_during_investigation
+    version: v1
+    description: Flag a policy exception granted to a customer who has an open abuse case.
+    help: The finding nobody sees, because no single document contains it. The desk grants a goodwill refund on a Tuesday; loss prevention opens a file on the same customer on the Thursday. Each fact is routine. Joining them is the point of a graph.
+    when:
+      - "(ca:Case)-[:INVESTIGATES]->(cu:Customer)"
+      - "(d:Document)-[:APPROVES_EXCEPTION_FOR]->(cu:Customer)"
+    then: "(d)-[:EXCEPTION_AGAINST_OPEN_CASE]->(cu)"
+    min_premise_class: EXTRACTED_MODEL
+  - id: related_party_resale
+    version: v1
+    description: Flag a merchant controlled by a customer who is under investigation for return abuse.
+    help: The return-resale ring. Goods go back as faulty and reappear on a storefront the same person owns, usually through a holding company so that no single record shows both ends. Control is walked as a chain of up to three links for exactly that reason.
+    when:
+      - "(ca:Case)-[:INVESTIGATES]->(cu:Customer)"
+      # Written as a path, not a plain edge. `CONTROLS` is transitive, but that
+      # declaration is inert unless a rule asks to walk it -- and a one-hop premise
+      # silently misses the interposed holding company this rule exists to catch.
+      - "(cu:Customer)-[:CONTROLS*1..3]->(mm:Merchant)"
+    then: "(ca)-[:RELATED_PARTY_RESALE]->(mm)"
+    min_premise_class: EXTRACTED_MODEL
