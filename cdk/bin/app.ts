@@ -84,17 +84,23 @@ const appStack = new AppStack(app, `${prefix}App`, {
   description: 'Groundwork — FastAPI on Fargate behind an ALB',
 });
 
-new McpStack(app, `${prefix}Mcp`, {
-  env,
-  vpc: network.vpc,
-  appSg: network.appSg,
-  image: appStack.image,
-  taskRole: appStack.taskRole,
-  containerEnvironment: appStack.containerEnvironment,
-  userPoolClientId: auth.userPoolClient.userPoolClientId,
-  issuerUrl: auth.issuerUrl,
-  description: 'Groundwork — MCP server on Bedrock AgentCore Runtime',
-});
+// Opt-in, because it is the only reason the image has to be ARM64 (see
+// GroundworkConfig.agentCoreMcp). Not deploying it leaves the MCP tools running as a
+// sidecar for the Retrieval agent; what is lost is the authenticated endpoint an
+// outside MCP client would connect to.
+if (config.agentCoreMcp) {
+  new McpStack(app, `${prefix}Mcp`, {
+    env,
+    vpc: network.vpc,
+    appSg: network.appSg,
+    image: appStack.image,
+    taskRole: appStack.taskRole,
+    containerEnvironment: appStack.containerEnvironment,
+    userPoolClientId: auth.userPoolClient.userPoolClientId,
+    issuerUrl: auth.issuerUrl,
+    description: 'Groundwork — MCP server on Bedrock AgentCore Runtime',
+  });
+}
 
 new WebStack(app, `${prefix}Web`, {
   env,

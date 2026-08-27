@@ -67,6 +67,17 @@ export interface GroundworkConfig {
    * has to be resolved per account before the first deploy.
    */
   readonly availabilityZones?: string[];
+  /**
+   * Deploy the AgentCore MCP runtime, and with it build the image for ARM64.
+   *
+   * One flag for both because AgentCore Runtime accepts ARM64 only, and it runs `app`'s
+   * image verbatim. So there is no configuration where the runtime exists and the image
+   * is x86_64. Off by default: on an x86_64 build host the ARM64 build needs QEMU, which
+   * turns `pip install` into a multi-minute emulated one, and the MCP tools are still
+   * served in-process to the Retrieval agent either way (see MCP_PORT). Turning this on
+   * costs a cross-build; leaving it off costs only the third-party MCP endpoint.
+   */
+  readonly agentCoreMcp: boolean;
 }
 
 export function readConfig(scope: Construct): GroundworkConfig {
@@ -98,6 +109,7 @@ export function readConfig(scope: Construct): GroundworkConfig {
     defaultOntology: ctx('defaultOntology', 'fintech'),
     homeTenant: ctx('homeTenant', 'demo-firm'),
     availabilityZones: azs,
+    agentCoreMcp: ctx('agentCoreMcp', false),
   };
 }
 
@@ -133,9 +145,9 @@ export const APP_PORT = 8000;
 /**
  * Where the MCP sidecar listens, on the task's loopback only.
  *
- * Not published by the load balancer: the tools are reachable to third parties through the
- * AgentCore runtime `McpStack` deploys, which verifies a Cognito token first. This port exists
- * so the Retrieval agent in the API container can call the tools without sharing its event loop.
+ * Not published by the load balancer. This port is what the Retrieval agent in the API
+ * container calls, so the tools work whether or not `agentCoreMcp` is set; that flag adds
+ * the *third-party* entry point, an AgentCore runtime that verifies a Cognito token first.
  */
 export const MCP_PORT = 8001;
 

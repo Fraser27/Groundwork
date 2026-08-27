@@ -53,8 +53,10 @@ every control, with a test asserting no jargon leaks into it.
 
 ### CDK (agent-built)
 `cdk/lib/{network,data,auth,app,mcp,web}-stack.ts` + `bin/app.ts`, `lib/config.ts`,
-`cdk/README.md`. `npx cdk synth` produces all six templates with zero warnings.
-`docker build --platform linux/arm64` verified on the app image.
+`cdk/README.md`. `npx cdk synth` produces every template with zero warnings. The app
+image builds on both platforms; `agentCoreMcp` selects which, since AgentCore Runtime
+takes ARM64 only and `mcp` reuses `app`'s image. Off by default, so the default build is
+native on x86_64.
 
 ### Scaffolding (agent-built)
 `docker-compose.yml` (local Neo4j standing in for Neptune — both speak openCypher over

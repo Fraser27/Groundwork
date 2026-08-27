@@ -16,8 +16,20 @@ leaving the S3 CORS rule unset and browser uploads failing.
 | `GroundworkData` | Neptune, OpenSearch Serverless, DynamoDB, S3 | rarely |
 | `GroundworkAuth` | Cognito user pool + hosted UI, Cedar policy store | rarely |
 | `GroundworkApp` | ECS Fargate (FastAPI) behind an ALB | constantly |
-| `GroundworkMcp` | MCP server on Bedrock AgentCore Runtime | often |
+| `GroundworkMcp` | MCP server on Bedrock AgentCore Runtime | often, and only if `agentCoreMcp` |
 | `GroundworkWeb` | CloudFront + S3 for the React UI | often |
+
+`GroundworkMcp` is opt-in via the `agentCoreMcp` context flag, off by default, because
+AgentCore Runtime accepts ARM64 images only and it runs `app`'s image verbatim. With the
+flag off the image and the Fargate task are built for the build host's architecture, so
+an x86_64 machine needs no QEMU; with it on, a cross-build is registered by `deploy.sh`.
+Either way the MCP tools run as a sidecar on the API task, which is what the Retrieval
+agent calls. What the flag buys is the authenticated endpoint an *outside* MCP client
+connects to.
+
+Turning the flag off does not remove an already-deployed `GroundworkMcp`: CDK stops
+managing the stack rather than deleting it, so the runtime keeps running against a stale
+ARM64 image. Run `npx cdk destroy GroundworkMcp` before flipping it off.
 
 The split is by **deploy cadence and blast radius**, not by feature. `data` is separate
 because Neptune takes about 15 minutes to create and holds the only state that cannot be
@@ -27,7 +39,7 @@ there must not take a CloudFormation lock on the graph.
 ## Everyday commands
 
 ```bash
-npx cdk synth --quiet    # all six stacks, no AWS calls
+npx cdk synth --quiet    # every stack, no AWS calls
 npx cdk diff             # what a deploy would change
 npx cdk deploy --all     # 25-30 min from cold, most of it Neptune
 ```
@@ -41,7 +53,8 @@ npx cdk deploy --all     # 25-30 min from cold, most of it Neptune
 **AgentCore Runtime** supports for VPC connectivity and those the **OpenSearch
 Serverless** data-plane endpoint is offered in. The intersection is smaller than either
 list, and a subnet in the wrong zone fails `GroundworkMcp` with an error naming the
-*subnet* rather than the zone.
+*subnet* rather than the zone. Kept as the intersection even with `agentCoreMcp` off, so
+that turning the flag on later does not need the VPC rebuilt.
 
 `deploy.sh` resolves this per account. Add a region to that map before deploying
 somewhere new: those are zone **IDs**, and AZ *names* are shuffled per account, so

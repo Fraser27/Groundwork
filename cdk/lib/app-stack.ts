@@ -78,12 +78,15 @@ export class AppStack extends cdk.Stack {
 
     const { config, vpc, appSg, albSg } = props;
 
+    // Fargate runs either, so the architecture is decided entirely by whether the
+    // AgentCore runtime is in play: it accepts ARM64 only and runs this same image.
+    // One variable for the image and the task because a mismatch between them is not
+    // a synth error -- the task starts and dies with "exec format error".
+    const arm = config.agentCoreMcp;
+
     this.image = new ecrAssets.DockerImageAsset(this, 'AppImage', {
       directory: path.join(__dirname, '../..'),
-      // ARM64 because AgentCore Runtime accepts nothing else, and the MCP stack
-      // runs this same image. Fargate is happy either way, so matching costs us
-      // nothing and removes a second build.
-      platform: ecrAssets.Platform.LINUX_ARM64,
+      platform: arm ? ecrAssets.Platform.LINUX_ARM64 : ecrAssets.Platform.LINUX_AMD64,
       // This list is NOT redundant with .dockerignore — the two run at different
       // stages. CDK first *copies* the context into cdk.out using these patterns,
       // then Docker builds in that copy and applies .dockerignore. So .dockerignore
@@ -115,7 +118,7 @@ export class AppStack extends cdk.Stack {
       memoryLimitMiB: config.appMemoryMiB,
       taskRole: this.taskRole,
       runtimePlatform: {
-        cpuArchitecture: ecs.CpuArchitecture.ARM64,
+        cpuArchitecture: arm ? ecs.CpuArchitecture.ARM64 : ecs.CpuArchitecture.X86_64,
         operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
       },
     });

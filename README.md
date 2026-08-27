@@ -269,7 +269,11 @@ everything that was previously three manual steps:
   AgentCore Runtime supports only a subset, and a subnet in the wrong one fails
   `GroundworkMcp` with an error that names the *subnet* rather than the zone. The script
   maps the supported zone IDs to your account's names and writes them to `cdk.json`.
-- **Bootstraps and deploys** all six stacks.
+- **Bootstraps and deploys** every stack. Five by default; `GroundworkMcp` is the sixth
+  and is opt-in, because Bedrock AgentCore Runtime accepts ARM64 images only, so enabling
+  it means cross-building on an x86_64 host. Set `agentCoreMcp` in `cdk.json` to turn it
+  on. The MCP tools themselves run on the API task either way; the stack adds the
+  authenticated endpoint an outside MCP client would use.
 - **Closes the circular callback requirement.** The Cognito hosted UI needs the
   CloudFront domain as a callback URL, and CloudFront does not exist until the first
   deploy. The script reads the URL from the stack output, sets `webOrigin`, and

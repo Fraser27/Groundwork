@@ -176,9 +176,19 @@ def _environment(
     task_def_arn = _find(
         app_resources, "AWS::ECS::TaskDefinition", "TaskDef", "API task definition"
     )
-    container = ecs.describe_task_definition(taskDefinition=task_def_arn)["taskDefinition"][
-        "containerDefinitions"
-    ][0]
+    task_def = ecs.describe_task_definition(taskDefinition=task_def_arn)["taskDefinition"]
+
+    # The image this script deploys is the one the task runs, so the task's architecture is
+    # the image's. AgentCore Runtime takes ARM64 only, and it reports a mismatch as a
+    # CREATE_FAILED minutes later rather than rejecting the call, so it is checked here.
+    arch = task_def.get("runtimePlatform", {}).get("cpuArchitecture", "X86_64")
+    if arch != "ARM64":
+        raise DeployError(
+            f"{APP_STACK} was built for {arch}, and AgentCore Runtime accepts ARM64 only. "
+            "Set agentCoreMcp to true in cdk/cdk.json and redeploy GroundworkApp first."
+        )
+
+    container = task_def["containerDefinitions"][0]
 
     env = {e["name"]: e["value"] for e in container.get("environment", [])}
     env.pop("AUTH_DEV_BYPASS_TENANT", None)

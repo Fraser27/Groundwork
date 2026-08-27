@@ -26,6 +26,8 @@
 
     "defaultOntology": "fintech",
 
+    "agentCoreMcp": false,
+
     "aws-cdk:enableDiffNoFail": true,
     "@aws-cdk/aws-iam:minimizePolicies": true,
     "@aws-cdk/core:checkSecretUsage": true,

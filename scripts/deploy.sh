@@ -14,7 +14,6 @@
 # before the first 25-minute deploy rather than discovered inside it.
 
 set -euo pipefail
-
 REGION="${1:-${REGION:-us-east-1}}"
 HOME_TENANT="${HOME_TENANT:-demo-firm}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,11 +43,21 @@ for tool in aws node npm docker python3; do
 done
 
 node_major="$(node --version | sed 's/^v\([0-9]*\).*/\1/')"
-[ "$node_major" -ge 20 ] || die "Node 20+ required, found $(node --version)"
+[ "$node_major" -ge 18 ] || die "Node 18+ required, found $(node --version)"
 
 # `docker ps` rather than `docker --version`: the daemon has to be running, because the app image
 # and the UI bundle are both built in containers.
 docker ps >/dev/null 2>&1 || die "Docker is installed but not running"
+
+# The app image is built for this host's architecture, so no QEMU. The exception is
+# `agentCoreMcp`: AgentCore Runtime is ARM64-only, so on an x86_64 host that flag needs
+# emulation registered first, and the build gets much slower.
+if [ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["context"].get("agentCoreMcp",False))' "$CDK_JSON")" = "True" ] \
+   && [ "$(uname -m)" != "aarch64" ] && [ "$(uname -m)" != "arm64" ]; then
+  say "Registering ARM64 emulation (agentCoreMcp is on and this host is $(uname -m))"
+  docker run --privileged --rm tonistiigi/binfmt --install arm64 \
+    || die "could not register ARM64 emulation. Needs a privileged container."
+fi
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)" \
   || die "No usable AWS credentials. Run 'aws configure' or export a profile."
