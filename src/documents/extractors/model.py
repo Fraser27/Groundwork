@@ -46,7 +46,7 @@ from src.graph.assertions import (
     ReviewPolicy,
     build_assertion,
 )
-from src.ontology.loader import Ontology
+from src.ontology.loader import EntityDef, Ontology, PredicateDef
 
 logger = logging.getLogger(__name__)
 
@@ -74,39 +74,50 @@ VERIFIED_PRESENCE_CONFIDENCE = 0.95
 QUOTE_CHECK = "verify:quote@v1"
 
 SYSTEM_PROMPT = """\
-You read legal documents for a system where every claim must be defensible to a \
-regulator.
+You read documents for a system where every claim must be defensible to a regulator.
 
 Return two kinds of claim about the passage, and keep them separate, because they are \
 checked differently:
 
-1. `entities` — something named in the passage: a party, a court, an authority, a date, \
-a docket number. This is a claim about PRESENCE ONLY. It is verified by searching the \
-passage for your quote, so the quote must be copied exactly.
+1. `entities` — something named in the passage: a person, an organisation, a reference \
+number, a date, a provision. This is a claim about PRESENCE ONLY. It is verified by \
+searching the passage for your quote, so the quote must be copied exactly.
 
-2. `relationships` — something the passage supports that no search could confirm: that \
-one holding undercuts another, that a clause supersedes an earlier one, that a party is \
-positioned against another. These go to a human reviewer.
+2. `relationships` — something the passage supports that no search could confirm: that one \
+provision replaces an earlier one, that a decision was taken under a clause rather than \
+merely citing it, that one organisation directs another. These go to a human reviewer.
 
 Rules:
-- Use ONLY predicates from the allowed list. An unknown predicate is discarded.
+- Use ONLY predicates from `allowed_predicates`. An unknown predicate is discarded.
+- Read the `meaning` on every predicate and entity kind before choosing one, and choose on \
+what it says rather than on which name reads closest. Terms that look interchangeable are the \
+ones whose `meaning` explains why they are not, and the difference is usually which of them a \
+reviewer can act on.
 - `quote` MUST be copied verbatim from the passage. A paraphrase is discarded, because a \
 citation nobody can search for cannot be checked.
 - Use the shortest quote that carries the claim.
-- `id` is a lowercase slug prefixed by kind: `party:acme-corporation`, \
-`authority:410-us-113`, `court:united-states-district-court-southern-district-of-new-york`.
+- `id` is `<kind>:<slug>`, the kind lowercased and the slug a lowercase hyphenated form of the \
+words the passage itself uses for the thing. Two documents that name one thing the same way \
+must produce the same id, or they hold it as two nodes and nothing joins them.
 - The prefix MUST be one of `entity_kinds`, and `kind` must match it. Do not invent a kind, \
 however well it fits: an unlisted one is discarded, so the entity is lost rather than \
 approximated. Use the closest listed kind, or omit the claim if none fits.
 - A predicate in `allowed_predicates` may carry `subject_kinds` and `object_kinds`. Those are \
 enforced: `subject_id` must be of a listed subject kind and `object_id` of a listed object kind, \
-or the claim is REJECTED. They are not interchangeable. `ADVERSE_TO` is `Matter -> Party`, so \
-write `{"subject_id": "<this_matter>", "predicate": "ADVERSE_TO", "object_id": "party:..."}` — \
-"our engagement is against them", never one party against another.
-- `this_matter` is the matter this document belongs to, and is available as a subject id. Use it \
-for any claim about the engagement rather than about the paper. It may be null, in which case \
-omit claims that would need it.
+or the claim is REJECTED. The two ends are not interchangeable. A predicate declaring \
+`subject_kinds: ["A"]` and `object_kinds: ["B"]` is written \
+`{"subject_id": "a:...", "object_id": "b:..."}` and never the reverse.
+- Write the direction the predicate's `meaning` describes, not the direction the sentence \
+happens to use. "A is owned by B" and "B owns A" are one fact, and both are written with B as \
+the subject of an ownership predicate. Do not also emit the inverse: two opposite claims about \
+one relationship contradict each other, and both will be believed.
+- `this_matter` is the case or engagement this document belongs to, and is available as a \
+subject id. Use it for any claim about that rather than about the paper. It may be null, in \
+which case omit claims that would need it.
 - Do not guess. If the passage does not clearly support a claim, omit it.
+- Within that limit, state every relationship the passage does support, including ones that \
+read as routine. A finding is often two ordinary facts from two documents, so a fact omitted \
+for being unremarkable is the half that was missing.
 - Return ONLY a JSON object, no prose.
 
 Schema:
@@ -140,52 +151,74 @@ class ProposedClaim:
     reasoning: str = ""
 
 
+def _meaning(defn: PredicateDef | EntityDef) -> str:
+    """A term's `description` and `help` as one string.
+
+    Joined rather than sent as two fields: the pack splits them by who is reading, and a model
+    offered a one-line gloss beside a longer note will act on the gloss. For the terms that
+    actually get confused, the distinction only exists in the `help`.
+    """
+    return " ".join(part for part in (defn.description, defn.help) if part)
+
+
 def build_prompt(
     chunk: Chunk,
     *,
-    allowed_predicates: Sequence[str],
-    entity_kinds: Sequence[str],
-    predicate_shapes: Mapping[str, tuple[Sequence[str], Sequence[str]]] | None = None,
+    predicates: Mapping[str, PredicateDef],
+    entities: Mapping[str, EntityDef],
     unit_slug: str = "matter",
 ) -> str:
-    """The user turn: one passage, the closed vocabulary, and nothing else.
+    """The user turn: one passage, the closed vocabulary with what each term means, nothing else.
 
     No list of known courts or reporters. That was the allowlist failure — anything not
     enumerated was absent from the graph with no error anywhere.
 
-    `predicate_shapes` carries each predicate's declared subject and object kinds, because the
-    vocabulary being closed is only half of what a write must satisfy: `ADVERSE_TO` is Matter ->
-    Party, and a party-to-party claim is refused. Sending the names without the shapes asked the
-    model to guess an orientation and then rejected it silently.
+    The vocabulary goes out with its `description` and `help`, not only its names, and that is
+    the difference between a closed vocabulary and a usable one. Measured on the retail pack:
+    `Company` and `Merchant` arrived as two bare words, so a non-trading holding company was
+    typed as a seller and a rule whose chain must end at a Merchant found nothing — while
+    `Company.help` says in as many words that calling it a Merchant asserts with a citation
+    that it trades here, which the page denies. `APPROVES_EXCEPTION_FOR` was read as
+    `AUTHORISED_BY` for the same reason, and its `help` distinguishes the two explicitly. The
+    answers were written down in the pack and never sent.
 
-    `this_matter` offers the chunk's own matter as a subject. Without it the model has no id for
-    "the engagement this document belongs to" and no way to state the fact a conflict check reads.
-    It is sent as an *entity id*, because a bare filing reference is not one: the model echoed
-    `NTL` back as an `ADVERSE_TO` subject and `validate` dropped the claim for an unknown entity
-    kind, which starved the conflict rule while the document looked like it had nothing to say.
+    Each predicate's declared subject and object kinds ride along too, because the vocabulary
+    being closed is only half of what a write must satisfy: a predicate declared Matter -> Party
+    refuses a party-to-party claim. Sending names without shapes asked the model to guess an
+    orientation and then rejected the guess silently.
+
+    `this_matter` offers the chunk's own organising unit as a subject. Without it the model has no
+    id for "the engagement this document belongs to" and no way to state the fact a conflict check
+    reads. It is sent as an *entity id*, because a bare filing reference is not one: the model
+    echoed `NTL` back as an `ADVERSE_TO` subject and `validate` dropped the claim for an unknown
+    entity kind, which starved the conflict rule while the document looked like it had nothing
+    to say.
     """
-    shapes = predicate_shapes or {}
     return json.dumps(
         {
             "page": chunk.page,
             "passage": chunk.text,
-            # One list, not a names list plus a shapes list: two renderings of the closed
-            # vocabulary in one prompt is two places for it to disagree.
+            # One list per vocabulary, carrying everything about a term. Names here and meanings
+            # or shapes alongside would be two renderings of one closed set, which is two places
+            # for it to disagree.
             "allowed_predicates": [
                 {
                     "predicate": p,
+                    "meaning": _meaning(pdef),
                     **(
                         {
-                            "subject_kinds": list(shapes[p][0]),
-                            "object_kinds": list(shapes[p][1]),
+                            "subject_kinds": list(pdef.domain),
+                            "object_kinds": list(pdef.range),
                         }
-                        if p in shapes
+                        if pdef.domain
                         else {}
                     ),
                 }
-                for p in allowed_predicates
+                for p, pdef in sorted(predicates.items())
             ],
-            "entity_kinds": list(entity_kinds),
+            "entity_kinds": [
+                {"kind": k, "meaning": _meaning(edef)} for k, edef in sorted(entities.items())
+            ],
             "this_matter": f"{unit_slug}:{chunk.matter_id}" if chunk.matter_id else None,
         },
         indent=2,
@@ -364,13 +397,12 @@ class ModelExtractor:
             # propose `POTENTIAL_CONFLICT` as though it had read one off a page. A conflict is
             # derived from two signed-off facts and carries them as premises; one a model
             # asserted directly would look identical and defend nothing.
-            allowed_predicates=sorted(self.ontology.extractable_predicates),
-            entity_kinds=sorted(self.ontology.entities),
-            predicate_shapes={
-                p: (pdef.domain, pdef.range)
+            predicates={
+                p: pdef
                 for p in self.ontology.extractable_predicates
-                if (pdef := self.ontology.predicates.get(p)) is not None and pdef.domain
+                if (pdef := self.ontology.predicates.get(p)) is not None
             },
+            entities=self.ontology.entities,
             unit_slug=(
                 unit.slug if (unit := self.ontology.organising_unit) is not None else "matter"
             ),
