@@ -612,85 +612,87 @@ export default function Access() {
                     </div>
                   )}
 
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>{unit.singular}</th>
-                        <th>
-                          Can they read it?
-                          <FieldHelp text={HELP.accessDecision} />
-                        </th>
-                        <th>Role on the {unit.lower}</th>
-                        <th>Why</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {userAccess.decisions.map((d) => (
-                        <tr key={d.matter_id} className={rowClass(d.decision)}>
-                          <td>
-                            <strong>{d.matter_name ?? d.matter_id}</strong>
-                            <div className="dim" style={{ fontSize: 11.5 }}>
-                              <code>{d.matter_id}</code>
-                            </div>
-                          </td>
-                          <td>
-                            <DecisionBadge decision={d.decision} />
-                          </td>
-                          <td className="dim">{d.role ?? '-'}</td>
-                          <td>
-                            <div className="access-reason">
-                              {d.decision === 'SCREENED' ? (
-                                <>
-                                  {d.reason}
-                                  <span className="access-reason-contact">
-                                    {d.contact
-                                      ? `They are told to contact ${d.contact}.`
-                                      : 'They are told to ask their risk team.'}
-                                  </span>
-                                </>
-                              ) : (
-                                fillUnit(ACCESS_DECISIONS[d.decision].meaning, unit)
-                              )}
-                            </div>
-                          </td>
-                          <td className="nowrap" style={{ textAlign: 'right' }}>
-                            {d.decision === 'SCREENED' ? (
-                              <button
-                                className="btn btn-ghost btn-sm"
-                                onClick={() =>
-                                  setPending({
-                                    kind: 'lift',
-                                    userId: userAccess.user_id,
-                                    userLabel: userAccess.display_name ?? userAccess.user_id,
-                                    matterId: d.matter_id,
-                                    matterLabel: d.matter_name ?? d.matter_id,
-                                  })
-                                }
-                              >
-                                Lift screen
-                              </button>
-                            ) : (
-                              <button
-                                className="btn btn-danger btn-sm"
-                                onClick={() =>
-                                  setPending({
-                                    kind: 'screen',
-                                    userId: userAccess.user_id,
-                                    userLabel: userAccess.display_name ?? userAccess.user_id,
-                                    matterId: d.matter_id,
-                                    matterLabel: d.matter_name ?? d.matter_id,
-                                  })
-                                }
-                              >
-                                Screen
-                              </button>
-                            )}
-                          </td>
+                  <div className="table-scroll">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>{unit.singular}</th>
+                          <th>
+                            Can they read it?
+                            <FieldHelp text={HELP.accessDecision} />
+                          </th>
+                          <th>Role on the {unit.lower}</th>
+                          <th>Why</th>
+                          <th />
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {userAccess.decisions.map((d) => (
+                          <tr key={d.matter_id} className={rowClass(d.decision)}>
+                            <td>
+                              <strong>{d.matter_name ?? d.matter_id}</strong>
+                              <div className="dim" style={{ fontSize: 11.5 }}>
+                                <code>{d.matter_id}</code>
+                              </div>
+                            </td>
+                            <td>
+                              <DecisionBadge decision={d.decision} />
+                            </td>
+                            <td className="dim">{d.role ?? '-'}</td>
+                            <td>
+                              <div className="access-reason">
+                                {d.decision === 'SCREENED' ? (
+                                  <>
+                                    {d.reason}
+                                    <span className="access-reason-contact">
+                                      {d.contact
+                                        ? `They are told to contact ${d.contact}.`
+                                        : 'They are told to ask their risk team.'}
+                                    </span>
+                                  </>
+                                ) : (
+                                  fillUnit(ACCESS_DECISIONS[d.decision].meaning, unit)
+                                )}
+                              </div>
+                            </td>
+                            <td className="nowrap" style={{ textAlign: 'right' }}>
+                              {d.decision === 'SCREENED' ? (
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={() =>
+                                    setPending({
+                                      kind: 'lift',
+                                      userId: userAccess.user_id,
+                                      userLabel: userAccess.display_name ?? userAccess.user_id,
+                                      matterId: d.matter_id,
+                                      matterLabel: d.matter_name ?? d.matter_id,
+                                    })
+                                  }
+                                >
+                                  Lift screen
+                                </button>
+                              ) : (
+                                <button
+                                  className="btn btn-danger btn-sm"
+                                  onClick={() =>
+                                    setPending({
+                                      kind: 'screen',
+                                      userId: userAccess.user_id,
+                                      userLabel: userAccess.display_name ?? userAccess.user_id,
+                                      matterId: d.matter_id,
+                                      matterLabel: d.matter_name ?? d.matter_id,
+                                    })
+                                  }
+                                >
+                                  Screen
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
 
                   <p className="card-note" style={{ marginTop: 12 }}>
                     “Not on the team” is not a wall, nobody decided anything, and adding them is

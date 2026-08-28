@@ -203,46 +203,48 @@ export default function Matters() {
               Ingest pipeline
             </Link>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>
-                  State
-                  <FieldHelp text={HELP.ingestState} />
-                </th>
-                <th className="num">Facts</th>
-                <th className="num">Pending</th>
-                <th>Uploaded</th>
-              </tr>
-            </thead>
-            <tbody>
-              {matterDocs.map((d) => (
-                <tr key={d.document_id}>
-                  <td>{d.filename}</td>
-                  <td>
-                    <IngestPill state={d.state} />
-                  </td>
-                  <td className="num">{fmtNum(d.assertion_count)}</td>
-                  <td className="num">
-                    {d.pending_review_count > 0 ? (
-                      <span className="tag tag-orange">{d.pending_review_count}</span>
-                    ) : (
-                      '-'
-                    )}
-                  </td>
-                  <td className="nowrap dim">{fmtDate(d.uploaded_at)}</td>
-                </tr>
-              ))}
-              {matterDocs.length === 0 && (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <td colSpan={5} className="empty-state">
-                    No documents on this {unit.lower} yet.
-                  </td>
+                  <th>File</th>
+                  <th>
+                    State
+                    <FieldHelp text={HELP.ingestState} />
+                  </th>
+                  <th className="num">Facts</th>
+                  <th className="num">Pending</th>
+                  <th>Uploaded</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {matterDocs.map((d) => (
+                  <tr key={d.document_id}>
+                    <td>{d.filename}</td>
+                    <td>
+                      <IngestPill state={d.state} />
+                    </td>
+                    <td className="num">{fmtNum(d.assertion_count)}</td>
+                    <td className="num">
+                      {d.pending_review_count > 0 ? (
+                        <span className="tag tag-orange">{d.pending_review_count}</span>
+                      ) : (
+                        '-'
+                      )}
+                    </td>
+                    <td className="nowrap dim">{fmtDate(d.uploaded_at)}</td>
+                  </tr>
+                ))}
+                {matterDocs.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="empty-state">
+                      No documents on this {unit.lower} yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div className="card">
@@ -255,44 +257,46 @@ export default function Matters() {
               Audit view
             </Link>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Claim</th>
-                <th>How reached</th>
-                <th>
-                  Confidence
-                  <FieldHelp text={HELP.confidence} />
-                </th>
-                <th>State</th>
-              </tr>
-            </thead>
-            <tbody>
-              {matterAssertions.map((a) => (
-                <tr key={a.assertion_id}>
-                  <td>
-                    <strong>{a.subject_label || a.subject_id}</strong>{' '}
-                    <span className="prov-pred">{a.predicate}</span>{' '}
-                    <strong>{a.object_label || a.object_id}</strong>
-                  </td>
-                  <td>
-                    <EpistemicBadge epistemicClass={a.epistemic_class} size="sm" />
-                  </td>
-                  <td>
-                    <ConfidenceBar value={a.confidence} floor={0.8} />
-                  </td>
-                  <td className="nowrap dim">{a.review_state.replace('_', '-').toLowerCase()}</td>
-                </tr>
-              ))}
-              {matterAssertions.length === 0 && (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
                 <tr>
-                  <td colSpan={4} className="empty-state">
-                    No facts recorded on this {unit.lower} yet.
-                  </td>
+                  <th>Claim</th>
+                  <th>How reached</th>
+                  <th>
+                    Confidence
+                    <FieldHelp text={HELP.confidence} />
+                  </th>
+                  <th>State</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {matterAssertions.map((a) => (
+                  <tr key={a.assertion_id}>
+                    <td>
+                      <strong>{a.subject_label || a.subject_id}</strong>{' '}
+                      <span className="prov-pred">{a.predicate}</span>{' '}
+                      <strong>{a.object_label || a.object_id}</strong>
+                    </td>
+                    <td>
+                      <EpistemicBadge epistemicClass={a.epistemic_class} size="sm" />
+                    </td>
+                    <td>
+                      <ConfidenceBar value={a.confidence} floor={0.8} />
+                    </td>
+                    <td className="nowrap dim">{a.review_state.replace('_', '-').toLowerCase()}</td>
+                  </tr>
+                ))}
+                {matterAssertions.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="empty-state">
+                      No facts recorded on this {unit.lower} yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {wiping && (
@@ -407,74 +411,76 @@ export default function Matters() {
       </div>
 
       <div className="card">
-        <table className="data-table data-table-hover">
-          <thead>
-            <tr>
-              {/* No Client or Status column. The record carries a reference, a name and its
-                  timestamps -- nothing sends either of those, so both rendered as an empty tag and
-                  a dash on every row. A column that can never hold a value is worse than absent:
-                  it reads as missing data rather than as a field that does not exist. */}
-              <th>{unit.singular}</th>
-              <th className="num">Documents</th>
-              <th className="num">Facts</th>
-              <th className="num">
-                Pending
-                <FieldHelp text={HELP.reviewState} align="right" />
-              </th>
-              <th className="num">Conflicts</th>
-              <th>Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {/* Only readable matters reach here, a screened one never enters `matters`. */}
-            {filtered.map((m) => (
-              <tr key={m.matter_id} onClick={() => setSelectedId(m.matter_id)}>
-                <td>
-                  <strong>{m.name || m.matter_id}</strong>
-                  <div className="dim" style={{ fontSize: 11.5 }}>
-                    <code>{m.matter_id}</code>
-                  </div>
-                </td>
-                <td className="num">{fmtNum(countsFor.get(m.matter_id)?.documents ?? 0)}</td>
-                <td className="num">
-                  {fmtNum(m.assertion_count ?? countsFor.get(m.matter_id)?.assertions ?? 0)}
-                </td>
-                <td className="num">
-                  {countsFor.get(m.matter_id)?.pending ? (
-                    <span className="tag tag-orange">{countsFor.get(m.matter_id)!.pending}</span>
-                  ) : (
-                    '-'
-                  )}
-                </td>
-                <td className="num">
-                  {countsFor.get(m.matter_id)?.conflicts ? (
-                    <span className="tag tag-red">{countsFor.get(m.matter_id)!.conflicts}</span>
-                  ) : (
-                    '-'
-                  )}
-                </td>
-                <td className="nowrap dim">{fmtDate(m.created_at)}</td>
-              </tr>
-            ))}
-            {filtered.length === 0 && (
+        <div className="table-scroll">
+          <table className="data-table data-table-hover">
+            <thead>
               <tr>
-                <td colSpan={6}>
-                  <EmptyState
-                    title={
-                      matters.length === 0
-                        ? `No ${unit.lowerPlural} yet`
-                        : `No ${unit.lowerPlural} match`
-                    }
-                  >
-                    {matters.length === 0
-                      ? `${unit.plural} arrive from the system of record as declared records. None have been loaded for this tenant.`
-                      : `Clear the filter to see every ${unit.lower} you can read.`}
-                  </EmptyState>
-                </td>
+                {/* No Client or Status column. The record carries a reference, a name and its
+                    timestamps -- nothing sends either of those, so both rendered as an empty tag and
+                    a dash on every row. A column that can never hold a value is worse than absent:
+                    it reads as missing data rather than as a field that does not exist. */}
+                <th>{unit.singular}</th>
+                <th className="num">Documents</th>
+                <th className="num">Facts</th>
+                <th className="num">
+                  Pending
+                  <FieldHelp text={HELP.reviewState} align="right" />
+                </th>
+                <th className="num">Conflicts</th>
+                <th>Created</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {/* Only readable matters reach here, a screened one never enters `matters`. */}
+              {filtered.map((m) => (
+                <tr key={m.matter_id} onClick={() => setSelectedId(m.matter_id)}>
+                  <td>
+                    <strong>{m.name || m.matter_id}</strong>
+                    <div className="dim" style={{ fontSize: 11.5 }}>
+                      <code>{m.matter_id}</code>
+                    </div>
+                  </td>
+                  <td className="num">{fmtNum(countsFor.get(m.matter_id)?.documents ?? 0)}</td>
+                  <td className="num">
+                    {fmtNum(m.assertion_count ?? countsFor.get(m.matter_id)?.assertions ?? 0)}
+                  </td>
+                  <td className="num">
+                    {countsFor.get(m.matter_id)?.pending ? (
+                      <span className="tag tag-orange">{countsFor.get(m.matter_id)!.pending}</span>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="num">
+                    {countsFor.get(m.matter_id)?.conflicts ? (
+                      <span className="tag tag-red">{countsFor.get(m.matter_id)!.conflicts}</span>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="nowrap dim">{fmtDate(m.created_at)}</td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState
+                      title={
+                        matters.length === 0
+                          ? `No ${unit.lowerPlural} yet`
+                          : `No ${unit.lowerPlural} match`
+                      }
+                    >
+                      {matters.length === 0
+                        ? `${unit.plural} arrive from the system of record as declared records. None have been loaded for this tenant.`
+                        : `Clear the filter to see every ${unit.lower} you can read.`}
+                    </EmptyState>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   )

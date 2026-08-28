@@ -330,31 +330,33 @@ export default function Documents() {
               </button>
             </span>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>Stage</th>
-                <th>Detail</th>
-              </tr>
-            </thead>
-            <tbody>
-              {active.map((a, i) => (
-                <tr key={`${a.filename}-${i}`}>
-                  <td className="mono">{a.filename}</td>
-                  <td>
-                    <IngestPill state={a.state} />
-                  </td>
-                  <td className="muted">
-                    {a.reason ||
-                      (a.state === 'PARSING'
-                        ? 'One model call per page, several at a time.'
-                        : '')}
-                  </td>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Stage</th>
+                  <th>Detail</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {active.map((a, i) => (
+                  <tr key={`${a.filename}-${i}`}>
+                    <td className="mono">{a.filename}</td>
+                    <td>
+                      <IngestPill state={a.state} />
+                    </td>
+                    <td className="muted">
+                      {a.reason ||
+                        (a.state === 'PARSING'
+                          ? 'One model call per page, several at a time.'
+                          : '')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -429,95 +431,97 @@ export default function Documents() {
             </button>
           </div>
         )}
-        <table className="data-table data-table-hover">
-          <thead>
-            <tr>
-              <th style={{ width: 30 }}>
-                <input
-                  type="checkbox"
-                  aria-label="Select all shown"
-                  checked={filtered.length > 0 && picked.size === filtered.length}
-                  onChange={(e) =>
-                    setPicked(
-                      e.target.checked ? new Set(filtered.map((d) => d.document_id)) : new Set(),
-                    )
-                  }
-                />
-              </th>
-              <th>File</th>
-              <th>{unit.singular}</th>
-              <th>
-                State
-                <FieldHelp text={HELP.ingestState} />
-              </th>
-              <th className="num">Pages</th>
-              <th className="num">Size</th>
-              <th className="num">Facts</th>
-              <th className="num">
-                Pending
-                <FieldHelp text={HELP.reviewState} align="right" />
-              </th>
-              <th>Uploaded</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((d) => (
-              <tr key={d.document_id} onClick={() => openDetail(d.document_id)}>
-                {/* stopPropagation: the row opens the detail panel, and ticking a box must not. */}
-                <td onClick={(e) => e.stopPropagation()}>
+        <div className="table-scroll">
+          <table className="data-table data-table-hover">
+            <thead>
+              <tr>
+                <th style={{ width: 30 }}>
                   <input
                     type="checkbox"
-                    aria-label={`Select ${d.filename}`}
-                    checked={picked.has(d.document_id)}
-                    onChange={(e) => {
-                      const next = new Set(picked)
-                      if (e.target.checked) next.add(d.document_id)
-                      else next.delete(d.document_id)
-                      setPicked(next)
-                    }}
+                    aria-label="Select all shown"
+                    checked={filtered.length > 0 && picked.size === filtered.length}
+                    onChange={(e) =>
+                      setPicked(
+                        e.target.checked ? new Set(filtered.map((d) => d.document_id)) : new Set(),
+                      )
+                    }
                   />
-                </td>
-                <td>
-                  <strong>{d.filename}</strong>
-                  <div className="dim" style={{ fontSize: 11.5 }}>
-                    <code>{d.document_id}</code>
-                  </div>
-                </td>
-                <td className="nowrap dim">{d.matter_id || '-'}</td>
-                <td>
-                  <IngestPill state={d.state} />
-                  {d.error && (
-                    <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4, maxWidth: 260 }}>
-                      {d.error}
+                </th>
+                <th>File</th>
+                <th>{unit.singular}</th>
+                <th>
+                  State
+                  <FieldHelp text={HELP.ingestState} />
+                </th>
+                <th className="num">Pages</th>
+                <th className="num">Size</th>
+                <th className="num">Facts</th>
+                <th className="num">
+                  Pending
+                  <FieldHelp text={HELP.reviewState} align="right" />
+                </th>
+                <th>Uploaded</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((d) => (
+                <tr key={d.document_id} onClick={() => openDetail(d.document_id)}>
+                  {/* stopPropagation: the row opens the detail panel, and ticking a box must not. */}
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${d.filename}`}
+                      checked={picked.has(d.document_id)}
+                      onChange={(e) => {
+                        const next = new Set(picked)
+                        if (e.target.checked) next.add(d.document_id)
+                        else next.delete(d.document_id)
+                        setPicked(next)
+                      }}
+                    />
+                  </td>
+                  <td>
+                    <strong>{d.filename}</strong>
+                    <div className="dim" style={{ fontSize: 11.5 }}>
+                      <code>{d.document_id}</code>
                     </div>
-                  )}
-                </td>
-                <td className="num">{fmtNum(d.page_count)}</td>
-                <td className="num nowrap">{fmtBytes(d.size_bytes)}</td>
-                <td className="num">{fmtNum(d.assertion_count)}</td>
-                <td className="num">
-                  {d.pending_review_count > 0 ? (
-                    <span className="tag tag-orange">{d.pending_review_count}</span>
-                  ) : (
-                    '-'
-                  )}
-                </td>
-                <td className="nowrap dim">{fmtDateTime(d.uploaded_at)}</td>
-              </tr>
-            ))}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={9}>
-                  <EmptyState title={docs.length === 0 ? 'No documents yet' : 'No documents match'}>
-                    {docs.length === 0
-                      ? 'Upload a file above to start the pipeline.'
-                      : `Clear the search or the state and ${unit.lower} filters.`}
-                  </EmptyState>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                  </td>
+                  <td className="nowrap dim">{d.matter_id || '-'}</td>
+                  <td>
+                    <IngestPill state={d.state} />
+                    {d.error && (
+                      <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4, maxWidth: 260 }}>
+                        {d.error}
+                      </div>
+                    )}
+                  </td>
+                  <td className="num">{fmtNum(d.page_count)}</td>
+                  <td className="num nowrap">{fmtBytes(d.size_bytes)}</td>
+                  <td className="num">{fmtNum(d.assertion_count)}</td>
+                  <td className="num">
+                    {d.pending_review_count > 0 ? (
+                      <span className="tag tag-orange">{d.pending_review_count}</span>
+                    ) : (
+                      '-'
+                    )}
+                  </td>
+                  <td className="nowrap dim">{fmtDateTime(d.uploaded_at)}</td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={9}>
+                    <EmptyState title={docs.length === 0 ? 'No documents yet' : 'No documents match'}>
+                      {docs.length === 0
+                        ? 'Upload a file above to start the pipeline.'
+                        : `Clear the search or the state and ${unit.lower} filters.`}
+                    </EmptyState>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {(detail || detailLoading) && (

@@ -189,50 +189,52 @@ export default function Dashboard() {
             Full audit trail
           </Link>
         </div>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>
-                Who or what
-                <FieldHelp text={HELP.method} />
-              </th>
-              <th>Action</th>
-              <th>Detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {stats.recent_activity.map((e) => (
-              <tr key={e.event_id}>
-                <td className="nowrap dim">{fmtDateTime(e.timestamp)}</td>
-                <td className="nowrap">
-                  <code style={{ fontSize: 11.5 }}>{e.actor}</code>
-                </td>
-                <td className="nowrap">
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                    {e.action}
-                    {e.epistemic_class && (
-                      <EpistemicBadge
-                        epistemicClass={e.epistemic_class}
-                        size="sm"
-                        showLabel={false}
-                        tipPlacement="above"
-                      />
-                    )}
-                  </span>
-                </td>
-                <td className="dim">{e.detail}</td>
-              </tr>
-            ))}
-            {stats.recent_activity.length === 0 && (
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
               <tr>
-                <td colSpan={4} className="empty-state">
-                  No activity recorded yet.
-                </td>
+                <th>When</th>
+                <th>
+                  Who or what
+                  <FieldHelp text={HELP.method} />
+                </th>
+                <th>Action</th>
+                <th>Detail</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {stats.recent_activity.map((e) => (
+                <tr key={e.event_id}>
+                  <td className="nowrap dim">{fmtDateTime(e.timestamp)}</td>
+                  <td className="nowrap">
+                    <code style={{ fontSize: 11.5 }}>{e.actor}</code>
+                  </td>
+                  <td className="nowrap">
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                      {e.action}
+                      {e.epistemic_class && (
+                        <EpistemicBadge
+                          epistemicClass={e.epistemic_class}
+                          size="sm"
+                          showLabel={false}
+                          tipPlacement="above"
+                        />
+                      )}
+                    </span>
+                  </td>
+                  <td className="dim">{e.detail}</td>
+                </tr>
+              ))}
+              {stats.recent_activity.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="empty-state">
+                    No activity recorded yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   )

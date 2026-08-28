@@ -829,33 +829,35 @@ export default function Admin() {
           <div className="card-header">
             <h3>Structured sources</h3>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Source</th>
-                <th>Kind</th>
-                <th className="num">Tables</th>
-                <th>Scanned</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sources.map((s) => (
-                <tr key={s.source_id}>
-                  <td>
-                    <strong>{s.name}</strong>
-                    <div className="dim" style={{ fontSize: 11 }}>
-                      {s.database} &middot; {s.region}
-                    </div>
-                  </td>
-                  <td>
-                    <span className="tag tag-blue">{s.kind}</span>
-                  </td>
-                  <td className="num">{fmtNum(s.table_count)}</td>
-                  <td className="nowrap dim">{fmtDateTime(s.last_scanned_at)}</td>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Kind</th>
+                  <th className="num">Tables</th>
+                  <th>Scanned</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sources.map((s) => (
+                  <tr key={s.source_id}>
+                    <td>
+                      <strong>{s.name}</strong>
+                      <div className="dim" style={{ fontSize: 11 }}>
+                        {s.database} &middot; {s.region}
+                      </div>
+                    </td>
+                    <td>
+                      <span className="tag tag-blue">{s.kind}</span>
+                    </td>
+                    <td className="num">{fmtNum(s.table_count)}</td>
+                    <td className="nowrap dim">{fmtDateTime(s.last_scanned_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <p className="card-note" style={{ marginTop: 10 }}>
             A scan records metadata only. Rows never leave the source.
           </p>
@@ -1046,49 +1048,51 @@ export default function Admin() {
               Closed list &middot; validated when a fact is written, not when it is read
             </span>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Relationship</th>
-                <th>From → to</th>
-                <th>Meaning</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ontology.governing_predicates.map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <code>{p.id}</code>
-                    {p.symmetric && (
-                      <span
-                        className="tag tag-neutral"
-                        style={{ marginLeft: 6 }}
-                        title="Holds in both directions. Recording it one way records it both ways, so a check cannot miss it by asking from the wrong end."
-                      >
-                        symmetric
-                      </span>
-                    )}
-                    {p.transitive && (
-                      <span
-                        className="tag tag-neutral"
-                        style={{ marginLeft: 6 }}
-                        title="A rule may follow a bounded chain of these edges as one premise, so a conflict reached through a group structure is still found. Every step stays in the proof tree."
-                      >
-                        transitive
-                      </span>
-                    )}
-                  </td>
-                  <td className="nowrap dim">
-                    {p.domain.join(' | ')} → {p.range.join(' | ')}
-                  </td>
-                  <td className="dim">
-                    {p.description}
-                    {p.help && <FieldHelp text={p.help} />}
-                  </td>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Relationship</th>
+                  <th>From → to</th>
+                  <th>Meaning</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {ontology.governing_predicates.map((p) => (
+                  <tr key={p.id}>
+                    <td>
+                      <code>{p.id}</code>
+                      {p.symmetric && (
+                        <span
+                          className="tag tag-neutral"
+                          style={{ marginLeft: 6 }}
+                          title="Holds in both directions. Recording it one way records it both ways, so a check cannot miss it by asking from the wrong end."
+                        >
+                          symmetric
+                        </span>
+                      )}
+                      {p.transitive && (
+                        <span
+                          className="tag tag-neutral"
+                          style={{ marginLeft: 6 }}
+                          title="A rule may follow a bounded chain of these edges as one premise, so a conflict reached through a group structure is still found. Every step stays in the proof tree."
+                        >
+                          transitive
+                        </span>
+                      )}
+                    </td>
+                    <td className="nowrap dim">
+                      {p.domain.join(' | ')} → {p.range.join(' | ')}
+                    </td>
+                    <td className="dim">
+                      {p.description}
+                      {p.help && <FieldHelp text={p.help} />}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <div className="card-header" style={{ marginTop: 22 }}>
             <h3>
@@ -1097,47 +1101,49 @@ export default function Admin() {
             </h3>
             <span className="card-note">Each conclusion carries its premises</span>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Rule</th>
-                <th>When</th>
-                <th>Then</th>
-                <th>
-                  Minimum premise class
-                  <FieldHelp text="The weakest kind of fact the rule will fire on. Conflict checking is set so that it fires only on facts declared by a system of record or confirmed by a check, because a conflict flag resting on a model's guess would be worse than none at all." />
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {ontology.rules.map((r) => (
-                <tr key={r.id}>
-                  <td>
-                    <code>
-                      {r.id}@{r.version}
-                    </code>
-                    <div className="dim" style={{ fontSize: 12, marginTop: 3, maxWidth: 260 }}>
-                      {r.description}
-                      {r.help && <FieldHelp text={r.help} />}
-                    </div>
-                  </td>
-                  <td>
-                    {r.when.map((w) => (
-                      <div key={w}>
-                        <code style={{ fontSize: 11 }}>{w}</code>
-                      </div>
-                    ))}
-                  </td>
-                  <td>
-                    <code style={{ fontSize: 11 }}>{r.then}</code>
-                  </td>
-                  <td>
-                    <span className="tag tag-teal">{r.min_premise_class}</span>
-                  </td>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th>When</th>
+                  <th>Then</th>
+                  <th>
+                    Minimum premise class
+                    <FieldHelp text="The weakest kind of fact the rule will fire on. Conflict checking is set so that it fires only on facts declared by a system of record or confirmed by a check, because a conflict flag resting on a model's guess would be worse than none at all." />
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {ontology.rules.map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      <code>
+                        {r.id}@{r.version}
+                      </code>
+                      <div className="dim" style={{ fontSize: 12, marginTop: 3, maxWidth: 260 }}>
+                        {r.description}
+                        {r.help && <FieldHelp text={r.help} />}
+                      </div>
+                    </td>
+                    <td>
+                      {r.when.map((w) => (
+                        <div key={w}>
+                          <code style={{ fontSize: 11 }}>{w}</code>
+                        </div>
+                      ))}
+                    </td>
+                    <td>
+                      <code style={{ fontSize: 11 }}>{r.then}</code>
+                    </td>
+                    <td>
+                      <span className="tag tag-teal">{r.min_premise_class}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
