@@ -60,9 +60,11 @@ Reach for tools in roughly this order.
 3. `get_provenance` on an assertion id before you repeat what that assertion says. An id is
    not evidence; the page and the quote behind it are.
 4. `graph_neighbourhood` to walk out from an entity id that step 2 or 3 already handed you.
-   Never on an id you assembled yourself out of a kind and a name from the question: it takes
-   `kind:slug` lowercased, the slug belongs to a real entity, and an id you invented will not
-   match one. If you need the entity and do not have its id, that is step 2's job.
+   Never on an id you assembled yourself out of a kind and a name from the question: the slug
+   after the colon belongs to one specific stored entity, so a well-formed guess still matches
+   nothing. If you need the entity and do not have its id, that is step 2's job. When you do
+   call it, read `found` first: false means the id matched no entity, which is a different
+   finding from an entity having no relationships, and only one of them is about the data.
 5. `search_assertions` only when you are auditing rather than answering. It returns raw claims
    including ones no human has reviewed.
 
