@@ -259,8 +259,27 @@ class TestToolListing:
 
         assert "NOT an entity id" in provenance
         assert "graph_neighbourhood" in provenance
-        assert "kind:slug" in neighbourhood
+        # The shape, not one spelling of it: the description has been reworded twice and the
+        # property under test is that a reader learns an entity id is two colon-joined parts.
+        assert "kind>:<slug" in neighbourhood or "kind:slug" in neighbourhood
         assert "get_provenance" in neighbourhood
+
+    def test_no_tool_argument_teaches_a_kind_from_another_tenants_pack(self):
+        """Entity kinds come from the tenant's ontology, so an example id in a tool description
+        is a noun some tenants do not have.
+
+        This is the failure it prevents, and it happened: under a retail pack an agent read
+        `Customer` off `describe_ontology`, took the id shape from a legal example, and called
+        `graph_neighbourhood` with a `Customer:Ada` that had never existed."""
+        packs = {"party", "matter", "authority", "counsel", "patient", "encounter", "clinician"}
+        for tool in _list_tools():
+            for name, spec in ((tool.inputSchema or {}).get("properties") or {}).items():
+                words = set(str(spec.get("description", "")).lower().replace(":", " ").split())
+                # A parameter may name itself. `matter_id` is the scoping key in every pack even
+                # where the kind is called something else -- see `organising_unit` in the retail
+                # pack, which renames the kind on screen and leaves the key alone.
+                leaked = {w for w in words & packs if w not in name.lower()}
+                assert not leaked, f"{tool.name}.{name} names pack kinds {leaked}"
 
     def test_governed_and_raw_tools_read_differently(self):
         """The distinction an agent has to be able to draw without reading the source."""

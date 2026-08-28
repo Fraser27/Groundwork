@@ -2556,6 +2556,38 @@ code, pre { font-family: var(--mono); }
 }
 .retrieval-composer .form-group { flex: 1; min-width: 0; margin-bottom: 0; }
 .retrieval-composer .btn { flex-shrink: 0; }
+/* Content-width: the rule above makes every form-group in here share the row equally, which would
+   take half the question box for three short labels. */
+.retrieval-composer .form-group:has(.segmented) { flex: 0 0 auto; }
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg);
+}
+.segmented-option {
+  padding: 7px 12px;
+  border: 0;
+  /* Separator between options only, so the group reads as one control rather than three buttons. */
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.segmented-option:first-child { border-left: 0; }
+.segmented-option:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.segmented-option.is-active {
+  background: var(--accent-light);
+  color: var(--accent);
+  font-weight: 600;
+}
+.segmented-option:disabled { cursor: default; opacity: 0.55; }
 
 .retrieval-layout {
   display: grid;
