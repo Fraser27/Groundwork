@@ -257,6 +257,42 @@ class TestIngestFromNotification:
         ]
         assert states[-1] is JobState.LIVE
 
+    def test_the_reasoning_report_is_kept_on_the_job(self, storage, s3):
+        """Nobody reads the pipeline's return value on this path. The upload ends at S3 and the
+        pipeline runs in a background task, so a report that lives only in that dict is one the
+        person who uploaded the document never sees -- and it is the only thing that says whether a
+        rule drew nothing because it found nothing or because a premise matched nothing."""
+        store = InMemoryJobStore()
+
+        def pipeline(ctx, parsed, *, matter_id, run_model_extraction, job_id):
+            return {
+                "chunks": 1,
+                "pending_review": 0,
+                "inferred": {
+                    "ran": True,
+                    "staged": 0,
+                    "rules_starved": {
+                        "conflict_check": "no ADVERSE_TO fact matches (m:Matter)->(p:Party)"
+                    },
+                },
+            }
+
+        runner = make_runner(storage, store=store, pipeline=pipeline)
+        job = runner.ingest_raw_key(self._land(s3))
+
+        stored = store.get_job(TENANT, job.job_id)
+        assert stored.reasoning is not None
+        assert "conflict_check" in stored.reasoning["rules_starved"]
+
+    def test_a_pipeline_that_reports_no_inference_leaves_the_field_empty(self, storage, s3):
+        """Absent, not an empty report. A `{}` here would render as a pass that ran and cleared
+        everything, which is the one reading this field exists to make impossible."""
+        store = InMemoryJobStore()
+        runner = make_runner(storage, store=store)
+        job = runner.ingest_raw_key(self._land(s3))
+
+        assert store.get_job(TENANT, job.job_id).reasoning is None
+
     def test_state_is_persisted_before_the_pipeline_runs(self, storage, s3):
         """The property that makes container death survivable: if the process dies inside
         the pipeline, the stored state must already say so."""

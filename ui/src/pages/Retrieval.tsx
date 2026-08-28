@@ -17,6 +17,7 @@ import { getTenantId } from '../auth'
 import DocumentViewer from '../components/DocumentViewer'
 import { FactsUsed, PassagesCited } from '../components/EvidencePanels'
 import FieldHelp from '../components/FieldHelp'
+import Markdown from '../components/Markdown'
 import ProvenancePanel from '../components/ProvenancePanel'
 import QueryTrace from '../components/QueryTrace'
 import RunFlow from '../components/RunFlow'
@@ -358,7 +359,7 @@ export default function Retrieval() {
                   <span>{w}</span>
                 </div>
               ))}
-              <p style={{ margin: 0, lineHeight: 1.6 }}>{finished.answer}</p>
+              <Markdown text={finished.answer} />
             </div>
           )}
         </div>

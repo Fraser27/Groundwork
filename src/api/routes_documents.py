@@ -372,12 +372,12 @@ def _infer(services: Services, ctx: AuthContext) -> dict[str, Any]:
         logger.info(
             "inference after ingest staged %d conclusions for %s", report.count, ctx.tenant_id
         )
-    return {
-        "ran": True,
-        "staged": report.count,
-        "rules_evaluated": report.rules_evaluated,
-        "rules_skipped": report.rules_skipped,
-    }
+    # The whole report, not a hand-picked four fields of it. `rules_starved` was among the ones
+    # dropped, and it is the only field that separates a rule that found nothing from a rule that
+    # had nothing to look at -- the distinction `ReasonerReport` exists to draw. So the most
+    # actionable line in the pass was computed on every ingest and then thrown away, and an upload
+    # whose premises never joined reported exactly the silence a clean one reports.
+    return {"ran": True, "staged": report.count, **report.to_dict()}
 
 
 def _transcribe(
@@ -767,6 +767,9 @@ async def get_document(
         "content_sha256": getattr(meta, "content_sha256", None) if meta else None,
         "timeline": timeline,
         "assertions": [_assertion_out(a) for a in assertions],
+        # Here and not in `_document_summary`, which the list uses: a full report per row would
+        # send every rule's diagnostics for every document to render a table that shows none of it.
+        "reasoning": latest.reasoning,
     }
 
 

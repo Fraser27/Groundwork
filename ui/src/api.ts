@@ -498,6 +498,16 @@ export interface DocumentDetail extends DocumentSummary {
   /** Ordered ingest transitions, so a stuck document is diagnosable. */
   timeline: { state: IngestState; at: string; detail?: string | null }[]
   assertions: Assertion[]
+  /**
+   * The rule pass that ran once this document's facts went live, or null for a document ingested
+   * before this was recorded.
+   *
+   * Worth as much as the facts above it. Those say what was read out of the page; this says what
+   * the pack could and could not conclude once they joined what was already in the graph, and a
+   * rule that drew nothing because a premise matched nothing is the case that otherwise looks
+   * identical to a clean check.
+   */
+  reasoning?: ReasonerReport | null
 }
 
 /**
@@ -1495,6 +1505,15 @@ export interface ReasonerReport {
   facts_considered: number
   /** Added by the endpoint. Equal to `count` — conclusions are staged, never written live. */
   staged?: number
+  /**
+   * False when the pass itself failed, on the ingest report only.
+   *
+   * Kept separate from a zero count for the reason this codebase keeps restating: "ran and found
+   * nothing" is about the facts and "never ran" is about the system, and a reader shown one number
+   * cannot tell which they have.
+   */
+  ran?: boolean
+  error?: string
   note?: string
 }
 

@@ -40,6 +40,7 @@ import ConfidenceBar from '../components/ConfidenceBar'
 import DocumentViewer from '../components/DocumentViewer'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
+import Markdown from '../components/Markdown'
 import ProvenancePanel from '../components/ProvenancePanel'
 import QueryTrace from '../components/QueryTrace'
 import { ErrorState, Spinner } from '../components/Shared'
@@ -682,7 +683,7 @@ export default function QueryBuilder() {
                 </h3>
                 <span className="tag tag-orange">phrased by a model</span>
               </div>
-              <div className="answer-block">{composed.synthesis}</div>
+              <Markdown text={composed.synthesis} />
             </div>
           ) : (
             <div className="card">

@@ -105,6 +105,35 @@ _MAX_PREMISE_DEPTH = 6
 #: Row cap. An agent asking for everything still gets a bounded response.
 _MAX_ROWS = 200
 
+#: What `graph_neighbourhood` says about the id it was handed, per `GraphReader.entity_status`.
+#:
+#: Spelled out in words rather than left to the `found` flag, because the three cases lead to three
+#: different next moves and an agent reading an empty `edges` list cannot tell them apart. The one
+#: that mattered: a walk from an id the agent built out of the question's own words returned an
+#: empty neighbourhood, and empty was read as "this entity has no relationships" rather than "you
+#: made this id up".
+_NEIGHBOURHOOD_NOTES = {
+    "known": (
+        "This id is a stored entity. Every edge below is one the graph verified and you are "
+        "permitted to see, so an empty list here means no such relationship was verified rather "
+        "than that none exists."
+    ),
+    "untrusted": (
+        "This id is a stored entity, but nothing recorded about it clears this tenant's confidence "
+        "floor or has been signed off, so no edges were walked. Claims about it exist and are "
+        "unreviewed. `search_assertions` will show them; do not present any of them as a finding."
+    ),
+    "unknown": (
+        "NOTHING with this id is visible to you, so nothing was walked. This is not the same as an "
+        "entity with no relationships: the id itself matched nothing. If you assembled it from a "
+        "name rather than reading it off a previous result, that is the likely reason -- an id is "
+        "'<kind>:<slug>' where the slug belongs to a specific stored entity, and a well-formed "
+        "guess still matches nothing. Call `ask` or `compose` with the name instead, and take the "
+        "id from what comes back. Failing that, the entity may sit behind a screen: "
+        "`search_assertions` reports `withheld_matters`."
+    ),
+}
+
 
 def _principal(ctx: Context) -> tuple[Services, AuthContext]:
     """The services and the caller's scope, or a refusal.
@@ -410,7 +439,12 @@ async def describe_ontology(ctx: Context) -> dict[str, Any]:
     """Describe the vocabulary: entity types, relationships, and inference rules.
 
     TRUST: this is the schema, not data. It says what the graph *can* record, not what it
-    does.
+    does. Nothing here is an answer to anything, so this is never your last call.
+
+    Each entity type carries an `id_prefix` as well as an `id`. The `id` is the declared name and
+    the `id_prefix` is what a stored id starts with, and they differ in case. Neither is an id on
+    its own: the rest of an id is a slug belonging to one specific stored entity, so this tool can
+    tell you a kind exists and can never tell you an entity does.
 
     The split between governing and descriptive predicates is the part worth reading.
     Governing predicates are a closed set: they are what conflict checks, privilege walls
@@ -437,7 +471,16 @@ async def describe_ontology(ctx: Context) -> dict[str, Any]:
         "domain": onto.domain,
         "version": onto.version,
         "entity_types": [
-            {"id": e.id, "label": e.label, "description": e.description}
+            {
+                "id": e.id,
+                # The form an id actually takes, published alongside the declared one because they
+                # differ in case and only this one is usable. Withholding it made this tool the
+                # cause of the guess it exists to prevent: an agent read the capitalised kind here,
+                # had no other candidate, and built an entity id out of it plus a name.
+                "id_prefix": f"{e.slug}:",
+                "label": e.label,
+                "description": e.description,
+            }
             for e in onto.entities.values()
         ],
         "governing_predicates": [_pred(p) for p in onto.predicates.values() if p.governing],
@@ -729,10 +772,11 @@ async def graph_neighbourhood(
         str,
         Field(
             description=(
-                "An ENTITY id that a previous tool result gave you, written '<kind>:<slug>' with "
-                "the kind lowercased -- `describe_ontology` declares the kinds capitalised, so a "
-                "kind it calls 'Widget' appears here as 'widget:'. This tenant's kinds are "
-                "whatever that tool lists and no others. Take ids from the `subject_id` and "
+                "An ENTITY id that a previous tool result gave you, written '<kind>:<slug>'. The "
+                "kind is the `id_prefix` from `describe_ontology`, never its `id`: that tool "
+                "declares kinds capitalised and ids are lowercase, so it publishes both and only "
+                "one of them is an id. This tenant's kinds are whatever it lists and no others. "
+                "Take ids from the `subject_id` and "
                 "`object_id` of a row `ask`, `compose` or `search_assertions` returned. Do NOT "
                 "assemble one from a kind plus a name out of the question: the slug belongs to a "
                 "specific stored entity, so a constructed id matches nothing and this tool cannot "
@@ -766,13 +810,16 @@ async def graph_neighbourhood(
     and a defensible one. Every edge carries its `assertion_id`, so any of them can be
     taken to `get_provenance`.
 
-    An empty result means "nothing verified and visible to you", which is not the same as
-    "no such relationships". Call `search_assertions` and read `withheld_matters` to find out
-    whether an ethical screen is narrowing what you can see here.
+    Read `found` and `note` before the edges. `found` is false when the id matched no entity at
+    all, which is a different result from an entity with no verified relationships and used to be
+    indistinguishable from it: `nodes` echoed the id back whatever happened. An empty `edges` on a
+    `found` id still means "nothing verified and visible to you" rather than "no such
+    relationships" -- call `search_assertions` and read `withheld_matters` to see whether a screen
+    is narrowing this.
 
     Args:
-        node_id: Entity id, `<kind>:<slug>` with the kind lowercased from whatever
-            `describe_ontology` declares. `ask` and `search_assertions` return these as
+        node_id: Entity id, `<kind>:<slug>`, the kind exactly as `describe_ontology` gives it in
+            `entity_types[].id_prefix`. `ask` and `search_assertions` return these as
             `subject_id` and `object_id`; do not construct one.
         depth: Hops to follow, 1-3. Deeper traversals fan out and pull in weakly related
             matters.
@@ -784,18 +831,24 @@ async def graph_neighbourhood(
         raise ToolError("the graph is not reachable right now")
 
     settings = services.settings_for(auth_ctx.tenant_id)
-    edges = services.graph_reader.expand(
-        auth_ctx,
-        [node_id],
-        depth=depth,
-        min_confidence=settings.min_confidence_floor,
-    )
+    floor = settings.min_confidence_floor
+    edges = services.graph_reader.expand(auth_ctx, [node_id], depth=depth, min_confidence=floor)
+    status = services.graph_reader.entity_status(auth_ctx, node_id, min_confidence=floor)
 
-    node_ids = {node_id} | {e["subject_id"] for e in edges} | {e["object_id"] for e in edges}
+    # Derived from the edges alone. This used to seed itself with `node_id`, so every call
+    # returned the id it was given as a node and an agent that had *invented* the id read its own
+    # argument back as proof the entity existed. A tool must not confirm its own input.
+    node_ids = {e["subject_id"] for e in edges} | {e["object_id"] for e in edges}
+    if status != "unknown":
+        node_ids.add(node_id)
+
     return {
+        "node_id": node_id,
+        "found": status != "unknown",
+        "note": _NEIGHBOURHOOD_NOTES[status],
         "nodes": [{"id": n} for n in sorted(node_ids)],
         "edges": edges,
-        "confidence_floor": settings.min_confidence_floor,
+        "confidence_floor": floor,
     }
 
 

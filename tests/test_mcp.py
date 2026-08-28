@@ -758,6 +758,16 @@ class TestDescribeOntology:
         rules = _call(TOKEN_A, "describe_ontology").structuredContent["rules"]
         assert all("@" in r["method"] for r in rules)
 
+    def test_every_entity_type_publishes_the_form_an_id_actually_takes(self):
+        """The declared kind is capitalised and a stored id is not, and this tool published only
+        the first. So the one tool whose job is stopping an agent from guessing at vocabulary was
+        handing out a form that cannot appear in an id, and an agent with no other candidate built
+        `Customer:Ada` out of it. Both forms, or neither is safe to use."""
+        entities = _call(TOKEN_A, "describe_ontology").structuredContent["entity_types"]
+        assert entities
+        for entity in entities:
+            assert entity["id_prefix"] == f"{entity['id'].lower()}:"
+
 
 class TestGraphNeighbourhood:
     def test_returns_edges_around_a_node(self):
@@ -784,6 +794,49 @@ class TestGraphNeighbourhood:
         _stage(TENANT_A, matter_id="M-1", confidence=0.4)
         body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}).structuredContent
         assert body["edges"] == []
+
+    def test_an_invented_id_is_not_confirmed_as_an_entity(self):
+        """The tool must not return its own argument as a finding.
+
+        This is the defect it closes, and it happened: an agent built `Customer:Ada` out of a kind
+        from `describe_ontology` and a name from the question, called this, and got back
+        `nodes: [{"id": "Customer:Ada"}]` -- its own input -- which it reported as "Ada exists as a
+        customer in the system". Nothing in the response contradicted it."""
+        _stage(TENANT_A, matter_id="M-1")
+        body = _call(
+            TOKEN_A, "graph_neighbourhood", {"node_id": "party:nobody-of-that-name"}
+        ).structuredContent
+        assert body["found"] is False
+        assert body["nodes"] == []
+        assert body["edges"] == []
+        assert "NOTHING" in body["note"]
+
+    def test_a_real_entity_is_reported_as_found(self):
+        """The other half. `found` false has to mean something, so it must not be false for an id
+        that came off a real result."""
+        _stage(TENANT_A, matter_id="M-1")
+        body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}).structuredContent
+        assert body["found"] is True
+        assert {"id": "document:d1"} in body["nodes"]
+
+    def test_a_stored_entity_below_the_floor_is_found_but_not_walked(self):
+        """Three outcomes, not two. "You invented this id" and "everything known about this is too
+        weak to act on" call for different next moves, and an empty edge list is all either used to
+        give the caller."""
+        _stage(TENANT_A, matter_id="M-1", confidence=0.4)
+        body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}).structuredContent
+        assert body["found"] is True
+        assert body["edges"] == []
+        assert "unreviewed" in body["note"] or "floor" in body["note"]
+
+    def test_another_tenants_entity_is_not_found(self):
+        """`found` is scoped like every other read. Reporting a foreign id as a real entity would
+        leak the one bit of information tenancy exists to withhold."""
+        _stage(TENANT_B, matter_id="M-B")
+        body = _call(
+            TOKEN_A, "graph_neighbourhood", {"node_id": "topic:M-B"}
+        ).structuredContent
+        assert body["found"] is False
 
 
 class TestKillSwitch:

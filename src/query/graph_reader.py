@@ -372,6 +372,37 @@ class GraphReader:
             }
         return [out[key] for key in sorted(out)]
 
+    def entity_status(self, ctx: AuthContext, entity_id: str, *, min_confidence: float) -> str:
+        """Whether an id names a stored entity, told apart from whether it has trusted edges.
+
+        `expand` cannot answer this. An id nothing ever stored and an id whose every edge sits
+        below the floor both come back as an empty walk, and reporting them as one thing is how a
+        constructed id came to be confirmed as a real entity: the caller seeded its own argument
+        into the node list and read it back as a finding.
+
+        Three outcomes, because they call for three different sentences:
+        `known` - a signed-off, in-scope, trusted-enough assertion touches it.
+        `untrusted` - it is stored and visible, but nothing about it clears the floor or sign-off.
+        `unknown` - nothing visible to this caller mentions it at all.
+
+        `unknown` is not proof of absence: it is scoped to what this user may see, exactly as every
+        other read here is.
+        """
+        wanted = _seed_set([entity_id])
+        if not wanted:
+            return "unknown"
+
+        trust = TrustFilter.for_context(ctx, min_confidence=min_confidence)
+        seen = False
+        for record in self._queue.visible(ctx):
+            a = record.assertion
+            if not (_touches(a.subject_id, wanted) or _touches(a.object_id, wanted)):
+                continue
+            seen = True
+            if record.is_current and trust.matches(a):
+                return "known"
+        return "untrusted" if seen else "unknown"
+
     def _readable(self, ctx: AuthContext, min_confidence: float) -> list[Any]:
         """Current, in-scope, trusted-enough assertions.
 

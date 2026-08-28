@@ -75,6 +75,9 @@ const NODE_RADIUS: Record<string, number> = {
 
 const FALLBACK_COLOUR = '#6c8cff'
 
+const EDGE_BOW = 0.15
+const EDGE_BOW_MAX = 52
+
 interface SimNode extends GraphNode {
   x: number
   y: number
@@ -85,6 +88,72 @@ interface SimNode extends GraphNode {
 /** Resolve a CSS custom property to a concrete colour for canvas drawing. */
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
+/**
+ * The quadratic control point that bows an edge off its chord.
+ *
+ * Offset sign comes from the chord's own direction, so a reciprocal pair bows to opposite sides.
+ * A straight line cannot show both: one hides under the other and the graph reads as though only
+ * one of the two facts exists.
+ */
+function bow(ax: number, ay: number, bx: number, by: number) {
+  const dx = bx - ax
+  const dy = by - ay
+  const len = Math.hypot(dx, dy) || 1
+  const off = Math.min(len * EDGE_BOW, EDGE_BOW_MAX)
+  return { cx: (ax + bx) / 2 - (dy / len) * off, cy: (ay + by) / 2 + (dx / len) * off }
+}
+
+/** A point on the bowed edge. t=0.5 is where the predicate label goes. */
+function bowPoint(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  t: number,
+) {
+  const u = 1 - t
+  return { x: u * u * ax + 2 * u * t * cx + t * t * bx, y: u * u * ay + 2 * u * t * cy + t * t * by }
+}
+
+/** Perpendicular distance from a point to a segment. */
+function distToSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const dx = bx - ax
+  const dy = by - ay
+  const lenSq = dx * dx + dy * dy || 1
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq
+  t = Math.max(0, Math.min(1, t))
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+}
+
+/** Same, against the bow: hit-testing has to follow the curve that was drawn, not the chord. */
+function distToEdge(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const { cx, cy } = bow(ax, ay, bx, by)
+  let best = Infinity
+  let prev = { x: ax, y: ay }
+  for (let i = 1; i <= 10; i++) {
+    const next = bowPoint(ax, ay, bx, by, cx, cy, i / 10)
+    best = Math.min(best, distToSegment(px, py, prev.x, prev.y, next.x, next.y))
+    prev = next
+  }
+  return best
 }
 
 export default function GraphExplorer() {
@@ -438,25 +507,6 @@ export default function GraphExplorer() {
     setZoom(clamped)
   }, [])
 
-  /** Perpendicular distance from a point to a segment — for edge hit-testing. */
-  const distToSegment = (
-    px: number,
-    py: number,
-    ax: number,
-    ay: number,
-    bx: number,
-    by: number,
-  ) => {
-    const dx = bx - ax
-    const dy = by - ay
-    const lenSq = dx * dx + dy * dy || 1
-    let t = ((px - ax) * dx + (py - ay) * dy) / lenSq
-    t = Math.max(0, Math.min(1, t))
-    const cx = ax + t * dx
-    const cy = ay + t * dy
-    return Math.hypot(px - cx, py - cy)
-  }
-
   const draw = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -494,6 +544,7 @@ export default function GraphExplorer() {
       const isHighlit = highlighted.has(e.assertion_id)
       const touchesHoveredNode =
         hovered?.kind === 'node' && (e.source === hovered.id || e.target === hovered.id)
+      const { cx, cy } = bow(a.x, a.y, b.x, b.y)
 
       ctx.save()
       // A halo under the stroke, not a recolour: the epistemic colour is the vocabulary a
@@ -505,7 +556,7 @@ export default function GraphExplorer() {
         ctx.lineCap = 'round'
         ctx.beginPath()
         ctx.moveTo(a.x, a.y)
-        ctx.lineTo(b.x, b.y)
+        ctx.quadraticCurveTo(cx, cy, b.x, b.y)
         ctx.stroke()
         ctx.lineCap = 'butt'
       }
@@ -528,11 +579,12 @@ export default function GraphExplorer() {
       if (e.epistemic_class === 'PREDICTED') ctx.setLineDash([5 / z, 4 / z])
       ctx.beginPath()
       ctx.moveTo(a.x, a.y)
-      ctx.lineTo(b.x, b.y)
+      ctx.quadraticCurveTo(cx, cy, b.x, b.y)
       ctx.stroke()
 
-      // Arrowhead, so direction is readable — REPRESENTS is not symmetric.
-      const ang = Math.atan2(b.y - a.y, b.x - a.x)
+      // Arrowhead, so direction is readable — REPRESENTS is not symmetric. Angled off the curve's
+      // tangent where it lands, not off the chord, or it points away from the line it terminates.
+      const ang = Math.atan2(b.y - cy, b.x - cx)
       const r = (NODE_RADIUS[b.type] || 8) + 2
       const tipX = b.x - Math.cos(ang) * r
       const tipY = b.y - Math.sin(ang) * r
@@ -549,8 +601,8 @@ export default function GraphExplorer() {
 
       if (z >= 1.15 || isHovered || isSelected || isHighlit || touchesHoveredNode) {
         const emphasis = isSelected || isHovered || isHighlit
-        const mx = (a.x + b.x) / 2
-        const my = (a.y + b.y) / 2
+        // On the curve, not on the chord it left behind.
+        const { x: mx, y: my } = bowPoint(a.x, a.y, b.x, b.y, cx, cy, 0.5)
         ctx.fillStyle = emphasis ? labelColour : dimColour
         ctx.globalAlpha = auditing && !emphasis ? 0.4 : 1
         ctx.font = `${(emphasis ? 10.5 : 9) / Math.max(z, 0.6)}px Inter, system-ui, sans-serif`
@@ -753,7 +805,7 @@ export default function GraphExplorer() {
         const a = map.get(e.source)
         const b = map.get(e.target)
         if (!a || !b) continue
-        if (distToSegment(x, y, a.x, a.y, b.x, b.y) < tol) return { kind: 'edge', id: e.assertion_id }
+        if (distToEdge(x, y, a.x, a.y, b.x, b.y) < tol) return { kind: 'edge', id: e.assertion_id }
       }
       return null
     },
