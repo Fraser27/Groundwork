@@ -27,7 +27,7 @@ from src.auth import AuthError
 from src.config import AuthConfig, GraphConfig, GroundworkConfig
 from src.graph.assertions import EpistemicClass, SourceLocator, build_assertion
 from src.graph.scope import AuthContext
-from src.mcp.server import build_server, create_app
+from src.mcp.server import _MAX_PROVENANCE_IDS, build_server, create_app
 
 TENANT_A = "firm-acme"
 TENANT_B = "firm-beta"
@@ -254,7 +254,7 @@ class TestToolListing:
         """The mistake that started this. `get_provenance` takes a hex assertion id and
         `graph_neighbourhood` takes a `kind:slug` entity id, and nothing in the names says so."""
         by_name = {t.name: t.inputSchema["properties"] for t in _list_tools()}
-        provenance = by_name["get_provenance"]["assertion_id"]["description"]
+        provenance = by_name["get_provenance"]["assertion_ids"]["description"]
         neighbourhood = by_name["graph_neighbourhood"]["node_id"]["description"]
 
         assert "NOT an entity id" in provenance
@@ -411,8 +411,8 @@ class TestAsk:
         ).structuredContent
         assert body["assertions_used"], "no assertion came back, so nothing was under test"
         for aid in body["assertions_used"]:
-            prov = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}).structuredContent
-            assert prov["assertion"]["source"]["quote"]
+            prov = _call(TOKEN_A, "get_provenance", {"assertion_ids": [aid]}).structuredContent
+            assert prov["facts"][0]["source"]["quote"]
 
     def test_the_default_returns_the_sql_without_running_it(self):
         """The governance default: a person reads what the query will do before it does it. Pinned
@@ -486,7 +486,7 @@ class TestTenantIsolation:
         """A valid assertion id is not a capability. Tenancy is a property filter, so this
         is the test that the filter is actually applied on the read."""
         foreign = _stage(TENANT_B, matter_id="M-B")
-        result = _call(TOKEN_A, "get_provenance", {"assertion_id": foreign})
+        result = _call(TOKEN_A, "get_provenance", {"assertion_ids": [foreign]})
         assert result.isError
         assert TENANT_B not in _text(result)
 
@@ -501,12 +501,12 @@ class TestTenantIsolation:
         nobody, so it says nothing — not the matter, not the tenant, not that a screen
         exists."""
         foreign = _stage(TENANT_B, matter_id="M-B")
-        message = _text(_call(TOKEN_A, "get_provenance", {"assertion_id": foreign}))
+        message = _text(_call(TOKEN_A, "get_provenance", {"assertion_ids": [foreign]}))
         assert TENANT_B not in message
         assert "M-B" not in message
         assert "screened" not in message.lower()
         assert message == _text(
-            _call(TOKEN_A, "get_provenance", {"assertion_id": "no-such-assertion"})
+            _call(TOKEN_A, "get_provenance", {"assertion_ids": ["no-such-assertion"]})
         )
 
 
@@ -520,13 +520,13 @@ class TestEthicalWalls:
     def test_walled_assertion_is_still_refused(self):
         """Disclosure is not access. The screen still refuses the read."""
         walled = _stage(TENANT_A, matter_id=WALLED_MATTER)
-        result = _call(TOKEN_WALLED, "get_provenance", {"assertion_id": walled})
+        result = _call(TOKEN_WALLED, "get_provenance", {"assertion_ids": [walled]})
         assert result.isError
         assert "source" not in str(result.structuredContent)
 
     def test_refusal_names_the_matter_the_reason_and_the_contact(self):
         walled = _stage(TENANT_A, matter_id=WALLED_MATTER)
-        message = _text(_call(TOKEN_WALLED, "get_provenance", {"assertion_id": walled}))
+        message = _text(_call(TOKEN_WALLED, "get_provenance", {"assertion_ids": [walled]}))
         assert WALLED_MATTER in message
         assert SCREEN_REASON in message
         assert SCREEN_CONTACT in message
@@ -535,9 +535,9 @@ class TestEthicalWalls:
         """The reversal. These used to be byte-identical, which is what let an agent report
         "nothing found" for a matter that exists and matched."""
         walled = _stage(TENANT_A, matter_id=WALLED_MATTER)
-        walled_msg = _text(_call(TOKEN_WALLED, "get_provenance", {"assertion_id": walled}))
+        walled_msg = _text(_call(TOKEN_WALLED, "get_provenance", {"assertion_ids": [walled]}))
         absent_msg = _text(
-            _call(TOKEN_WALLED, "get_provenance", {"assertion_id": "no-such-assertion"})
+            _call(TOKEN_WALLED, "get_provenance", {"assertion_ids": ["no-such-assertion"]})
         )
         assert walled_msg != absent_msg
         assert "screened" in walled_msg.lower()
@@ -546,7 +546,7 @@ class TestEthicalWalls:
         """Only screens are disclosed. An id that does not exist must not become a way to
         enumerate the ones that do."""
         message = _text(
-            _call(TOKEN_WALLED, "get_provenance", {"assertion_id": "no-such-assertion"})
+            _call(TOKEN_WALLED, "get_provenance", {"assertion_ids": ["no-such-assertion"]})
         )
         assert "screened" not in message.lower()
         assert WALLED_MATTER not in message
@@ -601,9 +601,9 @@ class TestEthicalWalls:
         """Confirms the previous tests fail for the right reason — the assertion exists and
         is reachable, just not by the walled user."""
         walled = _stage(TENANT_A, matter_id=WALLED_MATTER)
-        result = _call(TOKEN_A, "get_provenance", {"assertion_id": walled})
+        result = _call(TOKEN_A, "get_provenance", {"assertion_ids": [walled]})
         assert not result.isError
-        assert result.structuredContent["assertion"]["matter_id"] == WALLED_MATTER
+        assert result.structuredContent["facts"][0]["matter_id"] == WALLED_MATTER
 
 
 class TestDevBypass:
@@ -665,21 +665,123 @@ class TestSearchAssertions:
         assert len(body["assertions"]) <= 200
 
 
+class TestProvenanceBatches:
+    """One call for many facts, because a run has a turn budget and this tool used to spend one
+    turn per fact. A traced run checking six facts got to twelve turns and stopped before it
+    answered, having done the work.
+    """
+
+    def test_many_ids_come_back_in_one_call_in_the_order_asked(self):
+        ids = [_stage(TENANT_A, matter_id=f"M-{i}") for i in range(4)]
+        body = _call(TOKEN_A, "get_provenance", {"assertion_ids": ids}).structuredContent
+        assert [f["assertion_id"] for f in body["facts"]] == ids
+        assert body["returned"] == 4
+        assert all(f["source"]["quote"] for f in body["facts"])
+
+    def test_a_bare_string_is_accepted_where_a_list_is_declared(self):
+        """The schema asks for an array, which is what makes a model batch. A model that sends one
+        id as a string anyway must not get a validation error, or it spends the turn this tool
+        exists to save re-sending the same request."""
+        aid = _stage(TENANT_A, matter_id="M-1")
+        body = _call(TOKEN_A, "get_provenance", {"assertion_ids": aid}).structuredContent
+        assert [f["assertion_id"] for f in body["facts"]] == [aid]
+
+    def test_the_schema_still_asks_for_an_array(self):
+        """Accepting a string must not soften the schema. The array is the only thing telling a
+        model that batching is available at all."""
+        spec = next(t for t in _list_tools() if t.name == "get_provenance")
+        assert spec.inputSchema["properties"]["assertion_ids"]["type"] == "array"
+
+    def test_a_repeated_id_is_not_checked_twice(self):
+        aid = _stage(TENANT_A, matter_id="M-1")
+        body = _call(
+            TOKEN_A, "get_provenance", {"assertion_ids": [aid, aid, aid]}
+        ).structuredContent
+        assert len(body["facts"]) == 1
+
+    def test_an_empty_list_is_refused_rather_than_answered_emptily(self):
+        result = _call(TOKEN_A, "get_provenance", {"assertion_ids": []})
+        assert result.isError
+
+    def test_one_withheld_id_does_not_discard_the_others(self):
+        """The reason a batch reports per id instead of raising. Failing the whole call would
+        throw away facts that did come back and cost another turn to ask for them again, which is
+        the cost this tool was changed to avoid."""
+        mine = _stage(TENANT_A, matter_id="M-1")
+        foreign = _stage(TENANT_B, matter_id="M-B")
+        body = _call(
+            TOKEN_A, "get_provenance", {"assertion_ids": [mine, foreign]}
+        ).structuredContent
+
+        assert body["returned"] == 1
+        by_id = {f["assertion_id"]: f for f in body["facts"]}
+        assert by_id[mine]["visible"] is True
+        assert by_id[foreign]["visible"] is False
+        assert "source" not in by_id[foreign]
+
+    def test_a_withheld_id_in_a_batch_still_leaks_nothing(self):
+        """The batch is a new path to the same read, so the confidentiality property has to hold
+        on it too. A gap for another firm's fact says only that it is not visible."""
+        mine = _stage(TENANT_A, matter_id="M-1")
+        foreign = _stage(TENANT_B, matter_id="M-B")
+        body = _call(
+            TOKEN_A, "get_provenance", {"assertion_ids": [mine, foreign]}
+        ).structuredContent
+        gap = next(f for f in body["facts"] if f["assertion_id"] == foreign)
+
+        assert TENANT_B not in str(gap)
+        assert "M-B" not in str(gap)
+        assert "screened" not in str(gap).lower()
+
+    def test_a_screen_in_a_batch_is_named_the_way_a_single_read_names_it(self):
+        """A screen inside the firm is disclosed either way. Reported in place here rather than
+        raised, so the assertion is that it is still named with its matter and contact."""
+        walled = _stage(TENANT_A, matter_id=WALLED_MATTER)
+        open_one = _stage(TENANT_A, matter_id="M-OPEN")
+        body = _call(
+            TOKEN_WALLED, "get_provenance", {"assertion_ids": [open_one, walled]}
+        ).structuredContent
+        gap = next(f for f in body["facts"] if f["assertion_id"] == walled)
+
+        assert gap["visible"] is False
+        assert gap["screened"] is True
+        assert gap["matter_id"] == WALLED_MATTER
+        assert gap["contact"] == SCREEN_CONTACT
+        assert "source" not in gap
+
+    def test_a_single_unreadable_id_is_still_an_error(self):
+        """Kept deliberately. A call for one fact that cannot be answered returned nothing at all,
+        so an error is the honest result and the screen message reaches the model as one. Only a
+        batch, where something did come back, reports in place."""
+        foreign = _stage(TENANT_B, matter_id="M-B")
+        assert _call(TOKEN_A, "get_provenance", {"assertion_ids": [foreign]}).isError
+
+    def test_ids_over_the_cap_are_named_rather_than_dropped(self):
+        """A truncated batch that looks complete is worse than the turn it saved: the model would
+        report ids as evidenced that were never looked at."""
+        ids = [_stage(TENANT_A, matter_id=f"M-{i}") for i in range(_MAX_PROVENANCE_IDS + 3)]
+        body = _call(TOKEN_A, "get_provenance", {"assertion_ids": ids}).structuredContent
+
+        assert len(body["facts"]) == _MAX_PROVENANCE_IDS
+        assert body["not_checked"] == ids[_MAX_PROVENANCE_IDS:]
+        assert "not_checked" in body["note"]
+
+
 class TestProvenance:
     def test_returns_file_page_and_quote(self):
         """File, page, quote — what a lawyer would use to check it by hand."""
         aid = _stage(TENANT_A, matter_id="M-1")
-        source = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}).structuredContent[
-            "assertion"
-        ]["source"]
+        source = _call(TOKEN_A, "get_provenance", {"assertion_ids": [aid]}).structuredContent[
+            "facts"
+        ][0]["source"]
         assert (source["filename"], source["page"]) == ("skeleton.pdf", 7)
         assert source["quote"] == "the parties agree"
 
     def test_explanation_avoids_jargon(self):
         aid = _stage(TENANT_A, matter_id="M-1", klass=EpistemicClass.EXTRACTED_MODEL)
-        explanation = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}).structuredContent[
-            "explanation"
-        ]
+        explanation = _call(TOKEN_A, "get_provenance", {"assertion_ids": [aid]}).structuredContent[
+            "facts"
+        ][0]["explanation"]
         assert "AI model" in explanation
         assert "epistemic" not in explanation.lower()
 
@@ -705,11 +807,12 @@ class TestProvenance:
         services.review_queue.stage(ctx, [inferred])
 
         body = _call(
-            TOKEN_A, "get_provenance", {"assertion_id": inferred.assertion_id}
+            TOKEN_A, "get_provenance", {"assertion_ids": [inferred.assertion_id]}
         ).structuredContent
-        assert body["rule_id"] == "conflict_check"
-        assert [p["assertion_id"] for p in body["premises"]] == [premise]
-        assert body["premises"][0]["visible"] is True
+        fact = body["facts"][0]
+        assert fact["rule_id"] == "conflict_check"
+        assert [p["assertion_id"] for p in fact["premises"]] == [premise]
+        assert fact["premises"][0]["visible"] is True
 
     def test_screened_premise_is_reported_as_a_named_gap(self):
         """A partial proof tree that looks complete is worse than one that admits a gap, and a
@@ -734,9 +837,9 @@ class TestProvenance:
         services.review_queue.stage(ctx, [inferred])
 
         body = _call(
-            TOKEN_WALLED, "get_provenance", {"assertion_id": inferred.assertion_id}
+            TOKEN_WALLED, "get_provenance", {"assertion_ids": [inferred.assertion_id]}
         ).structuredContent
-        gap = body["premises"][0]
+        gap = body["facts"][0]["premises"][0]
         assert gap["assertion_id"] == walled_premise
         assert gap["visible"] is False
         assert gap["screened"] is True

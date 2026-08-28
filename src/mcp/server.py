@@ -29,7 +29,7 @@ from typing import Annotated, Any
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 
 from src.api.deps import (
     Services,
@@ -104,6 +104,10 @@ _MAX_PREMISE_DEPTH = 6
 
 #: Row cap. An agent asking for everything still gets a bounded response.
 _MAX_ROWS = 200
+
+#: Facts per `get_provenance` call. Batching exists to save turns, so this sits well above what a
+#: single answer cites; it is here because each id can pull a recursive premise tree behind it.
+_MAX_PROVENANCE_IDS = 20
 
 #: What `graph_neighbourhood` says about the id it was handed, per `GraphReader.entity_status`.
 #:
@@ -190,8 +194,8 @@ async def ask(
     a definition a human approved — no AI wrote it, and the same question always returns the
     same number), GRAPH_TRAVERSAL or HYBRID (verified facts above the firm's confidence floor,
     each one traceable). `governed` is false when a model wrote part of the answer; treat such
-    a result as a draft. `assertions_used` lists the facts the answer rests on; pass any of
-    them to `get_provenance` for the document page and quote behind it.
+    a result as a draft. `assertions_used` lists the facts the answer rests on; pass them to
+    `get_provenance` together, in one call, for the document page and quote behind each.
 
     Scoped to the calling user: their firm, and only the matters they may see. An empty
     answer may mean "not permitted for you" rather than "does not exist".
@@ -300,7 +304,7 @@ async def compose(
 
     `blocks` are findings the graph made, applied before any model saw the evidence. A block is
     something to tell your user about, not an omission to work around. `parts[].assertion_ids`
-    are ids for `get_provenance`.
+    are ids for `get_provenance`, which takes them all in one call.
 
     Scoped to the calling user's firm and matters, exactly as `ask` is.
 
@@ -631,67 +635,136 @@ def _assertion_out(a: Any, floor: float) -> dict[str, Any]:
     }
 
 
+def _as_list(value: Any) -> Any:
+    """Accept a bare id where a list is declared.
+
+    The schema asks for an array, which is what steers a model into batching. One that sends a
+    single id as a string anyway would otherwise get a validation error back and spend the turn
+    this tool exists to save.
+    """
+    return [value] if isinstance(value, str) else value
+
+
 async def get_provenance(
     ctx: Context,
-    assertion_id: Annotated[
-        str,
+    assertion_ids: Annotated[
+        list[str],
+        BeforeValidator(_as_list),
         Field(
             description=(
-                "The id of ONE FACT, as a 32-character hex string like "
-                "'1e9b2826e081e7b88da6789efc6033a6'. Take it from `assertions_used` on an `ask` "
-                "result, `parts[].assertion_ids` on a `compose` result, or `assertion_id` on a "
-                "row from `search_assertions` or `graph_neighbourhood`. This is NOT an entity id: "
-                "'party:acme-corporation' names a company, not a claim about one, and there is no "
-                "provenance for a company. To find what is known about an entity, call "
-                "`graph_neighbourhood` with it instead."
+                "The ids of the FACTS to check, each a 32-character hex string like "
+                "'1e9b2826e081e7b88da6789efc6033a6'. Pass every id you are about to rely on in "
+                f"ONE call, up to {_MAX_PROVENANCE_IDS}: one call for six facts costs a single "
+                "turn where six calls cost six, and a run has a turn budget. Take the ids from "
+                "`assertions_used` on an `ask` result, `parts[].assertion_ids` on a `compose` "
+                "result, or `assertion_id` on a row from `search_assertions` or "
+                "`graph_neighbourhood`. Each one is NOT an entity id: 'party:acme-corporation' "
+                "names a company, not a claim about one, and there is no provenance for a "
+                "company. To find what is known about an entity, call `graph_neighbourhood` with "
+                "it instead."
             )
         ),
     ],
 ) -> dict[str, Any]:
-    """Show why the system believes one fact — the document page and quote, or the proof tree.
+    """Show why the system believes these facts — the document page and quote, or the proof tree.
 
     TRUST: this is the audit trail itself. For an extraction it returns the filename, the
     page and the verbatim quote, which is what a person would use to check it by hand: open
     that file at that page and search for that sentence. For an inference it returns the
     premise tree, recursively, so a derived fact unwinds into the facts it rests on.
 
-    Call this before repeating any fact to a client. `explanation` is written for a
-    non-engineer and can be relayed as-is.
+    Batch it. `facts` comes back in the order you asked, one entry per id, so checking everything
+    an answer rests on is one call rather than one per fact.
+
+    Worth knowing before you call: a row from `search_assertions` or `graph_neighbourhood`
+    already carries `source` and `epistemic_class`, so re-fetching an extraction from one of
+    those buys nothing. `ask` and `compose` report the facts they used as bare ids, and an id is
+    not evidence. An INFERRED fact always needs this, because no other tool returns its premises.
 
     An id that does not exist or belongs to another firm produces the same answer, which is
     deliberate — a firm learns nothing about another firm. An id on a matter your user is
     screened from says so, naming the matter and a contact: a screen inside a firm is
     documented and acknowledged, and relaying it is what stops a lawyer reading a filtered
     result as a clean one.
+
+    Read `visible` on every entry. False means that fact was withheld, and `screened` with a
+    `matter_id` and a `contact` means withheld by an ethical wall rather than absent.
     """
     services, auth_ctx = _principal(ctx)
     floor = services.settings_for(auth_ctx.tenant_id).min_confidence_floor
 
-    record = _fetch(services, auth_ctx, assertion_id)
-    a = record.assertion
+    # Deduplicated before the cap, so a model that repeats an id does not spend its allowance on
+    # the same fact twice.
+    ids = list(dict.fromkeys(assertion_ids))
+    if not ids:
+        raise ToolError("assertion_ids must name at least one fact")
+    over = ids[_MAX_PROVENANCE_IDS:]
+    ids = ids[:_MAX_PROVENANCE_IDS]
 
-    return {
-        "assertion": _assertion_out(a, floor),
-        "explanation": _explain(a),
-        "rule_id": a.rule_id,
-        "rule_version": a.rule_version,
-        "premises": _premise_tree(services, auth_ctx, a.premises, floor, depth=0),
+    facts: list[dict[str, Any]] = []
+    for aid in ids:
+        try:
+            record = services.review_queue.fetch(auth_ctx, aid)
+        except (ScopeViolation, AssertionNotFound) as e:
+            # A call for one fact that cannot be answered returned nothing at all, so it is an
+            # error and the screen message reaches the model as one. A call for several is
+            # different: failing the batch would discard the facts that did come back and cost
+            # another turn to ask for them again, so a withheld one is reported in place.
+            if len(ids) == 1:
+                raise _provenance_refusal(auth_ctx, aid, e) from e
+            facts.append(_gap(aid, e))
+            continue
+        a = record.assertion
+        facts.append(
+            {
+                **_assertion_out(a, floor),
+                "visible": True,
+                "explanation": _explain(a),
+                "rule_id": a.rule_id,
+                "rule_version": a.rule_version,
+                "premises": _premise_tree(services, auth_ctx, a.premises, floor, depth=0),
+            }
+        )
+
+    out: dict[str, Any] = {
+        "facts": facts,
+        "requested": len(ids),
+        "returned": sum(1 for f in facts if f.get("visible")),
     }
+    if over:
+        # Said rather than silently dropped: a truncated batch that looks complete is a fact the
+        # model will report as checked when it was never looked at.
+        out["not_checked"] = over
+        out["note"] = (
+            f"Only the first {_MAX_PROVENANCE_IDS} ids were checked. The ids in `not_checked` "
+            "were not, so do not report them as evidenced. Call again with them."
+        )
+    return out
 
 
-def _fetch(services: Services, auth_ctx: AuthContext, assertion_id: str) -> Any:
-    try:
-        return services.review_queue.fetch(auth_ctx, assertion_id)
-    except ScopeViolation as e:
-        if e.is_screen:
-            logger.info(
-                "mcp provenance screened tenant=%s matter=%s", auth_ctx.tenant_id, e.matter_id
-            )
-            raise ToolError(str(e)) from e
-        raise ToolError(_UNREACHABLE) from e
-    except AssertionNotFound as e:
-        logger.info("mcp provenance miss tenant=%s id=%s", auth_ctx.tenant_id, assertion_id)
-        raise ToolError(_UNREACHABLE) from e
+def _provenance_refusal(auth_ctx: AuthContext, assertion_id: str, e: Exception) -> ToolError:
+    """The refusal for a fact this caller cannot have.
+
+    A miss and another tenant's id are told apart nowhere in the message, deliberately. A screen
+    is the one case that says more, because a screen inside a firm is documented.
+    """
+    if isinstance(e, ScopeViolation) and e.is_screen:
+        logger.info("mcp provenance screened tenant=%s matter=%s", auth_ctx.tenant_id, e.matter_id)
+        return ToolError(str(e))
+    logger.info("mcp provenance miss tenant=%s id=%s", auth_ctx.tenant_id, assertion_id)
+    return ToolError(_UNREACHABLE)
+
+
+def _gap(assertion_id: str, e: Exception) -> dict[str, Any]:
+    """A fact that is present but withheld.
+
+    Shared with the premise tree so a gap reads the same wherever it turns up, and always admits
+    to being a gap: a partial result that looks complete is worse than one owning up to a hole.
+    """
+    gap: dict[str, Any] = {"assertion_id": assertion_id, "visible": False}
+    if isinstance(e, ScopeViolation) and e.is_screen:
+        gap |= {"screened": True, "matter_id": e.matter_id, "contact": e.contact, "note": str(e)}
+    return gap
 
 
 def _premise_tree(
@@ -709,19 +782,11 @@ def _premise_tree(
     for pid in premise_ids:
         try:
             record = services.review_queue.fetch(auth_ctx, pid)
-        except ScopeViolation as e:
-            # A premise the caller may not see. Reported as present-but-withheld rather
-            # than dropped: a partial proof tree that looks complete is worse than one
-            # that admits a gap. A screen also says which matter and who to ask, so the
-            # gap is actionable rather than a dead end.
-            gap: dict[str, Any] = {"assertion_id": pid, "visible": False}
-            if e.is_screen:
-                gap |= {"screened": True, "matter_id": e.matter_id, "contact": e.contact}
-                gap["note"] = str(e)
-            out.append(gap)
-            continue
-        except AssertionNotFound:
-            out.append({"assertion_id": pid, "visible": False})
+        except (ScopeViolation, AssertionNotFound) as e:
+            # A premise the caller may not see, reported as present-but-withheld rather than
+            # dropped. A screen also says which matter and who to ask, so the gap is actionable
+            # rather than a dead end.
+            out.append(_gap(pid, e))
             continue
         out.append(
             {
@@ -781,7 +846,10 @@ async def graph_neighbourhood(
                 "assemble one from a kind plus a name out of the question: the slug belongs to a "
                 "specific stored entity, so a constructed id matches nothing and this tool cannot "
                 "tell you that it did not exist. If you have a name and no id, search first. "
-                "`get_provenance` is the other id-taking tool and wants a hex assertion id."
+                "`get_provenance` is the other id-taking tool and wants hex assertion ids. Every "
+                "edge here already carries its `source` and `epistemic_class`, so an extraction "
+                "on this result needs no second call; an INFERRED edge still does, for its "
+                "premises."
             )
         ),
     ],

@@ -27,6 +27,7 @@ from src.agent.events import (
     result_kind_for,
 )
 from src.agent.loop import CAPPED_REASONS, RetrievalAgent
+from src.agent.prompt import SYSTEM_PROMPT
 from src.api.app import create_app
 from src.config import AuthConfig, GraphConfig, GroundworkConfig
 
@@ -323,6 +324,36 @@ class TestTheCallerCanPickTheSearchTool:
         _agent([("compose", {}, OK)], captured).run("q")
 
         assert "The search tool for this run" not in captured["system_prompt"]
+
+
+class TestTheModelIsToldTheBudgetIsFinite:
+    """Nothing warns the model as its turns run down: the cap is Strands' own `Limits`, which just
+    stops the run. So the prompt is the only place it can learn, and a traced run spent nine of
+    twelve turns re-walking one node at three depths and fetching six provenances one at a time,
+    then hit the wall with the evidence gathered and no answer written.
+
+    Asserting on prose is weak, and it is what carries these two instructions.
+    """
+
+    def test_the_turn_budget_is_stated(self):
+        assert "dozen" in SYSTEM_PROMPT
+        assert "Nothing warns you" in SYSTEM_PROMPT
+
+    def test_provenance_is_not_asked_for_on_every_fact(self):
+        """The rule it used to give was "before you repeat what that assertion says", which costs
+        one turn per fact and made the budget depend on how many facts a search found. A run that
+        searched well was punished for it."""
+        assert "before you repeat what that assertion says" not in SYSTEM_PROMPT
+        assert "INFERRED" in SYSTEM_PROMPT
+
+    def test_batching_provenance_is_named_as_the_cheaper_call(self):
+        step = SYSTEM_PROMPT.split("3. `get_provenance`")[1].split("4. `graph_neighbourhood`")[0]
+        assert "takes a list" in step
+
+    def test_walking_one_node_twice_is_ruled_out(self):
+        """Depth 3 contains depth 1 and 2, and the traced run walked all three."""
+        step = SYSTEM_PROMPT.split("4. `graph_neighbourhood`")[1].split("\n5.")[0]
+        assert "depth 3" in step
 
 
 class TestItStops:
