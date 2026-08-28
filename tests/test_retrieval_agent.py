@@ -57,6 +57,16 @@ class _ToolEvent:
         self.cancel_tool = None
 
 
+class _Tool:
+    """Stands in for Strands' `MCPAgentTool`, which carries its name on `tool_name`."""
+
+    def __init__(self, name: str) -> None:
+        self.tool_name = name
+
+    def __repr__(self) -> str:
+        return f"_Tool({self.tool_name!r})"
+
+
 class _Client:
     """Stands in for `MCPClient`: a context manager exposing the tool list."""
 
@@ -66,18 +76,26 @@ class _Client:
     def __exit__(self, *_: object) -> bool:
         return False
 
-    def list_tools_sync(self) -> list[str]:
-        return ["compose", "ask", "get_provenance"]
+    def list_tools_sync(self) -> list[_Tool]:
+        return [_Tool(n) for n in ("compose", "ask", "get_provenance", "describe_ontology")]
 
 
-def _scripted(script: list[tuple[str, dict[str, Any], Any]]) -> Any:
+def _scripted(
+    script: list[tuple[str, dict[str, Any], Any]], captured: dict[str, Any] | None = None
+) -> Any:
     """An agent factory whose model calls exactly these tools, in order.
 
     Stops early when a `before` hook cancels, which is how the SDK behaves and is what makes
     the cap assertions meaningful rather than decorative.
+
+    `captured` receives the tool list and system prompt the loop built, which is the only place a
+    test can see what the model was actually offered.
     """
 
     def factory(*, tools: list[Any], system_prompt: str, hooks: list[Any]) -> Any:
+        if captured is not None:
+            captured["tools"] = [getattr(t, "tool_name", t) for t in tools]
+            captured["system_prompt"] = system_prompt
         registry = _Registry()
         for hook in hooks:
             hook.register_hooks(registry)
@@ -100,13 +118,17 @@ def _scripted(script: list[tuple[str, dict[str, Any], Any]]) -> Any:
     return factory
 
 
-def _agent(script: list[tuple[str, dict[str, Any], Any]], **over: Any) -> RetrievalAgent:
+def _agent(
+    script: list[tuple[str, dict[str, Any], Any]],
+    captured: dict[str, Any] | None = None,
+    **over: Any,
+) -> RetrievalAgent:
     return RetrievalAgent(
         tenant_id=TENANT,
         bearer="token-for-the-user",
         mcp_url="http://mcp.test/mcp",
         model_id="some.model",
-        agent_factory=_scripted(script),
+        agent_factory=_scripted(script, captured),
         client_factory=_Client,
         **over,
     )
@@ -188,6 +210,119 @@ class TestTheEventContract:
         assert stream.turn == 1
         stream.tool_result("ask", {})
         assert stream.turn == 1
+
+
+class TestSomethingHasToHaveSearched:
+    """`ask` and `compose` are the only tools that search, and a run that called neither has
+    produced prose with nothing under it.
+
+    Worth its own class because this failure is invisible everywhere else: the run finishes
+    normally, `stop_reason` is `end_turn`, no tool errored, and the answer reads as confidently as
+    a grounded one. It happened -- an agent called `describe_ontology`, guessed an entity id,
+    walked the graph with it and reported the guess back as an existing customer.
+    """
+
+    def test_a_run_that_only_described_the_system_says_it_searched_nothing(self):
+        result = _agent(
+            [
+                ("describe_ontology", {}, OK),
+                ("graph_neighbourhood", {"node_id": "Customer:Ada"}, OK),
+            ]
+        ).run("who is Ada")
+
+        assert result.searched is False
+        assert result.warnings, "a run with no retrieval behind it has to say so"
+        # Not a cap and not an error: nothing else on the result would betray it.
+        assert result.stop_reason == "end_turn"
+        assert not result.was_capped
+        assert result.to_dict()["searched"] is False
+
+    @pytest.mark.parametrize("tool", ["ask", "compose"])
+    def test_either_search_tool_counts(self, tool: str):
+        result = _agent([("describe_ontology", {}, OK), (tool, {}, OK)]).run("q")
+        assert result.searched is True
+        assert result.warnings == []
+
+    def test_an_empty_search_still_counts_as_having_looked(self):
+        """"We looked and found nothing" is an answer about the corpus. Only "we never looked" is
+        this defect, and conflating them would put a warning on a perfectly good empty result."""
+        empty = {"status": "success", "content": [{"json": {"lanes_run": [], "parts": []}}]}
+        result = _agent([("compose", {}, empty)]).run("q")
+
+        assert result.searched is True
+        assert result.warnings == []
+
+    def test_a_search_that_failed_did_not_search(self):
+        result = _agent([("compose", {}, BAD)]).run("q")
+        assert result.searched is False
+
+    def test_a_search_cancelled_by_a_cap_did_not_search(self):
+        """The deadline cancels the call before it runs, so nothing was searched. The run reports
+        both facts: the cap that stopped it, and that no evidence was gathered."""
+        result = _agent([("compose", {}, OK)], deadline_s=-1).run("q")
+
+        assert result.stop_reason == "deadline"
+        assert result.searched is False
+
+
+class TestTheCallerCanPickTheSearchTool:
+    """A choice enforced by withholding the other tool, not by asking the model to prefer one.
+
+    Prose loses: a tool description sits closer to the decision than the system prompt does, which
+    is how a run told to use `compose` reached for `graph_neighbourhood` instead.
+    """
+
+    def test_choosing_ask_takes_compose_away(self):
+        captured: dict[str, Any] = {}
+        _agent([("ask", {}, OK)], captured, retrieval_tool="ask").run("q")
+
+        assert "ask" in captured["tools"]
+        assert "compose" not in captured["tools"]
+
+    def test_choosing_compose_takes_ask_away(self):
+        captured: dict[str, Any] = {}
+        _agent([("compose", {}, OK)], captured, retrieval_tool="compose").run("q")
+
+        assert "compose" in captured["tools"]
+        assert "ask" not in captured["tools"]
+
+    def test_nothing_else_is_withheld(self):
+        """Only the other *search* tool goes. Withholding `get_provenance` would leave the agent
+        quoting assertion ids it has no way to check."""
+        captured: dict[str, Any] = {}
+        _agent([("ask", {}, OK)], captured, retrieval_tool="ask").run("q")
+
+        assert "get_provenance" in captured["tools"]
+        assert "describe_ontology" in captured["tools"]
+
+    def test_no_choice_offers_both(self):
+        captured: dict[str, Any] = {}
+        _agent([("compose", {}, OK)], captured).run("q")
+
+        assert {"ask", "compose"} <= set(captured["tools"])
+
+    def test_an_unrecognised_choice_fails_open(self):
+        """A typo must not withhold both. An answer with no search behind it is the failure this
+        whole mechanism exists to prevent, so it cannot be the fallback."""
+        captured: dict[str, Any] = {}
+        _agent([("compose", {}, OK)], captured, retrieval_tool="ompose").run("q")
+
+        assert {"ask", "compose"} <= set(captured["tools"])
+
+    def test_the_prompt_names_the_chosen_tool(self):
+        """Withholding alone leaves the model hunting for a tool it cannot see, so it is also
+        told the choice was made and by whom."""
+        captured: dict[str, Any] = {}
+        _agent([("ask", {}, OK)], captured, retrieval_tool="ask").run("q")
+
+        assert "`ask`" in captured["system_prompt"]
+        assert "chosen" in captured["system_prompt"]
+
+    def test_no_choice_leaves_the_prompt_alone(self):
+        captured: dict[str, Any] = {}
+        _agent([("compose", {}, OK)], captured).run("q")
+
+        assert "The search tool for this run" not in captured["system_prompt"]
 
 
 class TestItStops:
@@ -299,6 +434,20 @@ class TestTheRoutesRefuseBeforeTheyPretend:
         r = client.post(f"/api/tenants/{TENANT}/retrieval/runs", json={"question": "hi"})
         assert r.status_code == 503
         assert "MCP_URL" in r.json()["detail"]
+
+    def test_the_tool_choice_reaches_the_loop(self, client):
+        """The route accepts three values and hands the loop the one it understands. Asserted at
+        the seam because the field is useless if it stops at the request model."""
+        from src.api.routes_retrieval import RunRequest, _tool_choice
+
+        assert RunRequest(question="q").tool == "auto"
+        assert _tool_choice(RunRequest(question="q").tool) == ""
+        assert _tool_choice(RunRequest(question="q", tool="compose").tool) == "compose"
+
+        r = client.post(
+            f"/api/tenants/{TENANT}/retrieval/runs", json={"question": "hi", "tool": "sideways"}
+        )
+        assert r.status_code == 422, "an unknown tool is a bad request, not a silent auto"
 
     def test_a_bad_token_closes_the_socket_before_accepting_it(self, client):
         """Closed before accept, so an unauthorised caller cannot tell a bad token from a wrong

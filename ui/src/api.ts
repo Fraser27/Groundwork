@@ -1099,7 +1099,14 @@ export interface RetrievalEvent {
   stop_reason?: string
   turns?: number
   was_capped?: boolean
+  /** On `run_finished`: whether ask or compose ran at all. False means the prose has nothing
+   *  under it, which is not a capped run and not an error, so nothing else would reveal it. */
+  searched?: boolean
+  warnings?: string[]
 }
+
+/** Which search tool a run may use. `auto` is the agent's own choice between the two. */
+export type RetrievalTool = 'auto' | 'ask' | 'compose'
 
 /** A whole run, as the POST route returns it. */
 export interface RetrievalRun {
@@ -1762,6 +1769,9 @@ export const api = {
     question: string,
     onEvent: (event: RetrievalEvent) => void,
     onError?: (detail: string) => void,
+    /** Which search tool to allow. `auto` leaves it to the agent; the others withhold the one
+     *  not chosen, so the choice binds rather than suggests. */
+    tool: RetrievalTool = 'auto',
   ): (() => void) => {
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const token = isAuthEnabled() ? getAccessToken() : ''
@@ -1774,7 +1784,7 @@ export const api = {
     let sawEvent = false
     try {
       socket = new WebSocket(url)
-      socket.onopen = () => socket?.send(JSON.stringify({ question }))
+      socket.onopen = () => socket?.send(JSON.stringify({ question, tool }))
       socket.onmessage = (e) => {
         try {
           sawEvent = true

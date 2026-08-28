@@ -22,7 +22,7 @@ to the graph.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import anyio
 from fastapi import (
@@ -37,6 +37,7 @@ from fastapi import (
 from pydantic import BaseModel, Field
 
 from src.agent.loop import AgentUnavailable, RetrievalAgent
+from src.agent.prompt import RETRIEVAL_TOOLS
 from src.api.deps import Services, ServicesDep, TenantDep, get_services
 from src.api.events import get_event_hub
 from src.auth import AuthError, bearer_from_header
@@ -50,9 +51,26 @@ router = APIRouter(tags=["retrieval"])
 
 class RunRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
+    tool: Literal["auto", "ask", "compose"] = "auto"
+    """Which search tool to allow. `auto` leaves the choice to the model.
+
+    A choice here is enforced by withholding the other one from the agent's tool list, so it
+    binds rather than suggests."""
 
 
-def _agent_for(services: Services, tenant_id: str, bearer: str) -> RetrievalAgent:
+def _tool_choice(tool: str) -> str:
+    """The value `RetrievalAgent` wants: a tool name, or empty for the model's own choice.
+
+    Anything unrecognised normalises to the model's choice. The websocket takes this from a client
+    message rather than a validated body, and the safe reading of a value nobody understands is
+    "no constraint" -- a constraint built from a typo could withhold both search tools.
+    """
+    return tool if tool in RETRIEVAL_TOOLS else ""
+
+
+def _agent_for(
+    services: Services, tenant_id: str, bearer: str, tool: str = "auto"
+) -> RetrievalAgent:
     """Build the loop, or refuse with the reason.
 
     503 rather than a stub answer: an agent that cannot reach its tools would produce prose
@@ -76,6 +94,7 @@ def _agent_for(services: Services, tenant_id: str, bearer: str) -> RetrievalAgen
         mcp_url=mcp_url,
         model_id=model_id,
         region=services.config.models.region,
+        retrieval_tool=_tool_choice(tool),
     )
 
 
@@ -92,7 +111,9 @@ async def run_retrieval(
     background task whose result nothing reliably collects, since a task dies with the container.
     """
     ctx, _ = principal
-    agent = _agent_for(services, ctx.tenant_id, bearer_from_header(authorization) or "")
+    agent = _agent_for(
+        services, ctx.tenant_id, bearer_from_header(authorization) or "", body.tool
+    )
     try:
         result = await anyio.to_thread.run_sync(agent.run, body.question)
     except AgentUnavailable as e:
@@ -140,6 +161,10 @@ async def retrieval_events(websocket: WebSocket, tenant: str, token: str = "") -
         if not question:
             await websocket.send_json({"kind": "run_failed", "error": "no question"})
             return
+        # Set after the handshake rather than passed to `_agent_for` above, because the choice
+        # arrives with the question. The earlier build is the configuration check, which has to
+        # happen before `accept` so a misconfigured tenant gets a close reason instead of a socket.
+        agent.retrieval_tool = _tool_choice(str(first.get("tool", "")))
 
         # The run is driven in a worker thread and its events are relayed here. Strands' API is
         # synchronous, so running it on this loop would block the send that delivers its events.

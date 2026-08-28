@@ -729,11 +729,15 @@ async def graph_neighbourhood(
         str,
         Field(
             description=(
-                "An ENTITY id, written 'kind:slug' -- 'party:calder-shipping-ag', "
-                "'matter:NTL-2026-0114', 'authority:the-marisol-2025-uksc-14'. The kinds this "
-                "firm uses come from `describe_ontology`. This is the tool for asking what is "
-                "known about a thing; `get_provenance` is for asking why one claim is believed, "
-                "and takes a hex assertion id rather than an entity id."
+                "An ENTITY id that a previous tool result gave you, written '<kind>:<slug>' with "
+                "the kind lowercased -- `describe_ontology` declares the kinds capitalised, so a "
+                "kind it calls 'Widget' appears here as 'widget:'. This tenant's kinds are "
+                "whatever that tool lists and no others. Take ids from the `subject_id` and "
+                "`object_id` of a row `ask`, `compose` or `search_assertions` returned. Do NOT "
+                "assemble one from a kind plus a name out of the question: the slug belongs to a "
+                "specific stored entity, so a constructed id matches nothing and this tool cannot "
+                "tell you that it did not exist. If you have a name and no id, search first. "
+                "`get_provenance` is the other id-taking tool and wants a hex assertion id."
             )
         ),
     ],
@@ -744,13 +748,18 @@ async def graph_neighbourhood(
             le=3,
             description=(
                 "How many hops out to walk. 1 is direct relationships only. 2 is the useful "
-                "default for a conflict question, because the fact in the middle -- one party "
-                "owning a stake in another -- is two hops from either end. 3 is capped."
+                "default whenever the fact you need sits between two entities rather than on "
+                "either of them -- one owning a stake in the other, one having been transferred "
+                "to the other -- because such a fact is two hops from each end. 3 is capped."
             ),
         ),
     ] = 2,
 ) -> dict[str, Any]:
-    """Show the verified relationships around one entity, walking out a few hops.
+    """Walk out from an entity id you already have. Not a way to find one.
+
+    This takes an id and follows its edges. It does no matching on names, so it cannot answer
+    "who is X" from the word X -- `ask` and `compose` are the tools that search. Reaching here
+    with an id you built yourself is the one way to get a confident wrong answer out of it.
 
     TRUST: filtered. Only edges the user may see, above the firm's confidence floor and
     signed off where sign-off was required — so a narrower view than `search_assertions`,
@@ -762,8 +771,9 @@ async def graph_neighbourhood(
     whether an ethical screen is narrowing what you can see here.
 
     Args:
-        node_id: Entity id, e.g. `party:acme-corporation` or `document:d1`. `ask` and
-            `search_assertions` return these as `subject_id` and `object_id`.
+        node_id: Entity id, `<kind>:<slug>` with the kind lowercased from whatever
+            `describe_ontology` declares. `ask` and `search_assertions` return these as
+            `subject_id` and `object_id`; do not construct one.
         depth: Hops to follow, 1-3. Deeper traversals fan out and pull in weakly related
             matters.
     """

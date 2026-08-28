@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
-import { api, type QueryPassage, type RetrievalEvent } from '../api'
+import { api, type QueryPassage, type RetrievalEvent, type RetrievalTool } from '../api'
 import { getTenantId } from '../auth'
 import DocumentViewer from '../components/DocumentViewer'
 import { FactsUsed, PassagesCited } from '../components/EvidencePanels'
@@ -33,12 +33,39 @@ function kindLabel(event: RetrievalEvent): string {
   return event.result_kind ?? ''
 }
 
+/**
+ * The two tools that search, and the option to let the agent pick.
+ *
+ * Offered because the difference is a governance one rather than a performance one, and it is the
+ * reader's call: `ask` commits to a single tier and reports one confidence for it, `compose` runs
+ * every permitted lane and refuses to average them. Picking one withholds the other from the
+ * agent, so the run cannot quietly answer through the tool that was not chosen.
+ */
+const TOOLS: { value: RetrievalTool; label: string; help: string }[] = [
+  {
+    value: 'auto',
+    label: 'Auto',
+    help: 'The agent chooses. It is told to call ask when the question names a governed metric it has already listed, and compose otherwise.',
+  },
+  {
+    value: 'ask',
+    label: 'Ask',
+    help: 'One tier only: the first that can answer, with one confidence for it. Exact when a governed metric matches, and narrow when none does, because nothing else is searched.',
+  },
+  {
+    value: 'compose',
+    label: 'Compose',
+    help: 'Every lane the tenant permits, kept apart rather than merged: a compiled metric, quoted passages and graph facts are different kinds of claim and one confidence over them would be invented. Slower, and it reports which lanes did not run.',
+  },
+]
+
 export default function Retrieval() {
   const tenant = getTenantId()
   // Declared by the tenant's ontology pack, so a retail deployment is not invited to ask about a
   // conflict of interest. Empty for a pack that declares none, and nothing is then offered.
   const examples = useExampleQuestions()
   const [question, setQuestion] = useState('')
+  const [tool, setTool] = useState<RetrievalTool>('auto')
   const [events, setEvents] = useState<RetrievalEvent[]>([])
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
@@ -75,6 +102,7 @@ export default function Retrieval() {
         setError(detail)
         setRunning(false)
       },
+      tool,
     )
   }
 
@@ -120,6 +148,27 @@ export default function Retrieval() {
               disabled={running}
             />
             <p className="hint">Cmd/Ctrl + Enter to run.</p>
+          </div>
+          <div className="form-group">
+            <label>
+              Search with
+              <FieldHelp text="Which of the two searching tools the agent may use. Ask and compose are the only tools that consult the metrics, the graph, the documents and the catalog; everything else the agent calls either describes the vocabulary or follows up on something these returned. Choosing one here withholds the other, so the run cannot answer through a tool you did not pick." />
+            </label>
+            <div className="segmented" role="group" aria-label="Search tool">
+              {TOOLS.map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  className={`segmented-option${tool === t.value ? ' is-active' : ''}`}
+                  aria-pressed={tool === t.value}
+                  title={t.help}
+                  disabled={running}
+                  onClick={() => setTool(t.value)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
           </div>
           <button className="btn btn-primary" onClick={run} disabled={running || !question.trim()}>
             {running ? 'Running…' : 'Run agent'}
@@ -296,8 +345,19 @@ export default function Retrieval() {
                   Answer
                   <FieldHelp text="Written by the agent over the evidence above. Not governed: no approved definition produced it and no rule checked it, so read it against the tool results rather than instead of them." />
                 </h3>
-                <span className="card-note">the agent's own words, not governed</span>
+                <span className="card-note">
+                  {finished.searched === false
+                    ? 'nothing was searched'
+                    : "the agent's own words, not governed"}
+                </span>
               </div>
+              {/* Above the prose, because a reader who has already read it has been misled. The
+                  agent's own confident sentences are exactly what this contradicts. */}
+              {(finished.warnings ?? []).map((w) => (
+                <div key={w} className="banner banner-warn" style={{ margin: '0 0 12px' }}>
+                  <span>{w}</span>
+                </div>
+              ))}
               <p style={{ margin: 0, lineHeight: 1.6 }}>{finished.answer}</p>
             </div>
           )}

@@ -31,7 +31,7 @@ from typing import Any
 from uuid import uuid4
 
 from src.agent.events import RUN_ID_HEADER, EventStream
-from src.agent.prompt import SYSTEM_PROMPT
+from src.agent.prompt import RETRIEVAL_TOOLS, system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,14 @@ MAX_CONSECUTIVE_TOOL_ERRORS = 3
 #: Which stop reasons mean we intervened rather than the model finishing.
 CAPPED_REASONS = frozenset({"turn_limit", "deadline", "compose_limit", "tool_errors"})
 
+#: Said on the answer when the run searched nothing. Not a stop reason: the model finished
+#: normally and produced prose, which is exactly what makes this worth saying out loud.
+NO_RETRIEVAL_WARNING = (
+    "Nothing was searched. This run called neither ask nor compose, so the answer below rests on "
+    "the agent's own prose and on tools that describe the system rather than query it. Treat it as "
+    "unevidenced and run the question again."
+)
+
 
 class AgentUnavailable(RuntimeError):
     """The loop cannot run: no model configured, or the MCP server is unreachable."""
@@ -66,10 +74,16 @@ class RunResult:
     answer: str = ""
     stop_reason: str = ""
     turns: int = 0
+    searched: bool = True
+    """Whether `ask` or `compose` ran. False means the prose has no retrieval under it."""
 
     @property
     def was_capped(self) -> bool:
         return self.stop_reason in CAPPED_REASONS
+
+    @property
+    def warnings(self) -> list[str]:
+        return [] if self.searched else [NO_RETRIEVAL_WARNING]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -79,6 +93,10 @@ class RunResult:
             "stop_reason": self.stop_reason,
             "turns": self.turns,
             "was_capped": self.was_capped,
+            "searched": self.searched,
+            # Same key the query tools use for a caveat on the answer, so the UI has one place
+            # that renders "here is why to distrust this" rather than one per producer.
+            "warnings": self.warnings,
             "max_turns": MAX_TURNS,
             "note": (
                 "Every tool call and its raw result are in `events`. The prose is the agent's "
@@ -107,11 +125,19 @@ class RetrievalAgent:
     client_factory: Any = None
     """Injected in tests. Returns an object with Strands' `MCPClient` shape."""
 
+    retrieval_tool: str = ""
+    """Which search tool the caller picked, or empty to let the model choose.
+
+    Enforced by withholding the other one rather than by asking the model to prefer this one. A
+    tool description sits closer to the decision than the system prompt does and wins against it,
+    so a preference expressed only in prose is a preference the model is free to lose."""
+
     max_turns: int = MAX_TURNS
     deadline_s: float = RUN_DEADLINE_S
     max_compose_calls: int = MAX_COMPOSE_CALLS
 
     _compose_calls: int = field(default=0, init=False)
+    _searched: bool = field(default=False, init=False)
     _error_streak: int = field(default=0, init=False)
     _stop: str = field(default="", init=False)
 
@@ -135,7 +161,7 @@ class RetrievalAgent:
         try:
             client = self._client(run_id)
             with client:
-                tools = client.list_tools_sync()
+                tools = self._offer(client.list_tools_sync())
                 agent = self._agent(tools, stream, started)
                 result = agent(question)
                 answer = _text_of(result)
@@ -160,13 +186,16 @@ class RetrievalAgent:
             stop_reason=stop,
             turns=stream.turn,
             was_capped=stop in CAPPED_REASONS,
+            searched=self._searched,
+            warnings=[] if self._searched else [NO_RETRIEVAL_WARNING],
         )
         logger.info(
-            "retrieval run %s tenant=%s turns=%d stop=%s",
+            "retrieval run %s tenant=%s turns=%d stop=%s searched=%s",
             run_id,
             self.tenant_id,
             stream.turn,
             stop,
+            self._searched,
         )
         return RunResult(
             run_id=run_id,
@@ -174,7 +203,25 @@ class RetrievalAgent:
             answer=answer,
             stop_reason=stop,
             turns=stream.turn,
+            searched=self._searched,
         )
+
+    def _offer(self, tools: list[Any]) -> list[Any]:
+        """The tools this run may use, with the unchosen search tool removed.
+
+        The filter is here rather than at the MCP server because the choice belongs to one run,
+        not to the token: the same user asking the same question a second time may want the other
+        instrument. Only the *other search tool* is dropped, never anything else -- withholding
+        `get_provenance` would leave the agent quoting assertion ids it cannot check.
+
+        An unrecognised value drops nothing. Failing open matters more than honouring a typo:
+        refusing every search tool would produce a confident answer with nothing under it, which
+        is the failure this whole change exists to close.
+        """
+        if self.retrieval_tool not in RETRIEVAL_TOOLS:
+            return tools
+        drop = RETRIEVAL_TOOLS - {self.retrieval_tool}
+        return [t for t in tools if _tool_name(t) not in drop]
 
     def _client(self, run_id: str) -> Any:
         if self.client_factory is not None:
@@ -198,8 +245,9 @@ class RetrievalAgent:
 
     def _agent(self, tools: list[Any], stream: EventStream, started: float) -> Any:
         hooks = [_TraceHooks(self, stream, started)]
+        prompt = system_prompt(self.retrieval_tool)
         if self.agent_factory is not None:
-            return self.agent_factory(tools=tools, system_prompt=SYSTEM_PROMPT, hooks=hooks)
+            return self.agent_factory(tools=tools, system_prompt=prompt, hooks=hooks)
 
         from strands import Agent
         from strands.models import BedrockModel
@@ -209,7 +257,7 @@ class RetrievalAgent:
         agent = Agent(
             model=model,
             tools=tools,
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=prompt,
             hooks=hooks,
             # Silences the SDK's stdout printer. The events are the output.
             callback_handler=None,
@@ -274,6 +322,11 @@ class _TraceHooks:
             self._agent._error_streak += 1
         else:
             self._agent._error_streak = 0
+            # Recorded here rather than on the way in, because a search that was cancelled by a
+            # cap or refused outright did not search. An empty result still counts: "we looked
+            # and found nothing" is a real answer, and only "we never looked" is the defect.
+            if tool in RETRIEVAL_TOOLS:
+                self._agent._searched = True
 
         self._stream.tool_result(
             tool,
@@ -297,6 +350,17 @@ _CANCEL_MESSAGES = {
         "including that the calls failed."
     ),
 }
+
+
+def _tool_name(tool: Any) -> str:
+    """A tool's name, however the SDK wrapped it. `tool_name` on Strands, `name` over MCP."""
+    for attr in ("tool_name", "name"):
+        value = getattr(tool, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    if isinstance(tool, dict):
+        return str(tool.get("name") or tool.get("tool_name") or "")
+    return ""
 
 
 def _tool_use(event: Any) -> tuple[str, dict[str, Any]]:
