@@ -19,6 +19,7 @@ import pytest
 from src.documents.extractors.model import (
     DESCRIPTIVE_CONFIDENCE,
     MAX_MODEL_CONFIDENCE,
+    SYSTEM_PROMPT,
     VERIFIED_PRESENCE_CONFIDENCE,
     ModelExtractionFailed,
     ModelExtractor,
@@ -335,7 +336,9 @@ class TestPrompt:
         """The allowlist failure is the reason the parser was deleted: a court nobody
         enumerated was silently absent from the graph."""
         payload = json.loads(
-            build_prompt(chunk(), allowed_predicates=["MENTIONS"], entity_kinds=[])
+            build_prompt(
+                chunk(), predicates={"MENTIONS": ONTOLOGY.predicates["MENTIONS"]}, entities={}
+            )
         )
         assert set(payload) == {
             "page",
@@ -350,7 +353,9 @@ class TestPrompt:
 
     def test_passage_and_page_are_sent(self):
         payload = json.loads(
-            build_prompt(chunk(page=7), allowed_predicates=[], entity_kinds=["Party"])
+            build_prompt(
+                chunk(page=7), predicates={}, entities={"Party": ONTOLOGY.entities["Party"]}
+            )
         )
         assert payload["passage"] == PASSAGE
         assert payload["page"] == 7
@@ -374,6 +379,63 @@ class TestPrompt:
         adverse = next(p for p in sent["allowed_predicates"] if p["predicate"] == "ADVERSE_TO")
         assert adverse["subject_kinds"] == ["Matter"]
         assert adverse["object_kinds"] == ["Party"]
+
+    def test_a_predicate_carries_what_it_means_including_its_help(self):
+        """Names and shapes were not enough, and the retail pack measured it. `RELIES_ON` and
+        `CONTAINS_CLAUSE` both fit "this document and this clause", and only the help says the
+        first asserts the decision was taken under it. Two predicates a reader would distinguish
+        by reading the pack were offered to the model as bare words."""
+        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
+        ModelExtractor(load_ontology("retail"), bedrock=bedrock).extract(chunk())
+        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
+        relies = next(p for p in sent["allowed_predicates"] if p["predicate"] == "RELIES_ON")
+        assert "rests on this policy provision" in relies["meaning"]
+        assert "mentioned in passing" in relies["meaning"], "the help is where the distinction is"
+
+    def test_an_entity_kind_carries_what_it_means_including_its_help(self):
+        """The measured failure. `Company` and `Merchant` went out as two words with no
+        definitions, so a non-trading holding company was typed as a seller and
+        `related_party_resale`, whose chain must end at a Merchant, drew nothing from a memo that
+        states the whole ownership ladder. `Company.help` says in as many words that calling it a
+        Merchant asserts with a citation that it trades here, which the same page denies."""
+        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
+        ModelExtractor(load_ontology("retail"), bedrock=bedrock).extract(chunk())
+        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
+        kinds = {k["kind"]: k["meaning"] for k in sent["entity_kinds"]}
+        assert "does not itself trade through AnyCorp" in kinds["Company"]
+        assert "is not a Merchant" in kinds["Company"], "the help is where the distinction is"
+        assert "trading through AnyCorp" in kinds["Merchant"]
+
+    def test_a_kind_with_no_help_still_carries_its_description(self):
+        """`help` is optional in a pack, and joining an absent one must not leave a trailing
+        separator or an empty string where the definition should be."""
+        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
+        ModelExtractor(load_ontology("retail"), bedrock=bedrock).extract(chunk())
+        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
+        kinds = {k["kind"]: k["meaning"] for k in sent["entity_kinds"]}
+        assert kinds["Product"] == "A sellable item or SKU."
+
+    def test_every_offered_term_has_a_meaning(self):
+        """A term with an empty meaning is the case this change exists to remove, and a pack is
+        free to omit a description. Better caught here than by an extraction that quietly picked
+        the wrong one of two words."""
+        for domain in ALL_PACKS:
+            bedrock = FakeBedrock('{"entities": [], "relationships": []}')
+            ModelExtractor(load_ontology(domain), bedrock=bedrock).extract(chunk())
+            sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
+            bare = [p["predicate"] for p in sent["allowed_predicates"] if not p["meaning"]] + [
+                k["kind"] for k in sent["entity_kinds"] if not k["meaning"]
+            ]
+            assert bare == [], f"{domain} offers {bare} with no definition"
+
+    def test_the_system_prompt_names_no_packs_vocabulary(self):
+        """It once opened "you read legal documents" and worked its only orientation example
+        through `ADVERSE_TO`. The pack is admin-selectable, so on a retail document that named a
+        predicate the model could not use and described a domain it was not reading."""
+        assert "legal" not in SYSTEM_PROMPT.lower()
+        for domain in ALL_PACKS:
+            for predicate in load_ontology(domain).predicates:
+                assert predicate not in SYSTEM_PROMPT, f"{domain}'s {predicate} is hardcoded"
 
     def test_the_chunks_own_matter_is_offered_as_a_subject(self):
         """`ADVERSE_TO` needs a Matter subject, and the only matter id in scope is the one the
