@@ -501,9 +501,14 @@ class Resolver:
         # A warning rather than only a field, because a caller reading the number needs to be
         # told the choice was a model's without going looking for it.
         warnings = [] if chosen_deterministically(match) else [getattr(match, "selection_note", "")]
-        # `run` returns None only when no executor is wired, never for an empty result, so this is
-        # "nothing to run it against". Unwarned it reads as "the metric ran and found nothing".
-        if execute and answer is None:
+        # The match's own warnings: the compiler's governance findings (fan-out risk, non-additive
+        # aggregation) and, when a query fails, the error naming the column or the permission. Every
+        # one of them was dropped here, so a metric with a fan-out risk reported none and a 403 on
+        # the lake reported itself as a missing query engine.
+        warnings.extend(w for w in match.warnings if w and w not in warnings)
+        # Conditioned on there being no executor, not on a `None` answer: a failed query is also
+        # None, and it has already said what went wrong just above.
+        if execute and answer is None and not match.is_runnable:
             warnings.append(
                 "The SQL compiled but no query engine is configured, so this is the query rather "
                 "than the figure. Nothing was run."

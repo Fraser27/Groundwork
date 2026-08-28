@@ -251,6 +251,7 @@ export default function Retrieval() {
                             lanes={trace.lanes}
                             blocks={trace.blocks}
                             floor={trace.floor}
+                            warnings={trace.warnings}
                             onOpenPassage={setPassage}
                           />
                           {/* The same panels Ask renders. A citation drawn two ways would be two

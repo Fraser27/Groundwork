@@ -69,6 +69,7 @@ export default function TraceDialog({
           lanes={trace.lanes}
           blocks={trace.blocks}
           floor={trace.floor}
+          warnings={trace.warnings}
           onOpenPassage={onOpenPassage}
         />
 

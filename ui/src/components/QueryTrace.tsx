@@ -53,6 +53,7 @@ export default function QueryTrace({
   lanes,
   blocks,
   floor,
+  warnings = [],
   usedFactCount = 0,
   onOpenPassage,
 }: {
@@ -62,6 +63,14 @@ export default function QueryTrace({
   /** The blocks on the answer itself. Used when `gate` is absent, so a refusal is never lost. */
   blocks: QueryBlock[]
   floor: number
+  /**
+   * Qualifications on the answer, verbatim from the response.
+   *
+   * Above the steps rather than inside one, because they are about the figure and not about where
+   * the system looked. They were sent and rendered nowhere, so a compiled metric whose query the
+   * warehouse refused looked identical to one that had not been run.
+   */
+  warnings?: string[]
   /** Facts the answer did use, so a refusal can say where to look instead of nowhere. */
   usedFactCount?: number
   onOpenPassage?: (p: QueryPassage) => void
@@ -82,6 +91,18 @@ export default function QueryTrace({
         </h3>
         <span className="card-note">Open a step to see exactly what it returned.</span>
       </div>
+
+      {warnings.length > 0 && (
+        // Above the steps and outside them, because these qualify the figure rather than one lane.
+        // A metric whose query the warehouse refused has a perfectly healthy-looking step 3.
+        <div className="banner banner-warn" style={{ margin: '0 0 12px' }}>
+          <span>
+            <strong>{warnings.length === 1 ? 'One caveat' : `${warnings.length} caveats`} on this
+            answer.</strong>{' '}
+            {warnings.map((w) => sentence(w)).join(' ')}
+          </span>
+        </div>
+      )}
 
       <div className="qtrace">
         <Step

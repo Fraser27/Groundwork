@@ -13,6 +13,8 @@
 
     "webOrigin": "https://d2l98f4rm5i9ro.cloudfront.net",
 
+    "dataBuckets": [],
+
     "neptuneInstanceClass": "db.t4g.medium",
     "neptuneInstanceCount": 1,
     "neptuneParameterGroupFamily": "neptune1.4",

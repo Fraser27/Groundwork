@@ -489,6 +489,40 @@ export class AppStack extends cdk.Stack {
       }),
     );
 
+    // The other half of the two statements above, and the half that is easy to miss: Athena reads
+    // a table's objects as this role, so glue:GetTable plus athena:StartQueryExecution buys a query
+    // that is accepted and then fails 403 on the data. That reaches a user as a governed metric
+    // which compiles, runs, and never returns a figure.
+    //
+    // Read-only, matching the catalog grant: rows are queried in place and never mutated. Iceberg
+    // is included by that -- a read needs the manifests, which are objects under the same prefix.
+    //
+    // `['*']` is accepted and grants every bucket, because a bucket name of `*` produces exactly
+    // that ARN. It is opt-in rather than the fallback for an unset list: unset means nobody has
+    // said which data this deployment is entitled to read, and answering that with "all of it"
+    // guesses in the widening direction. The warning below is the fallback instead.
+    if (props.config.dataBuckets.length > 0) {
+      role.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ['s3:GetObject', 's3:ListBucket', 's3:GetBucketLocation'],
+          resources: props.config.dataBuckets.flatMap((bucket) => [
+            `arn:${cdk.Aws.PARTITION}:s3:::${bucket}`,
+            `arn:${cdk.Aws.PARTITION}:s3:::${bucket}/*`,
+          ]),
+        }),
+      );
+    } else {
+      // The real defect was that this failed invisibly: a governed metric compiled, ran, and
+      // returned no figure, and the 403 was only in the container log. A synth-time warning is
+      // where an operator can still act on it.
+      cdk.Annotations.of(this).addWarningV2(
+        'groundwork:AppStack.dataBucketsUnset',
+        'dataBuckets is empty, so this task role cannot read the S3 objects behind any Glue ' +
+          'table and every governed metric will fail with a 403. Set it to the buckets holding ' +
+          'the lake, or to ["*"] to accept a read grant on every bucket in the account.',
+      );
+    }
+
     // Admins invite users from the app rather than the Cognito console, so the task needs
     // the admin surface — scoped to this one pool. AdminSetUserPassword stays absent:
     // Cognito mints and mails the temporary password itself, so the API never handles a

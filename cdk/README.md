@@ -78,6 +78,21 @@ it until deploy.
 | `defaultOntology` | `retail` | Pack from `ontologies/`, must match `constants.DEFAULT_ONTOLOGY_PACK` |
 | `availabilityZones` | unset | See above |
 | `webOrigin` | unset | Set after the first deploy |
+| `dataBuckets` | `[]` | Buckets behind the Glue tables. Empty means every governed metric fails 403 |
+
+`dataBuckets` is the one that looks optional and is not. Athena reads table data as the
+task role, so without it a metric compiles, the query starts, and it fails on
+`s3:ListBucket`. Take the names from the table locations:
+
+```bash
+aws glue get-tables --database-name <db> --query "TableList[].StorageDescriptor.Location"
+npx cdk deploy GroundworkApp -c dataBuckets=my-lake-bucket,my-other-bucket
+```
+
+A comma-separated string is accepted because `-c` cannot pass an array, and an `s3://`
+prefix is trimmed so a pasted location works. `["*"]` grants every bucket in the account
+and is a legitimate answer for a dev deployment. Leaving the list empty is not the same
+thing: it grants nothing and raises a synth warning.
 
 ## Cost
 

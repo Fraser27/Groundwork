@@ -434,6 +434,15 @@ export interface TraceView {
   router: RouterTrace | null
   gate: GateTrace | null
   floor: number
+  /**
+   * What the answer itself qualifies. Both tools send these and nothing rendered them.
+   *
+   * Not a lane's `reason`, which is about one lane. These are about the figure: a total computed
+   * over a truncated prefix, a join that inflates it, a compiled metric whose query the warehouse
+   * refused. The last one is why this is here — a 403 reading the lake reached the operator only
+   * as the agent's paraphrase of it, and the paraphrase named the wrong cause.
+   */
+  warnings: string[]
 }
 
 /**
@@ -460,6 +469,7 @@ export function traceOf(kind: string | undefined, result: unknown): TraceView | 
       router: composed.router ?? null,
       gate: composed.gate ?? null,
       floor: composed.min_confidence ?? DEFAULT_FLOOR,
+      warnings: composed.warnings ?? [],
     }
   }
 
@@ -473,6 +483,7 @@ export function traceOf(kind: string | undefined, result: unknown): TraceView | 
       router: single.router ?? null,
       gate: single.gate ?? null,
       floor: single.min_confidence ?? DEFAULT_FLOOR,
+      warnings: single.warnings ?? [],
     }
   }
 
