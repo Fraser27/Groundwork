@@ -130,6 +130,16 @@ def _seed_set(seeds: list[str]) -> frozenset[str]:
     return frozenset(out)
 
 
+#: Id prefixes minted by the catalog scanner, mirroring `glue_scanner.CATALOG_KINDS`. Duplicated
+#: rather than imported: this module is on the read path for every question and must not pull in
+#: the discovery package to answer one.
+_CATALOG_PREFIXES = ("source:", "table:", "column:")
+
+
+def _is_catalog_node(entity_id: str) -> bool:
+    return entity_id.startswith(_CATALOG_PREFIXES)
+
+
 def _touches(entity_id: str, wanted: frozenset[str]) -> bool:
     if entity_id in wanted:
         return True
@@ -392,6 +402,11 @@ class GraphReader:
         scored: list[tuple[int, float, Hit]] = []
         for record in self._readable(ctx, min_confidence):
             a = record.assertion
+            if _is_catalog_node(a.subject_id) or _is_catalog_node(a.object_id):
+                # Schema, not evidence. Catalog edges are DECLARED at 1.0, so a single generic
+                # term hit ("total") sorted every column named `total_*` above the facts the
+                # question was about. Which columns exist is tier 3's question, not tier 2's.
+                continue
             haystack = " ".join(
                 (
                     _entity_label(a.subject_id),

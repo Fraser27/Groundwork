@@ -512,6 +512,96 @@ class TestVersionsAndRestore:
         assert graph_client.post(f"{BASE}/m_new/restore/99").status_code == 404
 
 
+class FakeIndexer:
+    """Records which tenants were re-described, and can be told to fail."""
+
+    def __init__(self, *, fails: bool = False) -> None:
+        self.catalog: Any = None
+        self.graph: Any = None
+        self.metric_store: Any = None
+        self.calls: list[str] = []
+        self.fails = fails
+
+    def reindex_metrics(self, ctx: AuthContext) -> int:
+        self.calls.append(ctx.tenant_id)
+        if self.fails:
+            raise RuntimeError("opensearch unreachable")
+        return 1
+
+
+class TestApprovingMakesAMetricFindable:
+    """Approving used to change nothing the router could see.
+
+    Tier 1 matches keywords first and falls back to vector similarity when no metric word
+    appears in the question, but the layer that fallback searches was written only by Admin >
+    Rebuild. So an approved `total_revenue` was unreachable from "what is the total turnover?"
+    -- the fallback ran, searched an empty layer and found nothing, and the question fell
+    through to tier 2. Approval is the moment that has to fix itself.
+    """
+
+    @pytest.fixture
+    def indexed(self, graph_client) -> tuple[TestClient, FakeIndexer]:
+        indexer = FakeIndexer()
+        get_services().router_indexer = indexer
+        return graph_client, indexer
+
+    def test_approving_reindexes(self, indexed):
+        client, indexer = indexed
+        client.post(BASE, json=a_body())
+        assert indexer.calls == [], "a draft is not in the approved set"
+
+        client.post(f"{BASE}/m_new/status", json={"status": "approved"})
+        assert indexer.calls == [TENANT]
+
+    def test_deprecating_reindexes_too(self, indexed):
+        """The other direction matters as much: a router still steering to a deprecated metric
+        sends the question to a tier that will decline."""
+        client, indexer = indexed
+        client.post(BASE, json=a_body())
+        client.post(f"{BASE}/m_new/status", json={"status": "approved"})
+        client.post(f"{BASE}/m_new/status", json={"status": "deprecated"})
+        assert len(indexer.calls) == 2
+
+    def test_editing_a_live_metric_reindexes(self, indexed):
+        """A changed definition or a new synonym is exactly what the fallback searches."""
+        client, indexer = indexed
+        client.post(BASE, json=a_body())
+        client.post(f"{BASE}/m_new/status", json={"status": "approved"})
+        client.put(f"{BASE}/m_new", json=a_body(synonyms=["turnover"]))
+        assert len(indexer.calls) == 2
+
+    def test_editing_a_draft_does_not(self, indexed):
+        client, indexer = indexed
+        client.post(BASE, json=a_body())
+        client.put(f"{BASE}/m_new", json=a_body(expression="SUM(net)"))
+        assert indexer.calls == []
+
+    def test_deleting_a_live_metric_reindexes(self, indexed):
+        client, indexer = indexed
+        client.post(BASE, json=a_body())
+        client.post(f"{BASE}/m_new/status", json={"status": "approved"})
+        client.delete(f"{BASE}/m_new")
+        assert len(indexer.calls) == 2
+
+    def test_a_failed_reindex_still_saves_and_says_so(self, graph_client):
+        """The definition is already written. Failing the request would leave the author unsure
+        whether it took, so the degraded searchability is a warning rather than a 500."""
+        get_services().router_indexer = FakeIndexer(fails=True)
+        graph_client.post(BASE, json=a_body())
+        r = graph_client.post(f"{BASE}/m_new/status", json={"status": "approved"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "approved"
+        assert any("router index was not updated" in w for w in r.json()["warnings"])
+
+    def test_no_router_at_all_is_not_an_error(self, graph_client):
+        """Keyword-only matching is a supported deployment, not a degraded one."""
+        get_services().router_indexer = None
+        graph_client.post(BASE, json=a_body())
+        r = graph_client.post(f"{BASE}/m_new/status", json={"status": "approved"})
+        assert r.status_code == 200
+        assert "warnings" not in r.json()
+
+
 class TestDeletion:
     def test_deleting_removes_the_metric(self, graph_client):
         graph_client.post(BASE, json=a_body())

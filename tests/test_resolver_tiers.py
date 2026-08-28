@@ -336,6 +336,65 @@ class TestExpandRanksBeforeTruncating:
             assert hit["matched_on"]
 
 
+class TestSearchIgnoresTheCatalog:
+    """A column name is schema, not evidence, and tier 2 must not offer one as an answer.
+
+    Once the Glue scan started writing catalog nodes into the graph, "what is the total
+    turnover?" came back as a list of columns called `total_returned`, `total_sold`,
+    `total_amount`. Ranking cannot fix it: a Glue declaration is DECLARED at 1.00, so on a
+    one-term match it legitimately outranks every fact a person asked about.
+    """
+
+    @pytest.fixture
+    def reader(self, ctx) -> GraphReader:
+        ontology = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=ontology.governing_predicates
+        )
+        catalog = [
+            build_assertion(
+                tenant_id=TENANT,
+                subject_id="table:glue:anycorp.sales",
+                predicate="HAS_COLUMN",
+                object_id=f"column:glue:anycorp.sales.{name}",
+                epistemic_class=EpistemicClass.DECLARED,
+                method="glue:catalog_scan",
+                confidence=1.0,
+                source_locator=SourceLocator(source_id="glue", table="anycorp.sales"),
+            )
+            for name in ("total_returned", "total_sold", "total_amount")
+        ]
+        fact = build_assertion(
+            tenant_id=TENANT,
+            subject_id="counsel:dalgleish-rowe",
+            predicate="REPRESENTS",
+            object_id="party:total-holdings-ltd",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:opus-5",
+            confidence=0.9,
+            source_locator=SourceLocator(
+                document_id="d1", filename="d1.pdf", page=1, quote="Total Holdings Ltd"
+            ),
+        )
+        queue.stage(ctx, [*catalog, fact], job_id="j1")
+        queue.approve(ctx, fact.assertion_id)
+        queue.promote(ctx, job_id="j1")
+        return GraphReader(queue, ontology=ontology)
+
+    def test_a_column_is_never_a_search_result(self, reader, ctx):
+        hits = reader.search(ctx, "what is the total turnover?", min_confidence=0.0)
+        assert not [h for h in hits if h["object_id"].startswith(("table:", "column:"))]
+
+    def test_the_real_fact_is_not_buried_by_schema(self, reader, ctx):
+        hits = reader.search(ctx, "total holdings", min_confidence=0.0)
+        assert [h["object_id"] for h in hits] == ["party:total-holdings-ltd"]
+
+    def test_the_catalog_edges_are_readable_they_are_just_not_answers(self, reader, ctx):
+        """Excluded from `search`, not from the graph. The Tables pages read them."""
+        predicates = {r.assertion.predicate for r in reader._readable(ctx, 0.0)}
+        assert "HAS_COLUMN" in predicates
+
+
 #: The production shape that exposed the severed spine. `doc-d63a8228d513541553` carries only
 #: `MENTIONS` edges -- descriptive, so capped at the trust floor exactly -- while the facts anyone
 #: would ask for name it in `source_locator` and nowhere else. Raising the floor to 0.85 dropped
