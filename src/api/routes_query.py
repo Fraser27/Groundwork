@@ -118,6 +118,10 @@ class ComposeRequest(BaseModel):
     """Raise the confidence floor for this question only. Same one-way clamp as `/query`: the two
     endpoints must not disagree about how strict a question was."""
 
+    decompose: bool = True
+    """Split a compound question and answer each half where it can be answered. False asks it
+    whole, which is what a caller wants when it has already split the question itself."""
+
 
 @router.post("/tenants/{tenant}/query/compose")
 async def compose_query(
@@ -149,6 +153,7 @@ async def compose_query(
         settings,
         execute=body.execute,
         allow_synthesis=body.synthesise,
+        decompose=body.decompose,
     )
     drain_blocked(services, ctx.tenant_id, planner.blocked)
 

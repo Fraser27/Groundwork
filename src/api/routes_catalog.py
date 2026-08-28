@@ -725,6 +725,10 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
         "router_margin": settings.router_margin,
         "router_metric_boost": settings.router_metric_boost,
         "allowed_tiers": sorted(settings.allowed_tiers),
+        # Derived, and sent anyway. Tier 2 and tier 3 are one search in opposite directions and a
+        # tenant gets one of them, so "which direction" is what an administrator actually chose --
+        # leaving the page to infer it from a list of integers is how a setting gets misread.
+        "retrieval_direction": settings.retrieval_direction,
         "extraction_model": settings.extraction_model or models.extraction_model,
         "synthesis_model": models.synthesis_model,
         "retrieval_agent_model": settings.retrieval_agent_model,

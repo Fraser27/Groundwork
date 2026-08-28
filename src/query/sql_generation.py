@@ -320,11 +320,25 @@ class SqlLane:
         *,
         tables: Sequence[Any],
         synonyms: Mapping[str, Sequence[str]] | None = None,
+        candidates: Sequence[Any] | None = None,
     ) -> SqlLaneResult | None:
-        candidates = relevant_tables(question, tables, synonyms=synonyms)
-        if not candidates:
+        """Write a query over the relevant subset of `tables`, and run it if one can be built.
+
+        `candidates` is for a caller that has already chosen, and the graph-first tier is the one
+        that has: it reached its tables by traversing DECLARED catalog edges and approved
+        synonyms, which is a stronger claim than word overlap. Re-deriving the subset here would
+        let `relevant_tables` veto a table the graph named -- the exact case a synonym exists to
+        rescue, since a question sharing no word with `revenue` is why somebody approved
+        "turnover" against it in the first place.
+        """
+        chosen = (
+            list(candidates)
+            if candidates is not None
+            else relevant_tables(question, tables, synonyms=synonyms)
+        )
+        if not chosen:
             return None
-        generated = self.generator.generate(question, tables=candidates)
+        generated = self.generator.generate(question, tables=chosen)
         if generated is None:
             return None
 

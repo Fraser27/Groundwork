@@ -159,10 +159,15 @@ class TestTheSkipIsNamedAsTheSwitch:
         assert answer.lanes_skipped[Lane.SQL.value] == UNGOVERNED_BLOCKED
 
     def test_a_tier_cap_is_named_as_the_cap_instead(self, ctx):
-        """Removing tier 3 removes this lane too, but for a different reason, and it says so."""
-        settings = GovernanceSettings(allowed_tiers=frozenset({1, 2}))
+        """Removing retrieval removes this lane too, but for a different reason, and it says so.
+
+        The cap that removes it is a metric-only one. Model-written SQL runs under either traversal
+        direction, so `{1, 2}` moves the lane rather than refusing it -- and "your administrator
+        turned this off" must never be reported in the words of "the graph reached no table".
+        """
+        settings = GovernanceSettings(allowed_tiers=frozenset({1}))
         answer = _planner(FakeBedrock()).plan(ctx, "how many matters", settings)
-        assert "not permitted for this tenant" in answer.lanes_skipped[Lane.SQL.value]
+        assert "permitted for this tenant" in answer.lanes_skipped[Lane.SQL.value]
 
 
 class TestTheRefusalIsRecordedAsABacklog:

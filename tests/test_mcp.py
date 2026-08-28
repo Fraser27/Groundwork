@@ -164,6 +164,16 @@ def services() -> None:
     _install(_config())
 
 
+def _graph_first(tenant_id: str) -> None:
+    """Point a tenant at graph-first retrieval.
+
+    `ask` answers from the first permitted tier, and the default cap is vector-first -- so a
+    question whose answer is a term match in the graph is unanswerable without a vector store
+    unless the tenant chose the direction that starts at the graph.
+    """
+    get_services().settings_for(tenant_id).allowed_tiers = frozenset({1, 2})
+
+
 def _session(token: str | None, work: Callable[[ClientSession], Awaitable[Any]]) -> Any:
     """Run `work` against a fresh MCP session over the ASGI app.
 
@@ -367,6 +377,7 @@ class TestAsk:
         """The audit trail an agent's answer rests on. Without these ids, a tool answer is
         less defensible than the same answer given by a human."""
         _stage(TENANT_A, matter_id="M-1")
+        _graph_first(TENANT_A)
         body = _call(
             TOKEN_A, "ask", {"question": "which topics does document d1 concern"}
         ).structuredContent
@@ -375,9 +386,11 @@ class TestAsk:
 
     def test_every_assertion_used_resolves_to_provenance(self):
         _stage(TENANT_A, matter_id="M-1")
+        _graph_first(TENANT_A)
         body = _call(
             TOKEN_A, "ask", {"question": "which topics does document d1 concern"}
         ).structuredContent
+        assert body["assertions_used"], "no assertion came back, so nothing was under test"
         for aid in body["assertions_used"]:
             prov = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}).structuredContent
             assert prov["assertion"]["source"]["quote"]

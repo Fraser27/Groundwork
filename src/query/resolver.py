@@ -2,10 +2,18 @@
 
 Three tiers, tried most-precise-first, each falling through on a miss:
 
-1. **Governed metric** — YAML compiled to SQL. Deterministic, no model involved.
-2. **Graph traversal** — openCypher over assertions that pass `scope.edge_scope`.
-3. **Hybrid** — vector retrieval, expansion along verified edges, the catalogued schema of
-   the tables involved, and a query a model writes over that schema.
+1. **Governed** — YAML compiled to SQL. Deterministic, no model involved.
+2. **Graph first** — match the graph lexically, then query only the documents and tables it
+   landed on. See `query.graph_first`.
+3. **Vector first** — retrieve passages by similarity, expand along verified edges out of them,
+   read the catalogued schema of the tables involved, and let a model write a query over it.
+
+**2 and 3 are the same traversal in opposite directions, and a tenant runs one of them.**
+`GovernanceSettings.allowed_tiers` refuses both, so the cap is the choice of direction rather
+than a list of chances. Permitting both would answer the same question from the same three stores
+twice, and label the evidence differently depending on which ran first: a passage tier 2 reached
+is one a verified fact vouched for, a passage tier 3 reached is one similarity chose. Provenance
+that depends on iteration order is not provenance.
 
 The tier is part of the answer, not an implementation detail. "This came from an
 approved metric" and "a model read this out of a document" are different claims about
@@ -42,6 +50,7 @@ from src.query.blocks import (
     blocks_for,
     seeds_from,
 )
+from src.query.graph_first import GraphFirstLane
 from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 
@@ -63,14 +72,31 @@ class Tier(IntEnum):
     # tier 3, where the catalog it needs already lives.
 
 
+#: What each tier is called outside the code. Separate from `Tier.name`, which is emitted as
+#: `tier_name` and has been recorded against answers in the append-only question log since before
+#: these names existed -- so renaming the enum member would change what an old row means, the same
+#: argument that retired tier 4 rather than reusing it. This is the display name; that is history.
+TIER_LABEL = {
+    Tier.GOVERNED_METRIC: "governed",
+    Tier.GRAPH_TRAVERSAL: "graph-first",
+    Tier.HYBRID: "vector-first",
+}
+
+
 TIER_EXPLANATION = {
     Tier.GOVERNED_METRIC: (
         "Answered from an approved metric definition. The SQL was compiled from that "
         "definition with no AI involved, so this question returns the same answer every time."
     ),
     Tier.GRAPH_TRAVERSAL: (
-        "Answered by following verified relationships in the knowledge graph. Only facts "
-        "above the confidence floor, and approved where approval was required, were used."
+        "Answered starting from the knowledge graph: the question was matched against verified "
+        "relationships, and only the documents those facts came from and the tables the graph "
+        "points at were then searched. Every passage quoted here sits in a document some verified "
+        "fact was extracted from, so it can be traced to a relationship rather than to a "
+        "similarity score. The trade-off is the honest one: a document nothing has been extracted "
+        "from yet was not searched. Where the question needed a figure no approved metric covers, "
+        "an AI may have written a query over the tables the graph named; if it did, the query is "
+        "shown and labelled."
     ),
     Tier.HYBRID: (
         "Answered by finding relevant passages, following verified relationships out from "
@@ -179,6 +205,9 @@ class Resolution:
         return {
             "tier": int(self.tier),
             "tier_name": self.tier.name,
+            # Both, on purpose. `tier_name` is what the question log has recorded for the life of
+            # the project; `tier_label` is what a reader is shown.
+            "tier_label": TIER_LABEL[self.tier],
             "governed": self.is_governed,
             "deterministic_selection": self.selected_deterministically,
             "metric_selection": self.metric_selection,
@@ -210,17 +239,25 @@ class BlockedQuery:
     at: str
 
 
+#: The keys under which a tier files id-bearing evidence. One list, read by both `_evidence` and
+#: `_apply`: a key the veto knows how to *find* but not how to *strip* would leave a blocked row in
+#: the answer while reporting it as withheld, which is the worse of the two halves to get wrong.
+_EVIDENCE_KEYS = ("facts", "passages", "related")
+
+
 def _evidence(answer: Any) -> list[Any]:
     """The id-bearing rows in an answer, whatever shape the tier gave it.
 
-    Tier 2 answers with a list of hits and tier 3 with `{passages, related}`. Athena columns and
-    rows carry no ids at all and so cannot be screened row-wise, which is why a tier that
-    executes SQL needs its safety from somewhere other than this veto.
+    Tier 2 answers with `{facts, passages, tables, generated}` and tier 3 with
+    `{passages, related}`. Athena columns and rows carry no ids at all and so cannot be screened
+    row-wise -- neither `tables`, which is schema, nor `generated.rows` -- which is why a tier that
+    executes SQL needs its safety from somewhere other than this veto: `sql_generation` requires an
+    aggregate, and an aggregate cannot return one walled matter's row.
     """
     if isinstance(answer, list):
         return answer
     if isinstance(answer, dict):
-        return [*(answer.get("passages") or []), *(answer.get("related") or [])]
+        return [row for key in _EVIDENCE_KEYS for row in (answer.get(key) or [])]
     return []
 
 
@@ -237,8 +274,8 @@ def _apply(result: Resolution, screen: Screen) -> int:
         kept = screen.keep(answer)
         removed += len(answer) - len(kept)
         result.answer = kept
-    elif isinstance(answer, dict) and ("passages" in answer or "related" in answer):
-        for key in ("passages", "related"):
+    elif isinstance(answer, dict) and any(key in answer for key in _EVIDENCE_KEYS):
+        for key in _EVIDENCE_KEYS:
             rows = answer.get(key)
             if isinstance(rows, list):
                 kept = screen.keep(rows)
@@ -363,10 +400,15 @@ class Resolver:
 
         # Screened even though nothing matched. "Nothing found" while a wall is in force is the
         # exact shape of the harm: a conflict check reads as clean when it is only incomplete.
+        # The traversal that was actually tried, not a hardcoded tier 2. A vector-first tenant
+        # reporting `graph-first` on its empty answer would name a tier its cap forbids, and the
+        # tier is the one field on this shape a reader trusts literally. Tier 1 is excluded because
+        # `_screened` exempts it, and an unscreened empty answer is the silent-clean-result failure.
+        traversals = [t for t in attempted if t is not Tier.GOVERNED_METRIC]
         return self._screened(
             ctx,
             Resolution(
-                tier=Tier.GRAPH_TRAVERSAL,
+                tier=traversals[-1] if traversals else Tier.GRAPH_TRAVERSAL,
                 answer=None,
                 tiers_attempted=attempted,
                 router=decision,
@@ -477,15 +519,49 @@ class Resolver:
     def _try_graph(
         self, ctx: AuthContext, question: str, settings: GovernanceSettings
     ) -> Resolution | None:
+        """Graph first: match the graph, then query the documents and tables it landed on.
+
+        The same `GraphFirstLane` the planner runs, built from the collaborators this resolver was
+        already given, so `/query` and `/query/compose` cannot disagree about where a graph-first
+        question reached.
+        """
         if self._graph is None:
             return None
-        hits = self._graph.search(ctx, question, min_confidence=settings.min_confidence_floor)
-        if not hits:
+        lane = GraphFirstLane(
+            graph_reader=self._graph,
+            vector_search=self._vectors,
+            catalog=self._catalog,
+            sql_lane=self._sql,
+        )
+        result = lane.run(
+            ctx,
+            question,
+            settings,
+            sql_allowed=self._sql_allowed(ctx, question, settings),
+            synonyms=self._synonyms(ctx),
+        )
+        if result.empty:
             return None
+
+        generated = result.generated
         return Resolution(
             tier=Tier.GRAPH_TRAVERSAL,
-            answer=hits,
-            assertions_used=[h["assertion_id"] for h in hits if "assertion_id" in h],
+            answer=result.to_dict(),
+            citations=[
+                {
+                    "document_id": p["document_id"],
+                    "page": p.get("page"),
+                    "char_start": p.get("char_start"),
+                    "char_end": p.get("char_end"),
+                }
+                for p in result.passages
+            ],
+            assertions_used=[f["assertion_id"] for f in result.facts if "assertion_id" in f],
+            generated_sql=generated.generated if generated is not None else None,
+            warnings=[
+                *result.notes,
+                *([GENERATED_SQL_WARNING] if generated is not None else []),
+            ],
         )
 
     def _try_hybrid(
@@ -558,16 +634,7 @@ class Resolver:
         """
         if self._sql is None or self._catalog is None:
             return None
-        if settings.block_ungoverned_queries:
-            self.blocked.append(
-                BlockedQuery(
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
-                    question=question,
-                    reason=UNGOVERNED_BLOCKED,
-                    at=datetime.now(UTC).isoformat(),
-                )
-            )
+        if not self._sql_allowed(ctx, question, settings):
             return None
         try:
             tables = self._catalog.tables(ctx.tenant_id)
@@ -577,6 +644,26 @@ class Resolver:
         if not tables:
             return None
         return self._sql.run(question, tables=tables, synonyms=self._synonyms(ctx))
+
+    def _sql_allowed(self, ctx: AuthContext, question: str, settings: GovernanceSettings) -> bool:
+        """Whether a model may write SQL for this question, recording the refusal if not.
+
+        One implementation for both traversal directions. Two would be two places to forget the
+        recording, and the refusal log is half of what the switch is for: a question people keep
+        asking is a governed metric waiting to be written.
+        """
+        if not settings.block_ungoverned_queries:
+            return True
+        self.blocked.append(
+            BlockedQuery(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                question=question,
+                reason=UNGOVERNED_BLOCKED,
+                at=datetime.now(UTC).isoformat(),
+            )
+        )
+        return False
 
     def _synonyms(self, ctx: AuthContext) -> Mapping[str, Sequence[str]] | None:
         """Approved synonyms per table `full_name`, or None.

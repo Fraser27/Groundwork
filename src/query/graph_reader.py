@@ -8,7 +8,12 @@ id in it resolves to a document span or a proof tree.
 Term matching here is lexical — entity ids and predicates, not embeddings. That is
 deliberate for tier 2: "which matters involve Acme Corporation" should find
 `party:acme-corporation` by name, and doing it lexically means the result is
-reproducible and explainable. Tier 3 is where semantics come in.
+reproducible and explainable. Embeddings enter afterwards, once the graph has said which
+documents are worth reading — see `query.graph_first`.
+
+`search` and `catalog_search` split the same lexical pass by what a match *means*. A matched
+assertion between two real entities is evidence. A matched catalog node is a pointer at a table,
+which is not an answer and must never be shown as one.
 """
 
 from __future__ import annotations
@@ -437,6 +442,55 @@ class GraphReader:
 
         scored.sort(key=lambda row: (-row[0], -row[1]))
         return [hit.to_dict() for _, _, hit in scored[:limit]]
+
+    def catalog_search(
+        self,
+        ctx: AuthContext,
+        question: str,
+        *,
+        min_confidence: float = 0.8,
+        limit: int = 25,
+    ) -> list[str]:
+        """Catalog node ids the question's words reach, strongest match first.
+
+        The other half of `search`, which drops these. A catalog edge is DECLARED at 1.0, so one
+        generic term hit sorted every `total_*` column above the facts a question was about -- but
+        the match itself is real and useful, just not as *evidence*. Which columns exist is not an
+        answer; it is a pointer at the table that holds one. So the graph-first tier reads it here
+        and turns it into a query, and nothing puts a schema row in front of a reader as a fact.
+
+        Approved synonyms count, and that is most of the value: `HAS_SYNONYM` is how "turnover"
+        reaches a table called `revenue`. They are EXTRACTED_MODEL and PENDING until somebody
+        approves them, and `_readable` is what holds that line -- an unapproved synonym must not
+        be able to point a query at a table, or the closed vocabulary would be enforced on writes
+        and not on reads.
+        """
+        terms = terms_of(question)
+        if not terms:
+            return []
+
+        scored: dict[str, tuple[int, float]] = {}
+        for record in self._readable(ctx, min_confidence):
+            a = record.assertion
+            for entity_id in (a.subject_id, a.object_id):
+                if not _is_catalog_node(entity_id):
+                    continue
+                # The label of the *other* end counts too, which is what makes a synonym work: the
+                # question matches `synonym:turnover`, and the catalog node it points at is the
+                # thing worth returning.
+                other = a.object_id if entity_id == a.subject_id else a.subject_id
+                haystack = f"{_entity_label(entity_id)} {_entity_label(other)}"
+                matched = [t for t in terms if t in haystack]
+                if not matched:
+                    continue
+                best = scored.get(entity_id)
+                if best is None or (len(matched), a.confidence) > best:
+                    scored[entity_id] = (len(matched), a.confidence)
+
+        # Id last so a tie resolves the same way twice: two runs of one question pointing a
+        # generated query at different tables is indistinguishable from the catalog having changed.
+        ranked = sorted(scored, key=lambda e: (-scored[e][0], -scored[e][1], e))
+        return ranked[:limit]
 
     def expand(
         self,

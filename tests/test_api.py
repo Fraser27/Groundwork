@@ -1065,8 +1065,30 @@ class TestSettingsProjectsWhatThePageCanChange:
         assert self._save(client, {"router_margin": 0.5})["router_margin"] == 0.5
 
     def test_the_tier_cap_is_projected_and_holds_no_retired_tier(self, client):
+        # `[1, 3]`, not every tier: the default is vector first, and tier 2 is the same search in
+        # the opposite direction rather than a second chance at the answer.
         body = client.get(f"/api/tenants/{TENANT}/settings").json()
-        assert body["allowed_tiers"] == [1, 2, 3]
+        assert body["allowed_tiers"] == [1, 3]
+
+    def test_the_direction_is_projected_beside_the_cap(self, client):
+        """What an administrator actually chose. The Admin page re-reads this projection after every
+        save, so a direction it cannot report is a control that silently reverts -- and leaving the
+        page to infer it from a list of integers is how a setting gets misread."""
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        assert body["retrieval_direction"] == "vector_first"
+
+    def test_choosing_graph_first_is_reported_as_graph_first(self, client):
+        assert self._save(client, {"allowed_tiers": [1, 2]})["allowed_tiers"] == [1, 2]
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        assert body["retrieval_direction"] == "graph_first"
+
+    def test_both_directions_at_once_is_refused_rather_than_silently_narrowed(self, client):
+        """The Admin control offers one direction or the other, so this combination can only arrive
+        from a hand-made call -- and answering it by picking one would leave the page showing a
+        direction nobody chose."""
+        res = client.patch(f"/api/tenants/{TENANT}/governance", json={"allowed_tiers": [1, 2, 3]})
+        assert res.status_code == 422, res.text
+        assert "not both" in res.text
 
     def test_a_tier_can_be_turned_off_and_stays_off(self, client):
         """The cap was enforced everywhere and settable nowhere: the resolver, planner and router
@@ -1079,14 +1101,28 @@ class TestSettingsProjectsWhatThePageCanChange:
         """The setting is only worth having if it reaches the query path, and a disabled tier is
         *named* rather than silently absent -- "no lane ran" and "this lane is forbidden" are
         different facts about an empty answer."""
-        self._save(client, {"allowed_tiers": [1, 2]})
+        self._save(client, {"allowed_tiers": [1]})
         body = client.post(
             f"/api/tenants/{TENANT}/query/compose", json={"query": "which matters involve calder"}
         ).json()
 
         skipped = body["lanes_skipped"]
-        assert "tier 3 is not permitted" in skipped["passages"]
-        assert "graph" not in skipped, "tier 2 was left permitted and should still have run"
+        # A metric-only tenant has no traversal at all, so every retrieval lane is named as the cap.
+        # Naming one direction would answer a question this tenant did not ask: passages, schema and
+        # generated SQL all run under whichever of the two it chose, and it chose neither.
+        for lane in ("graph", "passages", "catalog", "sql"):
+            assert "permitted for this tenant" in skipped[lane], lane
+
+    def test_a_composed_answer_names_the_direction_it_ran_in(self, client):
+        """A skipped lane has no part and therefore no tier, so the trace diagram had to supply one
+        from a hardcoded map -- and it labelled a graph-first tenant's skipped lanes tier 3, the
+        direction they declined. Sent as data rather than left to the page to guess."""
+        self._save(client, {"allowed_tiers": [1, 2]})
+        body = client.post(
+            f"/api/tenants/{TENANT}/query/compose", json={"query": "which matters involve calder"}
+        ).json()
+
+        assert body["retrieval_direction"] == "graph_first"
 
     def test_a_retired_tier_cannot_be_re_enabled(self, client):
         """A `4` survived in a default long after the tier was retired, and `Tier(4)` raises where

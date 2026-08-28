@@ -6,14 +6,24 @@ qualifier. "What is our exposure on the Northwind matter" wants the figure from 
 warehouse *and* the fact that a document says the engagement excludes tax advice.
 
 The shape, in the user's own analogy: penicillin cures the infection, but the patient is
-allergic. OpenSearch surfaces penicillin. The graph knows about the allergy. So **the graph's
-job here is grounding what the other stores return**, not being the primary retriever.
+allergic. OpenSearch surfaces penicillin. The graph knows about the allergy.
 
-    1. A governed metric matches           -> compile, run, return. Nothing else needed.
-    2. Otherwise, traverse for candidates  -> documents and catalog schema
-    3. Retrieve                            -> passages from OpenSearch
-    4. Apply blocks                        -> DETERMINISTICALLY, never by a model
-    5. Synthesise                          -> a model writes prose over what survived
+    1. A governed metric matches  -> compile, run, return. Nothing else needed.
+    2. Otherwise, one traversal   -> either direction, never both
+    3. Apply blocks               -> DETERMINISTICALLY, never by a model
+    4. Synthesise                 -> a model writes prose over what survived
+
+**Step 2 has two directions and the tenant picks one**, in `allowed_tiers`. Vector first (tier 3)
+retrieves passages by similarity, walks the graph out of them, and offers the catalogued schema:
+the graph's job is grounding what the other stores returned. Graph first (tier 2) inverts it --
+match the graph, then read only the documents a matched fact came from and query only the tables
+its schema edges reached. Same three stores, opposite order, and the choice is what the platform
+sells rather than a heuristic. `governance.validate` refuses both at once, because a lane that ran
+under whichever tier the loop reached first would make provenance depend on iteration order.
+
+A compound question is split before step 2 and merged after it, so each half reaches the store
+that can answer it (`decompose.py`). Steps 3 and 4 run **once** over the merged parts: two screens
+could disagree, and two summaries would leave the reader to reconcile them.
 
 **Step 4 is deterministic and that is the whole design.** `ontologies/legal.yaml` already
 settled it: `conflict_check` carries `min_premise_class: EXTRACTED_DET` with the comment "a
@@ -40,7 +50,13 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from src.governance import GovernanceSettings
+from src.governance import (
+    GRAPH_FIRST_TIER,
+    VECTOR_FIRST_TIER,
+    GovernanceSettings,
+    coerce_allowed_tiers,
+    direction_of,
+)
 from src.graph.scope import AuthContext
 from src.query.blocks import (
     DEGRADED_WARNING,
@@ -50,6 +66,7 @@ from src.query.blocks import (
     blocks_for,
     seeds_from,
 )
+from src.query.graph_first import GraphFirstLane
 from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
 from src.query.resolver import UNGOVERNED_BLOCKED, BlockedQuery, Tier
@@ -148,6 +165,13 @@ class Part:
     list, because an empty list reads as "no data" -- the silent failure `scope.py` exists to
     prevent -- and "the query was wrong" is a fact the reader can act on."""
 
+    sub_question: str | None = None
+    """Which half of a split question this answers. None when the question was asked whole.
+
+    Carried per part rather than only on `ComposedAnswer.decomposition`, because two parts from the
+    same lane are otherwise indistinguishable: a reader looking at two SQL results needs to know
+    they answer different questions, not that the lane ran twice."""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "lane": self.lane.value,
@@ -160,6 +184,7 @@ class Part:
             "confidence": self.confidence,
             "metric_selection": self.metric_selection,
             "error": self.error,
+            "sub_question": self.sub_question,
         }
 
 
@@ -174,16 +199,32 @@ class ComposedAnswer:
     synthesis: str | None = None
     warnings: list[str] = field(default_factory=list)
 
+    retrieval_direction: str | None = None
+    """`graph_first`, `vector_first` or `metrics_only`: which direction these lanes were run in.
+
+    A skipped lane carries no part and therefore no tier, so without this the UI had to guess one
+    from a hardcoded map -- and it guessed tier 3, labelling a graph-first tenant's skipped lanes
+    with the direction they declined."""
+
     router: Any | None = None
     """Why these lanes and not others. None means no router was wired, which is a different
     statement from a router that ran and could not choose -- see `RouterDecision.degraded`."""
 
     gate: dict[str, Any] | None = None
-    """What step 4 considered, cleared and withheld, and whether both its sources ran.
+    """What the block step considered, cleared and withheld, and whether both its sources ran.
 
     Reported even when nothing was refused. A wall visible only when it blocks cannot be
     distinguished from one that never ran, which is exactly how the rule-block half stayed
     missing."""
+
+    decomposition: dict[str, Any] | None = None
+    """The original question and the sub-questions it was split into, or None if it was asked whole.
+
+    Disclosed rather than folded into `governance_label`. A model chose the boundaries, so a reader
+    is entitled to see them and object -- but the label describes what produced the *answer*, and
+    every part still comes from the same compiled metric, verified fact or quoted passage it would
+    have come from unsplit. Downgrading a governed metric's figure because a model decided which
+    half of the sentence to send it would report the wrong thing as ungoverned."""
 
     @property
     def is_fully_deterministic(self) -> bool:
@@ -216,6 +257,8 @@ class ComposedAnswer:
             "blocks": [b.to_dict() for b in self.blocks],
             "lanes_run": [lane.value for lane in self.lanes_run],
             "lanes_skipped": self.lanes_skipped,
+            "retrieval_direction": self.retrieval_direction,
+            "decomposition": self.decomposition,
             "gate": self.gate,
             "router": self.router.to_dict() if self.router is not None else None,
             "synthesis": self.synthesis,
@@ -252,6 +295,44 @@ def _skipped(tier: int, allowed: set[int], decision: Any | None) -> str:
     return f"tier {tier} was not selected by the router"
 
 
+def _skipped_traversal(allowed: set[int], decision: Any | None) -> str:
+    """Why a retrieval lane did not run, naming the direction this tenant actually chose.
+
+    Passages, catalog and SQL all run under whichever traversal is permitted, so naming a fixed
+    tier would tell a graph-first tenant that "tier 3 is not permitted" about a lane tier 2 runs --
+    true, and an answer to a question nobody asked.
+    """
+    for tier in (GRAPH_FIRST_TIER, VECTOR_FIRST_TIER):
+        if tier in allowed:
+            return _skipped(tier, allowed, decision)
+    return "neither graph-first nor vector-first retrieval is permitted for this tenant"
+
+
+#: Lanes that belong to whichever traversal direction is permitted, in reporting order. A verified
+#: relationship comes first because it is the stronger claim and a reader should meet it before a
+#: passage chosen by similarity.
+_TRAVERSAL_LANES = (Lane.GRAPH, Lane.PASSAGES, Lane.CATALOG, Lane.SQL)
+
+
+@dataclass
+class _Lanes:
+    """One question's lanes, before grounding and synthesis.
+
+    Exists because a split question runs this whole set per part and is screened once: without it
+    `plan` would either screen each sub-answer separately, which lets two screens disagree, or
+    thread five accumulators through the loop.
+    """
+
+    parts: list[Part] = field(default_factory=list)
+    run: list[Lane] = field(default_factory=list)
+    skipped: dict[str, str] = field(default_factory=dict)
+    seeds: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    metric_only: bool = False
+    """A governed metric answered this outright, so no other lane was tried."""
+
+
 class Planner:
     """Runs the lanes a question needs and composes what comes back.
 
@@ -270,6 +351,7 @@ class Planner:
         synthesiser: Any | None = None,
         router: Any | None = None,
         sql_lane: Any | None = None,
+        question_splitter: Any | None = None,
         synonyms_for: Callable[[AuthContext], Mapping[str, Sequence[str]]] | None = None,
     ) -> None:
         self._metrics = metric_matcher
@@ -283,6 +365,10 @@ class Planner:
         # The `SqlLane` from `sql_generation`, which `Resolver` is also given. One module, so the
         # two endpoints cannot disagree about whether a question got model-written SQL.
         self._sql = sql_lane
+        # Absent means every question is asked whole, which is what compose did before splitting
+        # existed. Not wired into `Resolver`: `/query` answers from one tier, and half a question
+        # answered by one tier is not an answer.
+        self._splitter = question_splitter
         # Injected so this layer never learns where approved synonyms live. Absent means table
         # selection is word overlap alone, which is what it was before synonyms were readable.
         self._synonyms_for = synonyms_for
@@ -296,102 +382,64 @@ class Planner:
         *,
         execute: bool = True,
         allow_synthesis: bool = True,
+        decompose: bool = True,
     ) -> ComposedAnswer:
         answer = ComposedAnswer()
-        allowed = {int(t) for t in settings.allowed_tiers}
+        # Coerced, not read raw. `validate()` already refuses both directions at once, but these
+        # settings can also arrive from a stored row written before that rule existed, and one
+        # definition of which direction wins beats this module inventing a second.
+        allowed = set(coerce_allowed_tiers(settings.allowed_tiers))
+        # From the coerced cap rather than from what ran, because the case that needs it is a run
+        # where nothing ran: graph-first with no graph configured skips all four traversal lanes and
+        # produces no part, leaving a reader nothing to infer the direction from.
+        answer.retrieval_direction = direction_of(allowed)
 
+        # Routed once on the whole question, even when it is split. The decision is advisory unless
+        # `ROUTER_NARROWS_LANES`, so routing each half would buy a longer trace and a model call
+        # per part while changing nothing about what runs.
         decision = self._route(ctx, question, settings)
         answer.router = decision
         runnable = self._runnable(allowed, decision)
 
-        # A governed metric that matches is the whole answer. Fanning out anyway would pay
-        # Athena plus Neptune plus OpenSearch latency to add nothing: the metric is exact and
-        # the question named it.
-        if 1 in runnable:
-            part = self._metric_part(ctx, question, settings, execute=execute)
-            if part is not None:
-                answer.parts.append(part)
-                answer.lanes_run.append(Lane.METRIC)
-                return answer
-        else:
-            answer.lanes_skipped[Lane.METRIC.value] = _skipped(1, allowed, decision)
+        asked = self._split(question) if decompose else [question]
+        if len(asked) > 1:
+            answer.decomposition = {"question": question, "parts": asked}
 
-        # No metric matched. Retrieve first, so the graph lane can walk out from the passages the
-        # way `Resolver._try_hybrid` does -- compose used to run the term search alone, so the same
-        # question returned walked facts on `/query` and none here. The reported order is unchanged:
-        # a verified relationship is the stronger claim and a reader should meet it first.
-        passage_part = self._passage_part(ctx, question, settings) if 3 in runnable else None
-
-        # The graph part has two halves gated by different tiers, and conflating them was a bug.
-        #
-        # The term search over assertions is tier 2, and asking for it when tier 2 is forbidden
-        # would be a cap bypass. Walking out from the passages just retrieved is **tier 3's own
-        # work** -- it is what `TIER_EXPLANATION[HYBRID]` promises ("following verified
-        # relationships out from them") and what `Resolver._try_hybrid` does with no tier-2 check.
-        #
-        # While one `if 2 in runnable` guarded both, a tenant permitted only tier 3 got passages
-        # and nothing else: on `demo-firm` the walk finds 30 citable facts against the term
-        # search's 8, so the lane reported no `assertion_ids` at all and hybrid was not hybrid.
         seeds: list[str] = []
-        graph_part = self._graph_part(
-            ctx,
-            question,
-            settings,
-            passages=passage_part.content if passage_part is not None else None,
-            include_search=2 in runnable,
-        )
-        if graph_part is not None:
-            answer.parts.append(graph_part)
-            answer.lanes_run.append(Lane.GRAPH)
-            seeds = self._seeds_from(graph_part)
-        elif 2 not in runnable:
-            answer.lanes_skipped[Lane.GRAPH.value] = _skipped(2, allowed, decision)
-
-        if 3 in runnable:
-            if passage_part is not None:
-                answer.parts.append(passage_part)
-                answer.lanes_run.append(Lane.PASSAGES)
-                seeds.extend(self._seeds_from(passage_part))
-        else:
-            answer.lanes_skipped[Lane.PASSAGES.value] = _skipped(3, allowed, decision)
-
-        # Gated on tier 3, like the passage lane. It ran with no gate at all, so a tenant who had
-        # forbidden every tier still received catalog schema -- a small cap bypass -- and it stamped
-        # tier 2 on a part nothing checked against tier 2. Catalog is part of what tier 3 means now:
-        # passages, the relationships around them, and the schema of the tables involved.
-        if 3 in runnable:
-            catalog_part = self._catalog_part(ctx, question)
-            if catalog_part is not None:
-                answer.parts.append(catalog_part)
-                answer.lanes_run.append(Lane.CATALOG)
-        else:
-            answer.lanes_skipped[Lane.CATALOG.value] = _skipped(3, allowed, decision)
-
-        # The catalog lane finds the schema; this is what it is for. Gated on tier 3 like the other
-        # two, and additionally on the kill switch -- which refuses this lane alone. Refusing the
-        # whole tier would take passages and graph facts down with it, turning a switch that
-        # removes an ungoverned capability into one that removes governed answers.
-        if 3 not in runnable:
-            answer.lanes_skipped[Lane.SQL.value] = _skipped(3, allowed, decision)
-        elif settings.block_ungoverned_queries:
-            answer.lanes_skipped[Lane.SQL.value] = UNGOVERNED_BLOCKED
-            self.blocked.append(
-                BlockedQuery(
-                    tenant_id=ctx.tenant_id,
-                    user_id=ctx.user_id,
-                    question=question,
-                    reason=UNGOVERNED_BLOCKED,
-                    at=datetime.now(UTC).isoformat(),
-                )
+        for sub in asked:
+            lanes = self._lanes_for(
+                ctx,
+                sub,
+                settings,
+                execute=execute,
+                allowed=allowed,
+                runnable=runnable,
+                decision=decision,
             )
-        else:
-            sql_part = self._sql_part(ctx, question)
-            if sql_part is not None:
-                answer.parts.append(sql_part)
-                answer.lanes_run.append(Lane.SQL)
+            for part in lanes.parts:
+                part.sub_question = sub if len(asked) > 1 else None
+            answer.parts.extend(lanes.parts)
+            answer.lanes_run.extend(la for la in lanes.run if la not in answer.lanes_run)
+            # First reason wins: two halves skipping the same lane skip it for the same reason,
+            # since every gate here is per-tenant rather than per-question.
+            for lane_name, reason in lanes.skipped.items():
+                answer.lanes_skipped.setdefault(lane_name, reason)
+            seeds.extend(lanes.seeds)
+            answer.warnings.extend(w for w in lanes.warnings if w not in answer.warnings)
 
-        # Grounding. Deterministic, and it runs before synthesis so a model never sees
-        # evidence the graph refused.
+            # A metric answers its question outright, and when there is only one question that is
+            # the whole answer -- no screen, no synthesis, no other lane paid for. Split, it is one
+            # part among several and the rest of the pipeline still has work to do.
+            if lanes.metric_only and len(asked) == 1:
+                return answer
+
+        # A lane that ran for one half is not skipped, whatever the other half found. Reporting it
+        # both ways would have the trace contradict the parts sitting next to it.
+        for lane in answer.lanes_run:
+            answer.lanes_skipped.pop(lane.value, None)
+
+        # Grounding. Deterministic, once over every part, and before synthesis so a model never
+        # sees evidence the graph refused.
         screen = blocks_for(ctx, graph_reader=self._graph, seeds=seeds)
         answer.blocks = screen.blocks
         withheld = 0
@@ -423,6 +471,224 @@ class Planner:
                 "relevant was found in the graph or the documents."
             )
         return answer
+
+    def _split(self, question: str) -> list[str]:
+        """The questions this question contains, or just itself. Never raises, never empty.
+
+        Falls back to the whole question on anything unexpected, including a splitter that raises
+        despite documenting that it does not. Splitting is an improvement to how a question is
+        searched, and an improvement may not cost the answer.
+        """
+        if self._splitter is None:
+            return [question]
+        try:
+            parts = [p for p in self._splitter.split(question) if p and p.strip()]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("question not split, asking it whole: %s", e)
+            return [question]
+        return parts if len(parts) > 1 else [question]
+
+    def _lanes_for(
+        self,
+        ctx: AuthContext,
+        question: str,
+        settings: GovernanceSettings,
+        *,
+        execute: bool,
+        allowed: set[int],
+        runnable: set[int],
+        decision: Any | None,
+    ) -> _Lanes:
+        """Every lane one question gets. No screening and no synthesis: those happen once, above."""
+        lanes = _Lanes()
+
+        # A governed metric that matches is the whole answer to this question. Fanning out anyway
+        # would pay Athena plus Neptune plus OpenSearch latency to add nothing: the metric is exact
+        # and the question named it.
+        if 1 in runnable:
+            part = self._metric_part(ctx, question, settings, execute=execute)
+            if part is not None:
+                lanes.parts.append(part)
+                lanes.run.append(Lane.METRIC)
+                lanes.metric_only = True
+                return lanes
+        else:
+            lanes.skipped[Lane.METRIC.value] = _skipped(1, allowed, decision)
+
+        # One direction or the other, never both, and `allowed` was coerced so it cannot name both.
+        if GRAPH_FIRST_TIER in runnable:
+            self._graph_first(ctx, question, settings, lanes)
+        elif VECTOR_FIRST_TIER in runnable:
+            self._vector_first(ctx, question, settings, lanes)
+        else:
+            reason = _skipped_traversal(allowed, decision)
+            for lane in _TRAVERSAL_LANES:
+                lanes.skipped[lane.value] = reason
+        return lanes
+
+    # ── Directions ───────────────────────────────────────────────────────────
+
+    def _vector_first(
+        self, ctx: AuthContext, question: str, settings: GovernanceSettings, lanes: _Lanes
+    ) -> None:
+        """Tier 3: retrieve, then ground on the graph, then offer the schema.
+
+        Retrieval runs first so the graph lane can walk out from the passages the way
+        `Resolver._try_hybrid` does. The graph's term search is **not** here: matching the graph
+        lexically is the first step of the other direction, and running it under tier 3 would give a
+        tenant who chose vector-first the graph-first behaviour they declined.
+
+        The reported order still leads with the graph. A verified relationship is the stronger
+        claim, whatever order the stores were called in.
+        """
+        passage_part = self._passage_part(ctx, question, settings)
+        passages = passage_part.content if passage_part is not None else None
+
+        # Tier 3's own work, and stamped as such. `TIER_EXPLANATION[HYBRID]` promises "following
+        # verified relationships out from them", and on `demo-firm` the walk finds 30 citable facts
+        # where the term search finds 8 -- so a lane that skipped it reported no `assertion_ids` at
+        # all and hybrid was not hybrid.
+        walked = self._walked(ctx, passages, settings)
+        graph_part = self._facts_part(walked, tier=Tier.HYBRID)
+        if graph_part is not None:
+            lanes.parts.append(graph_part)
+            lanes.run.append(Lane.GRAPH)
+            lanes.seeds.extend(self._seeds_from(graph_part))
+        else:
+            lanes.skipped[Lane.GRAPH.value] = self._no_walk_reason(passages)
+
+        if passage_part is not None:
+            lanes.parts.append(passage_part)
+            lanes.run.append(Lane.PASSAGES)
+            lanes.seeds.extend(self._seeds_from(passage_part))
+
+        catalog_part = self._catalog_part(ctx, question)
+        if catalog_part is not None:
+            lanes.parts.append(catalog_part)
+            lanes.run.append(Lane.CATALOG)
+
+        # Gated on the kill switch, which refuses this lane alone. Refusing the whole tier would
+        # take passages and graph facts down with it, turning a switch that removes an ungoverned
+        # capability into one that removes governed answers.
+        if settings.block_ungoverned_queries:
+            self._refuse_sql(ctx, question, lanes)
+            return
+        sql_part = self._sql_part(ctx, question)
+        if sql_part is not None:
+            lanes.parts.append(sql_part)
+            lanes.run.append(Lane.SQL)
+
+    def _no_walk_reason(self, passages: Any) -> str:
+        """Why vector-first's graph lane contributed nothing.
+
+        Three different facts, and a reader can act on only one of them. Vector-first reaches the
+        graph through the passages it retrieved, so "nothing was retrieved" is a statement about
+        the documents and not about the graph -- and the term search that would have found a fact
+        anyway belongs to the other direction, which this tenant declined.
+        """
+        if self._graph is None:
+            return "no graph is configured, so nothing could be walked out from"
+        if not passages:
+            return (
+                "no passage was retrieved, and vector-first reaches the graph through the "
+                "passages it finds"
+            )
+        return "no verified relationship near the retrieved passages cleared the trust floor"
+
+    def _graph_first(
+        self, ctx: AuthContext, question: str, settings: GovernanceSettings, lanes: _Lanes
+    ) -> None:
+        """Tier 2: match the graph, then query only what it landed on. See `graph_first.py`.
+
+        The lane object is built here from collaborators this planner already holds, so the lane
+        `/query/compose` runs cannot differ from the one `/query` runs.
+        """
+        if self._graph is None:
+            for lane in _TRAVERSAL_LANES:
+                lanes.skipped[lane.value] = (
+                    "no graph is configured, and graph-first has nothing to traverse from"
+                )
+            return
+
+        sql_allowed = not settings.block_ungoverned_queries
+        if not sql_allowed:
+            self._refuse_sql(ctx, question, lanes)
+
+        result = GraphFirstLane(
+            graph_reader=self._graph,
+            vector_search=self._vectors,
+            catalog=self._catalog,
+            sql_lane=self._sql,
+        ).run(ctx, question, settings, sql_allowed=sql_allowed, synonyms=self._synonyms(ctx))
+        lanes.warnings.extend(result.notes)
+
+        # `landed` becomes the skip reasons. Which lanes had nothing to search is the one thing a
+        # reader cannot infer from a graph-first answer: an empty passage list means either that no
+        # document was reached or that the documents held no matching passage, and those are
+        # different facts about the same corpus.
+        if result.facts:
+            part = self._facts_part(result.facts, tier=Tier.GRAPH_TRAVERSAL)
+            if part is not None:
+                lanes.parts.append(part)
+                lanes.run.append(Lane.GRAPH)
+                lanes.seeds.extend(self._seeds_from(part))
+        else:
+            lanes.skipped[Lane.GRAPH.value] = (
+                "no verified fact in the graph matches this question's words"
+            )
+
+        if "documents" not in result.landed:
+            lanes.skipped[Lane.PASSAGES.value] = (
+                "no document was searched: graph-first reads only documents a verified fact came "
+                "from, and this question reached none"
+            )
+        elif result.passages:
+            part = self._passages_part(result.passages, tier=Tier.GRAPH_TRAVERSAL)
+            lanes.parts.append(part)
+            lanes.run.append(Lane.PASSAGES)
+            lanes.seeds.extend(self._seeds_from(part))
+
+        payload = result.to_dict()
+        if payload["tables"]:
+            lanes.parts.append(self._catalog_part_of(payload["tables"], tier=Tier.GRAPH_TRAVERSAL))
+            lanes.run.append(Lane.CATALOG)
+        else:
+            unreached = "this question's words do not reach a catalogued table through the graph"
+            lanes.skipped[Lane.CATALOG.value] = unreached
+            # `setdefault`: a refusal already recorded above is the more actionable reason, and an
+            # administrator turning the lane off is not the same fact as the graph reaching no table.
+            lanes.skipped.setdefault(Lane.SQL.value, unreached)
+
+        generated = payload.get("generated")
+        if generated is not None:
+            lanes.parts.append(
+                Part(
+                    lane=Lane.SQL,
+                    provenance=Provenance.MODEL_WRITTEN,
+                    tier=Tier.GRAPH_TRAVERSAL,
+                    content=generated["rows"],
+                    sql=generated["sql"],
+                    error=generated["error"],
+                )
+            )
+            lanes.run.append(Lane.SQL)
+
+    def _refuse_sql(self, ctx: AuthContext, question: str, lanes: _Lanes) -> None:
+        """Record the kill switch refusing model-written SQL, for the Governance screen.
+
+        One implementation for both directions. Two would let the two disagree about what was
+        refused, and a refusal nobody logged is indistinguishable from a lane that found nothing.
+        """
+        lanes.skipped[Lane.SQL.value] = UNGOVERNED_BLOCKED
+        self.blocked.append(
+            BlockedQuery(
+                tenant_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                question=question,
+                reason=UNGOVERNED_BLOCKED,
+                at=datetime.now(UTC).isoformat(),
+            )
+        )
 
     # ── Routing ──────────────────────────────────────────────────────────────
 
@@ -482,29 +748,15 @@ class Planner:
             metric_selection=selection_of(match),
         )
 
-    def _graph_part(
-        self,
-        ctx: AuthContext,
-        question: str,
-        settings: GovernanceSettings,
-        *,
-        passages: Any = None,
-        include_search: bool = True,
-    ) -> Part | None:
-        """Verified relationships, from a term search and from walking out of the passages.
+    @staticmethod
+    def _facts_part(hits: Sequence[dict[str, Any]], *, tier: Tier) -> Part | None:
+        """Verified relationships, however they were reached.
 
-        `include_search` is False when tier 2 is not permitted. The walk still runs, because it
-        belongs to tier 3: the passages it starts from were retrieved under tier 3 and the
-        relationships around them are what "hybrid" means. Only the term search is tier 2's.
+        `tier` is the tier that authorised them and is the caller's to state, not this method's to
+        guess: the same facts are tier 2's when a term search found them and tier 3's when they
+        were walked out of a retrieved passage. Stamping one tier on both would report a tier the
+        tenant has forbidden as having run.
         """
-        if self._graph is None:
-            return None
-        hits = (
-            self._graph.search(ctx, question, min_confidence=settings.min_confidence_floor)
-            if include_search
-            else []
-        )
-        hits = [*hits, *self._walked(ctx, passages, settings, already=hits)]
         if not hits:
             return None
         # A traversal returns whatever classes `edge_scope` admits, so the part is only
@@ -518,11 +770,8 @@ class Planner:
         return Part(
             lane=Lane.GRAPH,
             provenance=Provenance.INFERRED if model_written else Provenance.DETERMINISTIC,
-            # The tier that authorised this part, which is not always tier 2. With the term
-            # search off, every fact here was walked out from a tier 3 retrieval, and stamping
-            # it tier 2 would report a tier the tenant has forbidden as having run.
-            tier=Tier.GRAPH_TRAVERSAL if include_search else Tier.HYBRID,
-            content=hits,
+            tier=tier,
+            content=list(hits),
             assertion_ids=[h["assertion_id"] for h in hits if "assertion_id" in h],
             confidence=min(confidences) if confidences and model_written else None,
         )
@@ -533,9 +782,9 @@ class Planner:
         passages: Any,
         settings: GovernanceSettings,
         *,
-        already: list[dict[str, Any]],
+        already: Sequence[dict[str, Any]] = (),
     ) -> list[dict[str, Any]]:
-        """Verified relationships around the retrieved passages, deduplicated against the search.
+        """Verified relationships around the retrieved passages.
 
         The same `expand()` call `Resolver._try_hybrid` makes, from the same seeds, because two
         endpoints disagreeing about what a question found is a bug class this repo keeps hitting.
@@ -565,13 +814,18 @@ class Planner:
         passages = self._vectors.search(ctx, question, top_k=settings.vector_top_k)
         if not passages:
             return None
+        return self._passages_part(passages, tier=Tier.HYBRID)
+
+    @staticmethod
+    def _passages_part(passages: Sequence[dict[str, Any]], *, tier: Tier) -> Part:
+        """Quoted text, and the citations that let a reader go and check it."""
         return Part(
             lane=Lane.PASSAGES,
             # The text is quoted exactly. Similarity chose which passage, but nothing
             # rewrote it, so this is not the same kind of claim as an inference.
             provenance=Provenance.VERBATIM,
-            tier=Tier.HYBRID,
-            content=passages,
+            tier=tier,
+            content=list(passages),
             citations=[
                 {
                     "document_id": p.get("document_id"),
@@ -612,13 +866,18 @@ class Planner:
         ]
         if not relevant:
             return None
+        # Tier 3, matching the gate that let this lane run. It claimed tier 2 while nothing checked
+        # it against tier 2, so the reported tier was unbacked by any permission check.
+        return self._catalog_part_of(relevant, tier=Tier.HYBRID)
+
+    @staticmethod
+    def _catalog_part_of(rows: Sequence[dict[str, Any]], *, tier: Tier) -> Part:
+        """Schema, already selected. The selection differs by direction, the reporting does not."""
         return Part(
             lane=Lane.CATALOG,
             provenance=Provenance.DETERMINISTIC,
-            # Tier 3, matching the gate above. It claimed tier 2 while nothing checked it against
-            # tier 2, so the reported tier was unbacked by any permission check.
-            tier=Tier.HYBRID,
-            content=relevant,
+            tier=tier,
+            content=list(rows),
         )
 
     def _sql_part(self, ctx: AuthContext, question: str) -> Part | None:
@@ -702,6 +961,7 @@ class Planner:
             confidence=part.confidence,
             metric_selection=part.metric_selection,
             error=part.error,
+            sub_question=part.sub_question,
         )
 
     # ── Synthesis ────────────────────────────────────────────────────────────

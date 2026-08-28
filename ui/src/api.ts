@@ -736,7 +736,31 @@ export type QueryAnswer =
   | QueryRows
   | QueryHit[]
   | { passages: QueryPassage[]; related: QueryHit[]; generated?: GeneratedSQLResult }
+  | GraphFirstAnswer
   | null
+
+/**
+ * Tier 2's answer: what the graph matched, and what querying its landing zone returned.
+ *
+ * A variant rather than a reuse of the tier 3 shape. It is `facts`, not `related`, and the
+ * difference is the direction: tier 3 relates the graph to passages it already had, tier 2 matched
+ * the graph first and the passages came from where those facts did. Declared because it was not,
+ * and `asHits` silently returned nothing for a whole tier.
+ */
+export interface GraphFirstAnswer {
+  facts: QueryHit[]
+  passages: QueryPassage[]
+  tables: CatalogSchemaRef[]
+  /**
+   * How far the traversal reached: any of `facts`, `documents`, `tables`.
+   *
+   * Load-bearing, not diagnostic. An empty passage list means either that no document was reached
+   * or that the documents held nothing matching, and only this distinguishes them — so the trace
+   * reads it rather than reporting both as a lane that found nothing.
+   */
+  landed: string[]
+  generated?: GeneratedSQLResult
+}
 
 /**
  * A query an AI wrote, from tier 3's SQL lane. Only present when one was written and run.
@@ -1002,11 +1026,21 @@ export interface AnswerPart {
   error?: string | null
 }
 
+/** Graph first or vector first: the same traversal in opposite directions, and a tenant runs one. */
+export type RetrievalDirection = 'graph_first' | 'vector_first' | 'metrics_only'
+
 export interface ComposedResult {
   parts?: AnswerPart[]
   blocks?: QueryBlock[]
   lanes_run?: Lane[]
   lanes_skipped?: Record<string, string>
+  /**
+   * The direction these lanes were run in. Absent on a response from before the field existed.
+   *
+   * Needed because a skipped lane has no part and therefore no tier of its own, and labelling it
+   * from a hardcoded map put tier 3 on the lanes a graph-first tenant had declined.
+   */
+  retrieval_direction?: RetrievalDirection
   synthesis?: string | null
   /** Never plain "governed" when a model contributed. Composed server-side. */
   governance: string
@@ -1349,6 +1383,12 @@ export interface TenantSettings {
   router_metric_boost?: number
   /** The tenant's tier cap, so the page can show which routes are permitted at all. */
   allowed_tiers?: number[]
+  /**
+   * Which way this tenant traverses. Derived from `allowed_tiers` by the API rather than stored,
+   * because a second field would be a second default and the two could disagree about which lane
+   * is live.
+   */
+  retrieval_direction?: RetrievalDirection
   extraction_model: string
   synthesis_model: string
   /** Drives the Retrieval agent's loop. Separate from the query model, deliberately. */

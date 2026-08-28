@@ -34,6 +34,11 @@ from src.reasoning.engine import Reasoner
 
 TENANT = "firm-acme"
 
+#: Graph traversal, which the default cap no longer permits: tier 2 and tier 3 are one search in
+#: opposite directions and the default is vector first. Every test here starts from a term match in
+#: the graph, so it has to ask for the direction that begins there.
+GRAPH_FIRST = GovernanceSettings(allowed_tiers=frozenset({1, 2}))
+
 
 @pytest.fixture
 def ctx() -> AuthContext:
@@ -701,7 +706,7 @@ class TestTheApiReportsWhatTheWallDid:
         )
         _live(ctx, queue, [("counsel:dr", "REPRESENTS", "party:calder-plc", "M-1")], "j1")
         # No ontology, so the real reader cannot say which predicates veto.
-        res = Resolver(graph_reader=GraphReader(queue)).resolve(ctx, "calder", GovernanceSettings())
+        res = Resolver(graph_reader=GraphReader(queue)).resolve(ctx, "calder", GRAPH_FIRST)
         assert res.to_dict()["gate"]["degraded"]
         assert any("could not be checked for conflicts" in w for w in res.warnings)
 
@@ -711,7 +716,7 @@ class TestTheApiReportsWhatTheWallDid:
             InMemoryAssertionStore(), governing_predicates=onto.governing_predicates
         )
         _live(ctx, queue, [("counsel:dr", "REPRESENTS", "party:calder-plc", "M-1")], "j1")
-        answer = Planner(graph_reader=GraphReader(queue)).plan(ctx, "calder", GovernanceSettings())
+        answer = Planner(graph_reader=GraphReader(queue)).plan(ctx, "calder", GRAPH_FIRST)
         assert answer.to_dict()["gate"]["degraded"]
         assert any("could not be checked for conflicts" in w for w in answer.warnings)
 
@@ -785,20 +790,19 @@ class TestAConflictNotifiesRatherThanWithholds:
     """
 
     def test_the_conflict_is_still_reported(self, ctx):
-        res = Resolver(graph_reader=_reader_with_conflict(ctx)).resolve(
-            ctx, "calder", GovernanceSettings()
-        )
+        res = Resolver(graph_reader=_reader_with_conflict(ctx)).resolve(ctx, "calder", GRAPH_FIRST)
         assert res.blocks, "a notify finding must still be named, or nobody learns of it"
         assert [b.rule for b in res.blocks] == ["conflict_check"]
 
     def test_but_the_evidence_survives(self, ctx):
         """The behaviour the user asked for: notified, not walled."""
         reader = _reader_with_conflict(ctx)
-        res = Resolver(graph_reader=reader).resolve(ctx, "calder", GovernanceSettings())
+        res = Resolver(graph_reader=reader).resolve(ctx, "calder", GRAPH_FIRST)
         assert res.gate["items_withheld"] == 0
         assert any(
-            row.get("subject_id") == "party:calder-plc" or row.get("object_id") == "party:calder-plc"
-            for row in res.answer or []
+            row.get("subject_id") == "party:calder-plc"
+            or row.get("object_id") == "party:calder-plc"
+            for row in (res.answer or {}).get("facts") or []
         ), "the party the conflict is about must still appear in the evidence"
 
     def test_an_advisory_alone_does_not_make_the_screen_truthy(self, ctx):
@@ -834,7 +838,7 @@ class TestAConflictNotifiesRatherThanWithholds:
 
         synth = Synth()
         Planner(graph_reader=_reader_with_conflict(ctx), synthesiser=synth).plan(
-            ctx, "calder", GovernanceSettings()
+            ctx, "calder", GRAPH_FIRST
         )
         assert "party:calder-plc" in synth.saw
 
@@ -893,10 +897,10 @@ class TestTheWallActuallyWithholdsEvidence:
 
     def test_a_blocked_subject_is_dropped_from_the_answer(self, ctx):
         res = Resolver(graph_reader=self._unscoped()).resolve(
-            self._screened(ctx), "aquitaine", GovernanceSettings()
+            self._screened(ctx), "aquitaine", GRAPH_FIRST
         )
         assert res.blocks, "the screen produced no block, so nothing was under test"
-        assert res.answer == [], "a screened row must not survive the block check"
+        assert res.answer["facts"] == [], "a screened row must not survive the block check"
 
     def test_a_blocked_entity_is_dropped_when_it_is_the_object_of_an_edge(self, ctx):
         """`object_id` is in `SEED_KEYS`, so it seeds a block; `Screen.allows` did not test it.
@@ -909,7 +913,7 @@ class TestTheWallActuallyWithholdsEvidence:
 
     def test_the_withheld_count_reaches_the_trace(self, ctx):
         res = Resolver(graph_reader=self._unscoped()).resolve(
-            self._screened(ctx), "aquitaine", GovernanceSettings()
+            self._screened(ctx), "aquitaine", GRAPH_FIRST
         )
         assert res.gate["items_withheld"] >= 1
 
@@ -927,6 +931,7 @@ class TestTheWallActuallyWithholdsEvidence:
 
         synth = Synth()
         Planner(graph_reader=self._unscoped(), synthesiser=synth).plan(
-            self._screened(ctx), "aquitaine", GovernanceSettings()
+            self._screened(ctx), "aquitaine", GRAPH_FIRST
         )
+        assert synth.saw, "the synthesiser was never called, so nothing was under test"
         assert "document:advice" not in synth.saw

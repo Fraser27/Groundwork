@@ -29,6 +29,10 @@ from src.query.resolver import QueryBlocked, Resolver, Tier
 TENANT = "firm-acme"
 METRICS = "sample/metrics/legal.yaml"
 
+#: Tier 2 is not in the default cap: it and tier 3 are one search in opposite directions and the
+#: default is vector first. A test about graph traversal has to ask for graph traversal.
+GRAPH_FIRST = GovernanceSettings(allowed_tiers=frozenset({1, 2}))
+
 
 @pytest.fixture
 def ctx() -> AuthContext:
@@ -616,7 +620,7 @@ class TestTierOrdering:
 
     def test_falls_through_to_graph(self, matcher, reader, ctx):
         r = Resolver(metric_matcher=matcher, graph_reader=reader)
-        res = r.resolve(ctx, "which matters involve Acme Corporation", GovernanceSettings())
+        res = r.resolve(ctx, "which matters involve Acme Corporation", GRAPH_FIRST)
         assert res.tier is Tier.GRAPH_TRAVERSAL
         assert res.assertions_used
 
@@ -629,7 +633,7 @@ class TestTierOrdering:
     def test_tier_override_skips_earlier_tiers(self, matcher, reader, ctx):
         r = Resolver(metric_matcher=matcher, graph_reader=reader)
         res = r.resolve(
-            ctx, "fees billed by month", GovernanceSettings(), tier_override=Tier.GRAPH_TRAVERSAL
+            ctx, "fees billed by month", GRAPH_FIRST, tier_override=Tier.GRAPH_TRAVERSAL
         )
         assert res.tiers_attempted == [Tier.GRAPH_TRAVERSAL]
 
@@ -783,21 +787,21 @@ class TestTheEthicalScreenVetoesOnQueryToo:
 
     def test_a_screened_fact_does_not_survive_tier_two(self, screened):
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            screened, "acme corporation", GovernanceSettings()
+            screened, "acme corporation", GRAPH_FIRST
         )
-        assert [h["assertion_id"] for h in res.answer] == ["a-open"]
+        assert [h["assertion_id"] for h in res.answer["facts"]] == ["a-open"]
 
     def test_the_screened_assertion_id_is_stripped_from_the_audit_trail(self, screened):
         """Leaving the id behind would still hand the blocked subject to whatever reads the
         trail, and `See in graph` deep-links straight off this list."""
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            screened, "acme corporation", GovernanceSettings()
+            screened, "acme corporation", GRAPH_FIRST
         )
         assert res.assertions_used == ["a-open"]
 
     def test_the_block_is_reported_not_silent(self, screened):
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            screened, "acme corporation", GovernanceSettings()
+            screened, "acme corporation", GRAPH_FIRST
         )
         block = res.to_dict()["blocks"][0]
         assert block["matter_id"] == "M-9"
@@ -809,7 +813,7 @@ class TestTheEthicalScreenVetoesOnQueryToo:
         """A count, never the content. "One fact was withheld" is what stops the remainder
         reading as the whole answer."""
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            screened, "acme corporation", GovernanceSettings()
+            screened, "acme corporation", GRAPH_FIRST
         )
         assert any("withheld" in w for w in res.warnings)
 
@@ -817,17 +821,17 @@ class TestTheEthicalScreenVetoesOnQueryToo:
         """A nil result under a wall is the harm exactly: a conflict check that reads as clean
         when it is only incomplete."""
         res = Resolver(graph_reader=UnscopedReader([])).resolve(
-            screened, "zzzq unrelated gibberish", GovernanceSettings()
+            screened, "zzzq unrelated gibberish", GRAPH_FIRST
         )
         assert res.answer is None
         assert [b.matter_id for b in res.blocks] == ["M-9"]
 
     def test_an_unscreened_caller_carries_no_blocks(self, ctx):
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            ctx, "acme corporation", GovernanceSettings()
+            ctx, "acme corporation", GRAPH_FIRST
         )
         assert res.to_dict()["blocks"] == []
-        assert len(res.answer) == 2
+        assert len(res.answer["facts"]) == 2
 
     def test_a_hybrid_answer_is_screened_on_both_halves(self, screened):
         class Vectors:
@@ -871,9 +875,9 @@ class TestTheEthicalScreenVetoesOnQueryToo:
                 }
             ],
         )
-        res = Resolver(graph_reader=reader).resolve(screened, "acme", GovernanceSettings())
+        res = Resolver(graph_reader=reader).resolve(screened, "acme", GRAPH_FIRST)
         assert "conflict_check" in [b.rule for b in res.blocks]
-        assert res.answer == []
+        assert res.answer["facts"] == []
 
 
 class TestTierOneIsExemptByDecision:
