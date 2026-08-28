@@ -506,7 +506,7 @@ class Planner:
         # would pay Athena plus Neptune plus OpenSearch latency to add nothing: the metric is exact
         # and the question named it.
         if 1 in runnable:
-            part = self._metric_part(ctx, question, settings, execute=execute)
+            part = self._metric_part(ctx, question, settings, lanes, execute=execute)
             if part is not None:
                 lanes.parts.append(part)
                 lanes.run.append(Lane.METRIC)
@@ -728,6 +728,7 @@ class Planner:
         ctx: AuthContext,
         question: str,
         settings: GovernanceSettings,
+        lanes: _Lanes,
         *,
         execute: bool,
     ) -> Part | None:
@@ -737,13 +738,23 @@ class Planner:
         if match is None:
             return None
         sql = match.compile()
+        content = match.run(sql) if execute else None
+        # `lanes` is here only for these: the compiler's governance findings, and the error a failed
+        # query names. `Part` has nowhere to carry a warning, so dropping them was silent on both
+        # endpoints -- see the matching merge in `Resolver._try_metric`.
+        lanes.warnings.extend(w for w in match.warnings if w and w not in lanes.warnings)
+        if execute and content is None and not match.is_runnable:
+            lanes.warnings.append(
+                "The SQL compiled but no query engine is configured, so this is the query rather "
+                "than the figure. Nothing was run."
+            )
         return Part(
             lane=Lane.METRIC,
             provenance=Provenance.DETERMINISTIC
             if chosen_deterministically(match)
             else Provenance.MODEL_SELECTED,
             tier=Tier.GOVERNED_METRIC,
-            content=match.run(sql) if execute else None,
+            content=content,
             sql=sql,
             metric_selection=selection_of(match),
         )

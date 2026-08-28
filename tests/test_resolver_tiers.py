@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from src.documents.review import InMemoryAssertionStore, ReviewQueue
+from src.executors.athena import QueryResult
 from src.governance import GovernanceSettings
 from src.graph.assertions import (
     EpistemicClass,
@@ -647,6 +648,67 @@ class TestTierOrdering:
         res = r.resolve(ctx, "zzzq unrelated gibberish", GovernanceSettings())
         assert res.answer is None
         assert res.warnings
+
+
+class TestWhyThereIsNoFigure:
+    """A metric that compiled and returned no number owes the reader the reason.
+
+    There are three reasons and they are not interchangeable: nothing to run it against, the
+    warehouse refused it, or it ran and was truncated. The first two both arrive as a `None`
+    answer, and reporting them as one told an operator to configure a query engine that was
+    already configured while discarding the 403 that named the missing permission.
+    """
+
+    def _matcher(self, result: QueryResult | None) -> MetricMatcher:
+        class Executor:
+            def execute(self, sql: str) -> QueryResult:
+                assert result is not None
+                return result
+
+        return MetricMatcher(
+            load_metrics(METRICS).metrics,
+            StaticCatalog(tables={}),
+            executor=Executor() if result is not None else None,
+        )
+
+    def test_a_refused_query_names_the_refusal_not_the_engine(self, ctx):
+        """The measured failure: Athena accepted the query and S3 refused the read. Reporting
+        that as a missing query engine sends the reader to the one thing that was working."""
+        denied = QueryResult(
+            success=False,
+            error_code="query_error",
+            error="PERMISSION_DENIED: not authorized to perform s3:ListBucket",
+        )
+        res = Resolver(metric_matcher=self._matcher(denied)).resolve(
+            ctx, "fees billed by month", GovernanceSettings()
+        )
+
+        assert res.answer is None
+        assert any("s3:ListBucket" in w for w in res.warnings)
+        assert not any("no query engine" in w for w in res.warnings)
+
+    def test_no_executor_still_says_there_is_no_engine(self, ctx):
+        """The other half. This one is genuinely a deployment with nowhere to run SQL, and the
+        wording that was wrong above is right here."""
+        res = Resolver(metric_matcher=self._matcher(None)).resolve(
+            ctx, "fees billed by month", GovernanceSettings()
+        )
+
+        assert res.answer is None
+        assert any("no query engine" in w for w in res.warnings)
+
+    def test_a_truncated_total_says_so_beside_the_number(self, ctx):
+        """The dangerous one, because there *is* a figure. A total computed over a prefix is a
+        wrong number rather than a partial one, and the warning is the only thing saying so."""
+        prefix = QueryResult(
+            success=True, columns=["total"], rows=[["42"]], row_count=1, truncated=True
+        )
+        res = Resolver(metric_matcher=self._matcher(prefix)).resolve(
+            ctx, "fees billed by month", GovernanceSettings()
+        )
+
+        assert res.answer is not None
+        assert any("prefix" in w for w in res.warnings)
 
 
 class TestKillSwitch:

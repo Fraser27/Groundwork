@@ -38,12 +38,27 @@ def ctx() -> AuthContext:
     return AuthContext(tenant_id=TENANT, user_id="alice")
 
 
+#: So `rows=None` can mean "ran and returned nothing" rather than "use the default".
+_DEFAULT_ROWS = object()
+
+
 class FakeMatcher:
-    def __init__(self, sql: str = "SELECT 1", rows: Any = None, matches: bool = True) -> None:
+    def __init__(
+        self,
+        sql: str = "SELECT 1",
+        rows: Any = _DEFAULT_ROWS,
+        matches: bool = True,
+        warnings: list[str] | None = None,
+        runnable: bool = True,
+    ) -> None:
         self.sql = sql
-        self.rows = rows if rows is not None else [{"total": 42}]
+        self.rows = [{"total": 42}] if rows is _DEFAULT_ROWS else rows
         self.matches = matches
         self.ran = False
+        # Both mirror `MetricMatch`, which populates `warnings` in `compile` and again in `run`.
+        # Their absence here is what let the planner drop them unnoticed.
+        self.warnings = warnings if warnings is not None else []
+        self.is_runnable = runnable
 
     def match(self, question: str) -> Any:
         return self if self.matches else None
@@ -132,6 +147,34 @@ class TestGovernedMetricShortCircuits:
         answer = planner.plan(ctx, "fees billed", GovernanceSettings(), execute=False)
         assert answer.parts[0].sql == "SELECT 1"
         assert matcher.ran is False
+
+    def test_the_matchs_own_warnings_reach_the_answer(self, ctx):
+        """`Part` has no field for a warning, so these were dropped for the life of this lane:
+        the compiler's fan-out and non-additive-aggregation findings, and the error a failed
+        query names. A metric carrying a fan-out risk reported none of it."""
+        matcher = FakeMatcher(warnings=["Joining these tables inflates the total."])
+        answer = Planner(metric_matcher=matcher).plan(ctx, "fees billed", GovernanceSettings())
+
+        assert "Joining these tables inflates the total." in answer.warnings
+
+    def test_a_metric_with_nowhere_to_run_says_so(self, ctx):
+        """`/query` and `/query/compose` have disagreed before, so this is the same claim
+        `TestWhyThereIsNoFigure` makes of the resolver."""
+        matcher = FakeMatcher(rows=None, runnable=False)
+        answer = Planner(metric_matcher=matcher).plan(ctx, "fees billed", GovernanceSettings())
+
+        assert any("no query engine" in w for w in answer.warnings)
+
+    def test_a_failed_query_is_not_reported_as_a_missing_engine(self, ctx):
+        """The distinction that cost a morning: the engine was configured and the warehouse
+        refused the read. The refusal is already in `warnings`; substituting for it loses it."""
+        matcher = FakeMatcher(
+            rows=None, warnings=["The metric compiled but the query did not run (403)."]
+        )
+        answer = Planner(metric_matcher=matcher).plan(ctx, "fees billed", GovernanceSettings())
+
+        assert any("did not run (403)" in w for w in answer.warnings)
+        assert not any("no query engine" in w for w in answer.warnings)
 
 
 class TestFanOut:

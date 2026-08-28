@@ -112,6 +112,16 @@ class MetricMatch:
         return self.selected_by == SELECTED_BY_KEYWORD
 
     @property
+    def is_runnable(self) -> bool:
+        """Whether there is a warehouse behind this match at all.
+
+        Read rather than inferred from a `None` answer. A *failed* query returns None too, so the
+        caller that inferred reported a 403 on the lake as "no query engine is configured" and threw
+        away the error naming the permission.
+        """
+        return self._executor is not None
+
+    @property
     def selection_note(self) -> str:
         """One sentence saying how this metric was reached, for the answer rather than the log."""
         if self.selected_deterministically:

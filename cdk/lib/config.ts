@@ -78,6 +78,21 @@ export interface GroundworkConfig {
    * costs a cross-build; leaving it off costs only the third-party MCP endpoint.
    */
   readonly agentCoreMcp: boolean;
+  /**
+   * Buckets holding the data behind the Glue tables this deployment queries.
+   *
+   * Needed because Athena reads a table's underlying objects as the *calling* identity,
+   * not as a service role. `glue:GetTable` and `athena:StartQueryExecution` get a query
+   * accepted and then it fails 403 on the data, which surfaces as a governed metric that
+   * compiles and never returns a figure. The lake is normally not created by this app, so
+   * there is no construct to `grantRead` and the names have to be supplied.
+   *
+   * `['*']` grants every bucket in the account and is a supported answer. It is not the
+   * *default* answer, because empty means nobody has stated what this deployment may read
+   * and widening on a missing value is how a logical-isolation product leaks. An unset list
+   * raises a synth warning instead; see `buildTaskRole`.
+   */
+  readonly dataBuckets: string[];
 }
 
 export function readConfig(scope: Construct): GroundworkConfig {
@@ -93,6 +108,15 @@ export function readConfig(scope: Construct): GroundworkConfig {
         'group spanning multiple AZs, and a single-AZ VPC endpoint has no redundancy.',
     );
   }
+
+  // Accepts an array from cdk.json and a comma-separated string from `-c`, because `-c k=v`
+  // cannot express an array: it would arrive as the literal text `["a"]` and grant nothing.
+  // `s3://bucket/prefix` is trimmed to the bucket, since a bucket ARN cannot carry a prefix
+  // and pasting the location straight out of `glue get-tables` is the obvious thing to do.
+  const rawBuckets = ctx<string[] | string | undefined>('dataBuckets', undefined);
+  const dataBuckets = (Array.isArray(rawBuckets) ? rawBuckets : String(rawBuckets ?? '').split(','))
+    .map((name) => name.trim().replace(/^s3:\/\//, '').replace(/\/.*$/, ''))
+    .filter(Boolean);
 
   return {
     neptuneInstanceClass: ctx('neptuneInstanceClass', 'db.t4g.medium'),
@@ -110,6 +134,7 @@ export function readConfig(scope: Construct): GroundworkConfig {
     homeTenant: ctx('homeTenant', 'demo-firm'),
     availabilityZones: azs,
     agentCoreMcp: ctx('agentCoreMcp', false),
+    dataBuckets,
   };
 }
 
