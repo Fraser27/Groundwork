@@ -164,6 +164,16 @@ def services() -> None:
     _install(_config())
 
 
+def _graph_first(tenant_id: str) -> None:
+    """Point a tenant at graph-first retrieval.
+
+    `ask` answers from the first permitted tier, and the default cap is vector-first -- so a
+    question whose answer is a term match in the graph is unanswerable without a vector store
+    unless the tenant chose the direction that starts at the graph.
+    """
+    get_services().settings_for(tenant_id).allowed_tiers = frozenset({1, 2})
+
+
 def _session(token: str | None, work: Callable[[ClientSession], Awaitable[Any]]) -> Any:
     """Run `work` against a fresh MCP session over the ASGI app.
 
@@ -367,6 +377,7 @@ class TestAsk:
         """The audit trail an agent's answer rests on. Without these ids, a tool answer is
         less defensible than the same answer given by a human."""
         _stage(TENANT_A, matter_id="M-1")
+        _graph_first(TENANT_A)
         body = _call(
             TOKEN_A, "ask", {"question": "which topics does document d1 concern"}
         ).structuredContent
@@ -375,12 +386,32 @@ class TestAsk:
 
     def test_every_assertion_used_resolves_to_provenance(self):
         _stage(TENANT_A, matter_id="M-1")
+        _graph_first(TENANT_A)
         body = _call(
             TOKEN_A, "ask", {"question": "which topics does document d1 concern"}
         ).structuredContent
+        assert body["assertions_used"], "no assertion came back, so nothing was under test"
         for aid in body["assertions_used"]:
             prov = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}).structuredContent
             assert prov["assertion"]["source"]["quote"]
+
+    def test_the_default_returns_the_sql_without_running_it(self):
+        """The governance default: a person reads what the query will do before it does it. Pinned
+        because an agent that leaves `execute` alone and reports the result as a figure is the bug
+        this default invites."""
+        body = _call(TOKEN_A, "ask", {"question": "show me fees billed by month"}).structuredContent
+        assert "SELECT" in body["sql"]
+        assert body["answer"] is None
+
+    def test_asking_to_execute_with_no_engine_says_so(self):
+        """`answer: null` here means "nothing to run it against", and a metric that legitimately
+        matched no rows would say the same thing. Unwarned, an agent cannot tell the two apart and
+        will either invent a figure or report an empty warehouse as an empty result."""
+        body = _call(
+            TOKEN_A, "ask", {"question": "show me fees billed by month", "execute": True}
+        ).structuredContent
+        assert body["answer"] is None
+        assert any("no query engine is configured" in w for w in body["warnings"]), body["warnings"]
 
     def test_tiers_attempted_are_named_not_numbered(self):
         body = _call(TOKEN_A, "ask", {"question": "zzzq unrelated gibberish"}).structuredContent

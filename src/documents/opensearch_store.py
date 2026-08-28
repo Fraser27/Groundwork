@@ -239,6 +239,7 @@ class OpenSearchVectorStore:
         top_k: int = 10,
         matter_allowlist: frozenset[str] | None = None,
         matter_denylist: frozenset[str] = frozenset(),
+        seed_documents: frozenset[str] | None = None,
     ) -> list[SearchHit]:
         """kNN search with the matter wall applied inside the query.
 
@@ -246,6 +247,11 @@ class OpenSearchVectorStore:
         computed over what this caller may read. Filtering afterwards would return fewer than
         top_k whenever a screen applied, and the shortfall reads as irrelevance rather than
         refusal.
+
+        `seed_documents` joins the same pre-filter for the same reason, one clause further in. It
+        is the graph-first tier naming the documents its facts came from, so post-filtering would
+        return the top_k nearest chunks in the tenant and then throw away the ones the graph
+        actually pointed at.
 
         A missing index is an empty result, not an error: a tenant who has uploaded nothing has
         no index, and that is a normal state rather than a failure.
@@ -255,6 +261,8 @@ class OpenSearchVectorStore:
         # must beat a permission -- a screened matter is refused even when it is also assigned.
         must: list[dict[str, Any]] = []
         must_not: list[dict[str, Any]] = []
+        if seed_documents:
+            must.append({"terms": {"document_id": sorted(seed_documents)}})
         if matter_allowlist is not None:
             must.append(
                 {

@@ -33,6 +33,7 @@ from src.api.deps import (
     Services,
     ServicesDep,
     TenantDep,
+    build_router_indexer,
     load_example_pack,
     require_admin,
 )
@@ -67,6 +68,32 @@ def _require_store(services: Services) -> GraphMetricStore:
             "metrics keep answering questions; new definitions cannot be saved yet.",
         )
     return GraphMetricStore(services.graph)
+
+
+def _reindex_routing(services: Services, ctx: Any) -> str:
+    """Re-describe this tenant's approved metrics, returning a note when it could not be done.
+
+    Called from every write that changes *which* metrics are approved or *what one says*. Without
+    it a metric is reachable only by the words in its own name: tier 1 falls back to similarity
+    when no keyword matches, and that search reads a layer only Rebuild ever wrote to, so
+    "total turnover" never found `total_revenue` however close the two are.
+
+    Best-effort and reported rather than raised. The definition is already saved, and failing the
+    request after the write would leave the author unsure whether it took.
+    """
+    indexer = build_router_indexer(services)
+    if indexer is None:
+        return ""
+    try:
+        indexer.reindex_metrics(ctx)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("routing reindex failed for %s: %s", ctx.tenant_id, e)
+        return (
+            "Saved, but the router index was not updated, so this metric is findable only by the "
+            "exact words in its name and definition. Approve it again once the index is reachable, "
+            f"or call the router rebuild endpoint: {e}"
+        )
+    return ""
 
 
 def _catalog(services: Services, tenant_id: str) -> Any:
@@ -363,11 +390,14 @@ async def update_metric(
     saved = store.save_metric(
         ctx.tenant_id, definition, updated_by=ctx.user_id, status=existing_status
     )
+    # Only when it is live. A draft is not in the approved set, so reindexing would delete and
+    # rewrite the layer to the same content.
+    stale = _reindex_routing(services, ctx) if existing_status == STATUS_APPROVED else ""
 
     return {
         **_out(definition, status_value=existing_status, version=int(saved.get("version") or 1)),
         "sql": result.sql,
-        "warnings": result.warnings,
+        "warnings": [*result.warnings, *([stale] if stale else [])],
         "note": "The previous definition was snapshotted and can be restored.",
     }
 
@@ -399,6 +429,10 @@ async def set_metric_status(
     except LookupError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
 
+    # Both directions. Approving has to add the description a question is matched against, and
+    # deprecating has to remove it, or the router keeps steering to a metric that no longer answers.
+    stale = _reindex_routing(services, ctx)
+
     serving = (
         "It can now answer questions."
         if body.status == STATUS_APPROVED
@@ -408,7 +442,10 @@ async def set_metric_status(
             else "It is back to a draft and will not answer questions."
         )
     )
-    return {"metric_id": metric_id, "status": body.status, "note": serving}
+    out = {"metric_id": metric_id, "status": body.status, "note": serving}
+    if stale:
+        out["warnings"] = [stale]
+    return out
 
 
 @router.get("/tenants/{tenant}/metrics/{metric_id}/versions")
@@ -449,11 +486,15 @@ async def restore_metric_version(
     require_admin(principal)
     ctx, _ = principal
     store = _require_store(services)
+    was = store.status_of(ctx.tenant_id, metric_id)
     try:
         saved = store.restore_version(ctx.tenant_id, metric_id, version, updated_by=ctx.user_id)
     except LookupError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
-    return {
+    # A restore lands as a draft, so restoring a live metric takes it *out* of service and the
+    # router must stop steering to it.
+    stale = _reindex_routing(services, ctx) if was == STATUS_APPROVED else ""
+    out = {
         "metric_id": metric_id,
         "restored_from": version,
         "version": saved.get("version"),
@@ -463,6 +504,9 @@ async def restore_metric_version(
             "it replaced was snapshotted, so this is reversible."
         ),
     }
+    if stale:
+        out["warnings"] = [stale]
+    return out
 
 
 @router.delete("/tenants/{tenant}/metrics/{metric_id}")
@@ -477,10 +521,12 @@ async def delete_metric(
     require_admin(principal)
     ctx, _ = principal
     store = _require_store(services)
-    if store.status_of(ctx.tenant_id, metric_id) is None:
+    was = store.status_of(ctx.tenant_id, metric_id)
+    if was is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no metric {metric_id!r}")
     store.delete_metric(ctx.tenant_id, metric_id)
-    return {
+    stale = _reindex_routing(services, ctx) if was == STATUS_APPROVED else ""
+    out = {
         "metric_id": metric_id,
         "deleted": True,
         "note": (
@@ -488,6 +534,9 @@ async def delete_metric(
             "have stopped it answering while keeping the record."
         ),
     }
+    if stale:
+        out["warnings"] = [stale]
+    return out
 
 
 @router.post("/tenants/{tenant}/metrics/seed")
@@ -527,9 +576,11 @@ async def seed_metrics(
         updated_by=ctx.user_id,
         status=STATUS_APPROVED if approve else STATUS_DRAFT,
     )
+    stale = _reindex_routing(services, ctx) if approve else ""
     return {
         **counts,
         "approved": approve,
+        **({"warnings": [stale]} if stale else {}),
         "note": (
             f"Seeded the {domain} example pack as "
             + ("approved" if approve else "drafts")

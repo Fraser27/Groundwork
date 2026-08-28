@@ -221,92 +221,94 @@ export default function Provenance() {
       )}
 
       <div className="card">
-        <table className="data-table data-table-hover">
-          <thead>
-            <tr>
-              <th>Claim</th>
-              <th>
-                How reached
-                <FieldHelp text={HELP.epistemicClass} />
-              </th>
-              <th>
-                Confidence
-                <FieldHelp text={HELP.confidence} />
-              </th>
-              <th>
-                Method
-                <FieldHelp text={HELP.method} />
-              </th>
-              <th>{unit.singular}</th>
-              <th>State</th>
-              <th>Recorded</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((a) => (
-              <tr
-                key={a.assertion_id}
-                onClick={() => setSelected(a.assertion_id)}
-                style={a.superseded_at ? { opacity: 0.6 } : undefined}
-              >
-                <td>
-                  <span style={a.superseded_at ? { textDecoration: 'line-through' } : undefined}>
-                    <strong>{a.subject_label || a.subject_id}</strong>{' '}
-                    <span className="prov-pred">{a.predicate}</span>{' '}
-                    <strong>{a.object_label || a.object_id}</strong>
-                  </span>
-                  {a.premises.length > 0 && (
-                    <div className="dim" style={{ fontSize: 11, marginTop: 3 }}>
-                      rests on {a.premises.length} premise{a.premises.length === 1 ? '' : 's'}
-                    </div>
-                  )}
-                </td>
-                <td>
-                  <EpistemicBadge epistemicClass={a.epistemic_class} size="sm" />
-                </td>
-                <td>
-                  <ConfidenceBar value={a.confidence} floor={floor} />
-                </td>
-                <td>
-                  <code style={{ fontSize: 11 }}>{a.method}</code>
-                </td>
-                <td className="nowrap dim">{a.matter_id || '-'}</td>
-                <td className="nowrap">
-                  <span
-                    className={`tag ${
-                      a.review_state === 'APPROVED' || a.review_state === 'AUTO_ASSERTED'
-                        ? 'tag-green'
-                        : a.review_state === 'REJECTED'
-                          ? 'tag-red'
-                          : 'tag-orange'
-                    }`}
-                  >
-                    {REVIEW_STATE_LABEL[a.review_state]}
-                  </span>
-                  {a.superseded_at && (
-                    <div style={{ marginTop: 4 }}>
-                      <span className="tag tag-neutral" title={HELP.supersede}>
-                        superseded
-                      </span>
-                    </div>
-                  )}
-                </td>
-                <td className="nowrap dim">{fmtDateTime(a.recorded_at)}</td>
-              </tr>
-            ))}
-            {filtered.length === 0 && (
+        <div className="table-scroll">
+          <table className="data-table data-table-hover">
+            <thead>
               <tr>
-                <td colSpan={7}>
-                  <EmptyState title={all.length === 0 ? 'No facts recorded yet' : 'Nothing matches'}>
-                    {all.length === 0
-                      ? 'The graph is empty. Facts appear here as documents are ingested and claims are reviewed.'
-                      : 'Widen the filters, or clear the as-at date.'}
-                  </EmptyState>
-                </td>
+                <th>Claim</th>
+                <th>
+                  How reached
+                  <FieldHelp text={HELP.epistemicClass} />
+                </th>
+                <th>
+                  Confidence
+                  <FieldHelp text={HELP.confidence} />
+                </th>
+                <th>
+                  Method
+                  <FieldHelp text={HELP.method} />
+                </th>
+                <th>{unit.singular}</th>
+                <th>State</th>
+                <th>Recorded</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filtered.map((a) => (
+                <tr
+                  key={a.assertion_id}
+                  onClick={() => setSelected(a.assertion_id)}
+                  style={a.superseded_at ? { opacity: 0.6 } : undefined}
+                >
+                  <td>
+                    <span style={a.superseded_at ? { textDecoration: 'line-through' } : undefined}>
+                      <strong>{a.subject_label || a.subject_id}</strong>{' '}
+                      <span className="prov-pred">{a.predicate}</span>{' '}
+                      <strong>{a.object_label || a.object_id}</strong>
+                    </span>
+                    {a.premises.length > 0 && (
+                      <div className="dim" style={{ fontSize: 11, marginTop: 3 }}>
+                        rests on {a.premises.length} premise{a.premises.length === 1 ? '' : 's'}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <EpistemicBadge epistemicClass={a.epistemic_class} size="sm" />
+                  </td>
+                  <td>
+                    <ConfidenceBar value={a.confidence} floor={floor} />
+                  </td>
+                  <td>
+                    <code style={{ fontSize: 11 }}>{a.method}</code>
+                  </td>
+                  <td className="nowrap dim">{a.matter_id || '-'}</td>
+                  <td className="nowrap">
+                    <span
+                      className={`tag ${
+                        a.review_state === 'APPROVED' || a.review_state === 'AUTO_ASSERTED'
+                          ? 'tag-green'
+                          : a.review_state === 'REJECTED'
+                            ? 'tag-red'
+                            : 'tag-orange'
+                      }`}
+                    >
+                      {REVIEW_STATE_LABEL[a.review_state]}
+                    </span>
+                    {a.superseded_at && (
+                      <div style={{ marginTop: 4 }}>
+                        <span className="tag tag-neutral" title={HELP.supersede}>
+                          superseded
+                        </span>
+                      </div>
+                    )}
+                  </td>
+                  <td className="nowrap dim">{fmtDateTime(a.recorded_at)}</td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7}>
+                    <EmptyState title={all.length === 0 ? 'No facts recorded yet' : 'Nothing matches'}>
+                      {all.length === 0
+                        ? 'The graph is empty. Facts appear here as documents are ingested and claims are reviewed.'
+                        : 'Widen the filters, or clear the as-at date.'}
+                    </EmptyState>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
         </>
@@ -401,38 +403,40 @@ function GraphChanges({ tenant }: { tenant: string }) {
           Append-only &middot; newest first &middot; the facts described are closed, not deleted
         </span>
       </div>
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Who</th>
-            <th>What</th>
-            <th>Subject</th>
-            <th className="num">Facts</th>
-            <th>Reason</th>
-          </tr>
-        </thead>
-        <tbody>
-          {events.map((e, i) => (
-            <tr key={`${e.at}-${i}`}>
-              <td className="nowrap dim">{fmtDateTime(e.at)}</td>
-              <td className="audit-actor">
-                <Actor sub={e.actor} email={e.actor_email} />
-              </td>
-              <td>
-                <span className={`tag ${e.action === 'SUPERSEDE' ? 'tag-orange' : 'tag-red'}`}>
-                  {fillUnit(ACTION_LABEL[e.action] ?? e.action, unit)}
-                </span>
-              </td>
-              <td className="mono" style={{ fontSize: 12 }}>
-                {e.matter_id || e.document_id || '-'}
-              </td>
-              <td className="num">{fmtNum(e.affected)}</td>
-              <td>{e.reason || <span className="dim">no reason recorded</span>}</td>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Who</th>
+              <th>What</th>
+              <th>Subject</th>
+              <th className="num">Facts</th>
+              <th>Reason</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {events.map((e, i) => (
+              <tr key={`${e.at}-${i}`}>
+                <td className="nowrap dim">{fmtDateTime(e.at)}</td>
+                <td className="audit-actor">
+                  <Actor sub={e.actor} email={e.actor_email} />
+                </td>
+                <td>
+                  <span className={`tag ${e.action === 'SUPERSEDE' ? 'tag-orange' : 'tag-red'}`}>
+                    {fillUnit(ACTION_LABEL[e.action] ?? e.action, unit)}
+                  </span>
+                </td>
+                <td className="mono" style={{ fontSize: 12 }}>
+                  {e.matter_id || e.document_id || '-'}
+                </td>
+                <td className="num">{fmtNum(e.affected)}</td>
+                <td>{e.reason || <span className="dim">no reason recorded</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <p className="hint">
         A withdrawal removes facts from the current graph and nothing else: a dated read from
         before the entry still reconstructs them, and conclusions drawn earlier are left standing
@@ -630,83 +634,85 @@ function Questions({
               Append-only &middot; newest first &middot; refusals are in Governance, not here
             </span>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Who</th>
-                <th>Question</th>
-                <th>
-                  Asked from
-                  <FieldHelp text="Which surface the question came in on. An agent calling the tools does so on the user's own token and sees exactly what they would, so this changes nothing about what was permitted. It changes who composed the words: a Retrieval run ends in prose the agent wrote, and that is not the same artefact as a compiled metric read off the page." />
-                </th>
-                <th>
-                  Answered by
-                  <FieldHelp text="Which tier produced the answer, and what the answer may be called. A governed metric is deterministic; an AI-written query is not, and the distinction is recorded rather than inferred later. Where several lanes contributed the basis names each rather than reducing them to the weakest. A route marked retired no longer exists: the log is append-only, so an answer given while it did still says so." />
-                </th>
-                <th className="num">Facts used</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((e, i) => (
-                <tr key={`${e.at}-${i}`}>
-                  <td className="nowrap dim">{fmtDateTime(e.at)}</td>
-                  <td className="audit-actor">
-                    <Actor sub={e.actor} email={e.actor_email} />
-                  </td>
-                  <td>
-                    {e.question}
-                    {!e.answered && (
-                      <div style={{ marginTop: 4 }}>
-                        <span className="tag tag-neutral">no answer found</span>
-                      </div>
-                    )}
-                  </td>
-                  <td className="nowrap">
-                    <span className="tag tag-neutral">
-                      {SURFACE_LABEL[e.surface ?? 'query'] ?? e.surface}
-                    </span>
-                    {e.tools_called && e.tools_called.length > 0 && (
-                      <div
-                        className="dim"
-                        style={{ marginTop: 4, fontSize: 11.5 }}
-                        title={e.tools_called.join(' -> ')}
-                      >
-                        {e.tools_called.length}{' '}
-                        {e.tools_called.length === 1 ? 'tool call' : 'tool calls'}
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <span className={`tag ${basisTone(e)}`}>
-                      {e.tier > 0
-                        ? `Tier ${e.tier} · ${TIER_LABEL[e.tier] ?? e.tier_name}`
-                        : 'no tier reached'}
-                    </span>
-                    {e.basis && (
-                      <div className="dim" style={{ marginTop: 4, fontSize: 11.5 }}>
-                        {e.basis}
-                      </div>
-                    )}
-                  </td>
-                  <td className="num">
-                    {e.facts_used === 0 ? (
-                      <span className="dim" title="A metric or an AI-written query cites no facts.">
-                        -
-                      </span>
-                    ) : (
-                      <FactIds
-                        ids={e.assertion_ids}
-                        total={e.facts_used}
-                        truncated={e.ids_truncated}
-                        onInspect={onInspect}
-                      />
-                    )}
-                  </td>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Who</th>
+                  <th>Question</th>
+                  <th>
+                    Asked from
+                    <FieldHelp text="Which surface the question came in on. An agent calling the tools does so on the user's own token and sees exactly what they would, so this changes nothing about what was permitted. It changes who composed the words: a Retrieval run ends in prose the agent wrote, and that is not the same artefact as a compiled metric read off the page." />
+                  </th>
+                  <th>
+                    Answered by
+                    <FieldHelp text="Which tier produced the answer, and what the answer may be called. A governed metric is deterministic; an AI-written query is not, and the distinction is recorded rather than inferred later. Where several lanes contributed the basis names each rather than reducing them to the weakest. A route marked retired no longer exists: the log is append-only, so an answer given while it did still says so." />
+                  </th>
+                  <th className="num">Facts used</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {events.map((e, i) => (
+                  <tr key={`${e.at}-${i}`}>
+                    <td className="nowrap dim">{fmtDateTime(e.at)}</td>
+                    <td className="audit-actor">
+                      <Actor sub={e.actor} email={e.actor_email} />
+                    </td>
+                    <td>
+                      {e.question}
+                      {!e.answered && (
+                        <div style={{ marginTop: 4 }}>
+                          <span className="tag tag-neutral">no answer found</span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="nowrap">
+                      <span className="tag tag-neutral">
+                        {SURFACE_LABEL[e.surface ?? 'query'] ?? e.surface}
+                      </span>
+                      {e.tools_called && e.tools_called.length > 0 && (
+                        <div
+                          className="dim"
+                          style={{ marginTop: 4, fontSize: 11.5 }}
+                          title={e.tools_called.join(' -> ')}
+                        >
+                          {e.tools_called.length}{' '}
+                          {e.tools_called.length === 1 ? 'tool call' : 'tool calls'}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`tag ${basisTone(e)}`}>
+                        {e.tier > 0
+                          ? `Tier ${e.tier} · ${TIER_LABEL[e.tier] ?? e.tier_name}`
+                          : 'no tier reached'}
+                      </span>
+                      {e.basis && (
+                        <div className="dim" style={{ marginTop: 4, fontSize: 11.5 }}>
+                          {e.basis}
+                        </div>
+                      )}
+                    </td>
+                    <td className="num">
+                      {e.facts_used === 0 ? (
+                        <span className="dim" title="A metric or an AI-written query cites no facts.">
+                          -
+                        </span>
+                      ) : (
+                        <FactIds
+                          ids={e.assertion_ids}
+                          total={e.facts_used}
+                          truncated={e.ids_truncated}
+                          onInspect={onInspect}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <p className="hint">
             A recorded question is not a copy of the answer: it is who asked, which tier answered,
             and the facts the answer rested on. That is what makes an answer defensible after the

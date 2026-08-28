@@ -354,7 +354,9 @@ class TestWhatTheApiSays:
         res = Resolver(metric_matcher=matcher()).resolve(ctx, "fees billed by matter", settings())
         assert "the same answer every time" in res.explanation
         assert res.to_dict()["deterministic_selection"] is True
-        assert res.warnings == []
+        # The mirror of `test_the_warning_reaches_the_caller`: no *selection* warning. Warnings
+        # about anything else belong here, and an absent query engine adds one.
+        assert not any("similarity" in w for w in res.warnings)
 
     def test_the_composed_part_is_model_selected_not_deterministic(self, ctx):
         candidates = FakeCandidates([MetricCandidate("lg_fees_billed", PRODUCTION_SIMILARITY)])

@@ -121,7 +121,7 @@ class TestAForbiddenTierIsNeverQueried:
 
     def test_a_forbidden_kind_is_excluded_from_the_search_itself(self):
         routing = FakeRoutingIndex({KIND_METRIC: STRONG, KIND_ENTITY: STRONG})
-        router(routing).route(ctx(), "anything", settings(allowed_tiers=frozenset({2, 3})))
+        router(routing).route(ctx(), "anything", settings(allowed_tiers=frozenset({2})))
 
         assert routing.calls, "the router did not search at all"
         assert KIND_METRIC not in routing.calls[0]["kinds"]
@@ -130,9 +130,7 @@ class TestAForbiddenTierIsNeverQueried:
         """The trace is expandable, so an item in it is a disclosure of data the tenant told the
         system not to use."""
         routing = FakeRoutingIndex({KIND_METRIC: STRONG, KIND_ENTITY: WEAK})
-        decision = router(routing).route(
-            ctx(), "anything", settings(allowed_tiers=frozenset({2, 3}))
-        )
+        decision = router(routing).route(ctx(), "anything", settings(allowed_tiers=frozenset({2})))
 
         assert KIND_METRIC not in decision.items
         assert all(layer.kind != KIND_METRIC for layer in decision.layers)
@@ -142,9 +140,7 @@ class TestAForbiddenTierIsNeverQueried:
         push the 0.4 entity layer outside a 0.35 margin -- so forbidding tier 1 would silently cost
         tier 2 as well."""
         routing = FakeRoutingIndex({KIND_METRIC: STRONG, KIND_ENTITY: WEAK})
-        decision = router(routing).route(
-            ctx(), "anything", settings(allowed_tiers=frozenset({2, 3}))
-        )
+        decision = router(routing).route(ctx(), "anything", settings(allowed_tiers=frozenset({2})))
 
         assert 2 in decision.tiers
 
@@ -152,9 +148,7 @@ class TestAForbiddenTierIsNeverQueried:
         """ "Your administrator turned this off" and "this did not look relevant" are different
         facts about the system, and a reader has to be able to tell them apart."""
         routing = FakeRoutingIndex({KIND_ENTITY: STRONG})
-        decision = router(routing).route(
-            ctx(), "anything", settings(allowed_tiers=frozenset({2, 3}))
-        )
+        decision = router(routing).route(ctx(), "anything", settings(allowed_tiers=frozenset({2})))
 
         assert "not permitted" in decision.dropped["1"]
 
@@ -175,10 +169,10 @@ class TestAForbiddenTierIsNeverQueried:
 
     def test_a_degraded_decision_does_not_resurrect_a_forbidden_tier(self):
         """The failure path is the easiest place to lose a restriction."""
-        decision = TierRouter().route(ctx(), "anything", settings(allowed_tiers=frozenset({2, 3})))
+        decision = TierRouter().route(ctx(), "anything", settings(allowed_tiers=frozenset({2})))
 
         assert decision.degraded is True
-        assert decision.tiers == [2, 3]
+        assert decision.tiers == [2]
 
     def test_a_tier_that_does_not_exist_is_not_reported_as_forbidden(self):
         """Retired and forbidden are different facts. A hardcoded `(1, 2, 3, 4)` here told the
@@ -186,11 +180,11 @@ class TestAForbiddenTierIsNeverQueried:
         that it was never built -- so the trace blamed a policy for a missing capability."""
         routing = FakeRoutingIndex({k: STRONG for k in (KIND_METRIC, KIND_ENTITY, KIND_TABLE)})
         decision = router(routing, FakeChunks(STRONG)).route(
-            ctx(), "anything", settings(allowed_tiers=frozenset({1, 2, 3}))
+            ctx(), "anything", settings(allowed_tiers=frozenset({1, 3}))
         )
 
         assert "4" not in decision.dropped
-        assert decision.forbidden == set()
+        assert 4 not in decision.forbidden
 
 
 class TestRoutingNeverCostsAnAnswer:
@@ -198,14 +192,14 @@ class TestRoutingNeverCostsAnAnswer:
         decision = TierRouter().route(ctx(), "anything", settings())
 
         assert decision.degraded is True
-        assert decision.tiers == [1, 2, 3]
+        assert decision.tiers == [1, 3]
         assert decision.reason and "no vector store" in decision.reason
 
     def test_an_empty_index_degrades(self):
         decision = router(FakeRoutingIndex({})).route(ctx(), "anything", settings())
 
         assert decision.degraded is True
-        assert decision.tiers == [1, 2, 3]
+        assert decision.tiers == [1, 3]
 
     def test_nothing_above_the_floor_degrades(self):
         """Similarity is not calibrated, so "everything scored badly" means the question is not
@@ -214,7 +208,7 @@ class TestRoutingNeverCostsAnAnswer:
         decision = router(routing).route(ctx(), "anything", settings(router_min_similarity=0.5))
 
         assert decision.degraded is True
-        assert decision.tiers == [1, 2, 3]
+        assert decision.tiers == [1, 3]
 
     def test_an_unreachable_index_degrades_rather_than_raising(self):
         class Broken:
@@ -224,7 +218,7 @@ class TestRoutingNeverCostsAnAnswer:
         decision = router(Broken()).route(ctx(), "anything", settings())
 
         assert decision.degraded is True
-        assert decision.tiers == [1, 2, 3]
+        assert decision.tiers == [1, 3]
 
     def test_a_failed_embedding_degrades(self):
         decision = router(embedder=FakeEmbedder(fail=True)).route(ctx(), "anything", settings())
@@ -260,13 +254,20 @@ class TestTheDecision:
 
         assert 1 in decision.tiers
 
-    def test_a_table_layer_justifies_both_tier_2_and_tier_3(self):
-        """A catalogued table is reachable two ways: its schema is in the graph, and tier 3 reads
-        that schema alongside passages."""
-        routing = FakeRoutingIndex({KIND_TABLE: STRONG})
-        decision = router(routing).route(ctx(), "anything", settings())
+    def test_a_table_layer_justifies_whichever_direction_is_permitted(self):
+        """A catalogued table is reachable both ways: graph-first walks the schema edges to it,
+        vector-first reads that schema alongside passages. So the layer justifies tier 2 and tier 3
+        equally and the tenant's cap decides which one that means -- it must not justify neither
+        because the cap named only one of them."""
+        graph_first = router(FakeRoutingIndex({KIND_TABLE: STRONG})).route(
+            ctx(), "anything", settings(allowed_tiers=frozenset({1, 2}))
+        )
+        vector_first = router(FakeRoutingIndex({KIND_TABLE: STRONG})).route(
+            ctx(), "anything", settings(allowed_tiers=frozenset({1, 3}))
+        )
 
-        assert decision.tiers == [2, 3]
+        assert graph_first.tiers == [2]
+        assert vector_first.tiers == [3]
 
     def test_passages_are_scored_from_the_chunk_index(self):
         """Nothing in the routing index can score tier 3, so a summary of passages there would be a
@@ -280,7 +281,9 @@ class TestTheDecision:
     def test_a_tier_two_layers_justify_is_not_reported_as_dropped(self):
         """A losing table layer must not drop tier 2 when the entity layer won it."""
         routing = FakeRoutingIndex({KIND_ENTITY: STRONG, KIND_TABLE: 0.55})
-        decision = router(routing).route(ctx(), "anything", settings(router_margin=0.05))
+        decision = router(routing).route(
+            ctx(), "anything", settings(router_margin=0.05, allowed_tiers=frozenset({1, 2}))
+        )
 
         assert 2 in decision.tiers
         assert "2" not in decision.dropped
@@ -363,6 +366,8 @@ class TestTheTrace:
     def test_similarity_is_reported_as_a_cosine_not_a_raw_score(self):
         """An admin reading 0.83 where the cosine is 0.80 would tune against the wrong number."""
         routing = FakeRoutingIndex({KIND_ENTITY: STRONG})
-        decision = router(routing).route(ctx(), "anything", settings())
+        decision = router(routing).route(
+            ctx(), "anything", settings(allowed_tiers=frozenset({1, 2}))
+        )
 
         assert decision.items[KIND_ENTITY][0].similarity < 0.83

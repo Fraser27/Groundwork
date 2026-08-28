@@ -91,6 +91,7 @@ class VectorStore(Protocol):
         top_k: int,
         matter_allowlist: frozenset[str] | None,
         matter_denylist: frozenset[str],
+        seed_documents: frozenset[str] | None = None,
     ) -> list[SearchHit]: ...
     def delete_document(self, index: str, document_id: str) -> int: ...
     def delete_tenant(self, index: str, tenant_id: str) -> int: ...
@@ -124,9 +125,12 @@ class InMemoryVectorStore:
         top_k: int = 10,
         matter_allowlist: frozenset[str] | None = None,
         matter_denylist: frozenset[str] = frozenset(),
+        seed_documents: frozenset[str] | None = None,
     ) -> list[SearchHit]:
         hits = []
         for record in self._indexes.get(index, {}).values():
+            if seed_documents is not None and record.document_id not in seed_documents:
+                continue
             if record.matter_id is not None:
                 if record.matter_id in matter_denylist:
                     continue
@@ -285,11 +289,30 @@ class Embedder:
         logger.info("dropped %d vectors for %s", dropped, document_id)
         return dropped
 
-    def search(self, ctx: AuthContext, query: str, *, top_k: int = 10) -> list[SearchHit]:
+    def search(
+        self,
+        ctx: AuthContext,
+        query: str,
+        *,
+        top_k: int = 10,
+        seed_documents: frozenset[str] | None = None,
+    ) -> list[SearchHit]:
+        """Nearest chunks this caller may read, optionally restricted to named documents.
+
+        `seed_documents` narrows *relevance*, never authorization: the matter wall below is applied
+        whatever it says, so a seed can only ever shrink the candidate set the wall already allows.
+        The graph-first tier uses it to read only the documents its verified facts came from. None
+        means no restriction; an empty set is a caller error and is refused rather than treated as
+        one, because silently searching everything would turn a graph-first question into a
+        vector-first one and label the passages as though the graph had vouched for them.
+        """
+        if seed_documents is not None and not seed_documents:
+            raise ValueError("seed_documents is empty; pass None to search every document")
         return self.store.search(
             index_name(ctx),
             self.embed_query(query),
             top_k=top_k,
             matter_allowlist=ctx.matter_allowlist,
             matter_denylist=ctx.matter_denylist,
+            seed_documents=seed_documents,
         )

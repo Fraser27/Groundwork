@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any
 
@@ -42,6 +43,48 @@ DEFAULT_ENRICHMENT_MODEL = DEFAULT_OCR_MODEL
 #: imports this module -- so a test pins the two together instead, because a second list that can
 #: drift from the enum is exactly how a retired tier survived in a default for a day.
 KNOWN_TIERS = frozenset({1, 2, 3})
+
+#: Tier 2 walks the graph first and then queries whatever it landed on. Tier 3 retrieves first and
+#: grounds on the graph afterwards. They are the same traversal run in opposite directions, so a
+#: tenant picks one; see `allowed_tiers`.
+GRAPH_FIRST_TIER = 2
+VECTOR_FIRST_TIER = 3
+
+#: Which direction survives when a stored or env-supplied cap names both. Vector-first, because it
+#: is the default and because a row written before the two became exclusive was being served that
+#: way in practice -- silently moving a live tenant onto the other lane would change every answer
+#: it gets without anyone asking for it.
+_DIRECTION_PRECEDENCE = VECTOR_FIRST_TIER
+
+
+def coerce_allowed_tiers(values: Any) -> frozenset[int]:
+    """A tier cap narrowed to the tiers this build has, and to one traversal direction.
+
+    Applied to anything that did not come from `validate()`: a DynamoDB row, an env var. Those
+    predate the constraint -- a stored `[1,2,3]` was legal for most of this project's life -- and
+    refusing them would take a tenant's whole settings document down rather than one field.
+    """
+    known = {int(v) for v in values or ()} & KNOWN_TIERS
+    if GRAPH_FIRST_TIER in known and VECTOR_FIRST_TIER in known:
+        known.discard(
+            GRAPH_FIRST_TIER if _DIRECTION_PRECEDENCE == VECTOR_FIRST_TIER else VECTOR_FIRST_TIER
+        )
+    return frozenset(known)
+
+
+def direction_of(tiers: Iterable[int]) -> str:
+    """Which way a tier cap traverses: `graph_first`, `vector_first`, or `metrics_only`.
+
+    A function as well as a property because the planner reports the direction of the cap it
+    *coerced*, not of the raw settings. Two copies of this could disagree about which lane a
+    trace says ran.
+    """
+    known = set(tiers)
+    if GRAPH_FIRST_TIER in known:
+        return "graph_first"
+    if VECTOR_FIRST_TIER in known:
+        return "vector_first"
+    return "metrics_only"
 
 
 class GovernanceError(ValueError):
@@ -96,18 +139,25 @@ class GovernanceSettings:
     worst direction for a failure, which is why it is tested against the lane rather than the
     setting."""
 
-    allowed_tiers: frozenset[int] = frozenset({1, 2, 3})
+    allowed_tiers: frozenset[int] = frozenset({1, VECTOR_FIRST_TIER})
     """Which resolution tiers may ever run for this tenant. A hard cap, not a default:
     a caller asking for a tier that is not in here is refused rather than silently
     served a different one, because "answered at a tier you disallowed" and "answered
     at the tier you asked for" must not look the same.
 
-    Coarser than `block_ungoverned_queries`, which removes one *lane* of tier 3 and logs its
-    refusals for an admin to read. This removes whole tiers, so a tenant can forbid, say, the
-    hybrid tier while keeping metrics and graph traversal. Dropping 3 here therefore also drops
-    the SQL lane, which is why both controls exist: the switch is how you keep tier 3's passages
-    and graph facts while removing only the model-written SQL inside it. The tier-4 wording this
-    docstring used to carry outlived the tier it named."""
+    **2 and 3 are mutually exclusive, and `validate()` refuses both.** They are one traversal run
+    in opposite directions: tier 2 matches the graph first and then queries the documents and
+    tables it landed on, tier 3 retrieves first and grounds on the graph afterwards. Permitting
+    both does not give a tenant two chances, it gives it whichever the resolver reaches first and
+    a second lane that answers the same question from the same stores at twice the latency. Worse,
+    the two label their evidence differently -- a passage tier 2 reached is one the graph vouched
+    for, a passage tier 3 reached is one similarity chose -- so an answer that could have come
+    from either is an answer whose provenance depends on iteration order. So the cap *is* the
+    choice of direction: `{1, 3}` is vector first, `{1, 2}` is graph first.
+
+    Coarser than `block_ungoverned_queries`, which removes the SQL lane from whichever traversal
+    is live and logs its refusals for an admin to read. This removes whole tiers, so a tenant can
+    forbid traversal entirely and keep only approved metrics."""
 
     router_enabled: bool = True
     """Choose which tiers to run by similarity rather than trying them in order.
@@ -238,9 +288,30 @@ class GovernanceSettings:
                 f"allowed_tiers contains {unknown}, which is not a resolution tier. "
                 f"Permitted: {sorted(KNOWN_TIERS)}."
             )
+        if GRAPH_FIRST_TIER in self.allowed_tiers and VECTOR_FIRST_TIER in self.allowed_tiers:
+            raise GovernanceError(
+                f"allowed_tiers may contain {GRAPH_FIRST_TIER} or {VECTOR_FIRST_TIER}, not both. "
+                "They are the same traversal in opposite directions: tier 2 matches the graph "
+                "first and queries the documents and tables it landed on, tier 3 retrieves first "
+                "and grounds on the graph afterwards. Choose a direction: {1, 2} is graph first, "
+                "{1, 3} is vector first."
+            )
+
+    @property
+    def retrieval_direction(self) -> str:
+        """Which way this tenant traverses: `graph_first`, `vector_first`, or `metrics_only`.
+
+        Derived from the cap rather than stored beside it. A second field would be a second
+        independent default, and the two could disagree about which lane is live -- the failure
+        `ontology_domain` above records having actually had.
+        """
+        return direction_of(self.allowed_tiers)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        # `retrieval_direction` is included even though it is not a field: it is what an
+        # administrator actually chose, and leaving a reader to infer it from a list of integers
+        # is how a setting gets misread.
+        return {**asdict(self), "retrieval_direction": self.retrieval_direction}
 
     @classmethod
     def from_env(cls) -> GovernanceSettings:
@@ -261,8 +332,10 @@ class GovernanceSettings:
                 return default
             # `[1-3]`, so a stale `GROUNDWORK_ALLOWED_TIERS=1,2,3,4` from before the fourth tier
             # was retired drops the 4 rather than resurrecting a tier that no longer exists.
-            parsed = {int(p) for p in re.findall(r"[1-3]", raw)}
-            return frozenset(parsed) if parsed else default
+            # Coerced, not validated: a stale `1,2,3` from before the two traversal directions
+            # became exclusive must not stop the API booting.
+            parsed = coerce_allowed_tiers(int(p) for p in re.findall(r"[1-3]", raw))
+            return parsed if parsed else default
 
         return cls(
             min_confidence_floor=_f("GROUNDWORK_MIN_CONFIDENCE", 0.8),
@@ -270,7 +343,7 @@ class GovernanceSettings:
             auto_assert_deterministic=_b("GROUNDWORK_AUTO_ASSERT_DET", True),
             require_review_for_governing=_b("GROUNDWORK_REVIEW_GOVERNING", True),
             block_ungoverned_queries=_b("GROUNDWORK_BLOCK_UNGOVERNED", False),
-            allowed_tiers=_tiers("GROUNDWORK_ALLOWED_TIERS", frozenset({1, 2, 3})),
+            allowed_tiers=_tiers("GROUNDWORK_ALLOWED_TIERS", frozenset({1, VECTOR_FIRST_TIER})),
             router_enabled=_b("GROUNDWORK_ROUTER_ENABLED", True),
             router_min_similarity=_f("GROUNDWORK_ROUTER_MIN_SIMILARITY", 0.25),
             router_margin=_f("GROUNDWORK_ROUTER_MARGIN", 0.35),
@@ -301,7 +374,9 @@ class GovernanceSettings:
         if unknown:
             raise GovernanceError(f"unknown settings: {sorted(unknown)}")
 
-        merged = {**self.to_dict(), **patch}
+        # `asdict`, not `to_dict`: the latter carries the derived `retrieval_direction`, which is
+        # not a constructor argument.
+        merged = {**asdict(self), **patch}
         merged["updated_by"] = updated_by
         merged.pop("updated_at", None)
         candidate = GovernanceSettings(**merged)
@@ -363,9 +438,14 @@ FIELD_HELP: dict[str, str] = {
     "allowed_tiers": (
         "Which ways of answering a question are permitted at all. Users choose freely "
         "within this list; anything outside it is refused rather than quietly answered "
-        "a different way. 1 is an approved metric, 2 is the knowledge graph, 3 combines "
-        "passages, graph relationships and table schemas. Removing 3 also removes AI-written "
-        "SQL; to keep 3 and remove only that, use the ungoverned-queries switch above."
+        "a different way. 1 is an approved metric. 2 and 3 are the same search run in "
+        "opposite directions, so pick one, not both. 2 starts from the knowledge graph and "
+        "then reads only the documents and tables the graph pointed at. 3 starts by searching "
+        "the documents and then checks the graph for what it found. Choose 2 when the graph is "
+        "well populated and you want every answer traceable to a verified relationship, and 3 "
+        "when the documents are the fuller source. Removing both leaves approved metrics only. "
+        "Either one includes AI-written SQL; to keep the search and remove only that, use the "
+        "ungoverned-queries switch above."
     ),
     "router_enabled": (
         "Choose which ways of answering to try by comparing the question against what this "

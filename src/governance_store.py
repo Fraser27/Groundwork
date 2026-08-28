@@ -28,10 +28,11 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 from decimal import Decimal
 from typing import Any, Protocol
 
-from src.governance import GovernanceError, GovernanceSettings
+from src.governance import GovernanceError, GovernanceSettings, coerce_allowed_tiers
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +82,15 @@ def _decode(name: str, value: Any, template: Any) -> Any:
     if isinstance(template, bool):
         return bool(value)
     if isinstance(template, frozenset):
-        stored = frozenset(int(v) for v in value or ())
-        # Narrowed to what the default permits. A tenant whose row was written while a fourth
-        # tier existed still has `[1,2,3,4]` in DynamoDB, and passing it through would let a
-        # persisted setting resurrect a tier the code no longer has -- `Tier(4)` then raises deep
-        # inside the resolver. Values the current build does not recognise are dropped, not kept.
-        return frozenset(stored & template) if template else stored
+        # Narrowed to the tiers this build has, not to the ones the default happens to name. A
+        # tenant whose row was written while a fourth tier existed still has `[1,2,3,4]` in
+        # DynamoDB, and passing it through would let a persisted setting resurrect a tier the code
+        # no longer has -- `Tier(4)` then raises deep inside the resolver.
+        #
+        # Against the default it *was* the same set, and stopped being so when the default became
+        # one traversal direction: `{1,2} & {1,3}` is `{1}`, which would have silently taken graph
+        # traversal away from every tenant that had chosen it.
+        return coerce_allowed_tiers(value)
     if isinstance(template, float):
         return float(value)
     if isinstance(template, int):
@@ -167,7 +171,10 @@ class GovernanceStore:
             # reason. Absent means fall back to env defaults rather than to a partial record.
             "settings_present": True,
         }
-        for key, value in settings.to_dict().items():
+        # Fields, not `to_dict()`: that adds `retrieval_direction`, which is derived from
+        # `allowed_tiers`. Storing it would put a second copy of one decision in the row, free to
+        # contradict the first, and it is not a constructor argument so the row would not read back.
+        for key, value in asdict(settings).items():
             item[key] = _encode(value)
 
         self.table.put_item(Item=item)
@@ -187,7 +194,7 @@ class GovernanceStore:
 
     def _from_item(self, item: dict[str, Any]) -> GovernanceSettings | None:
         defaults = GovernanceSettings.from_env()
-        template = defaults.to_dict()
+        template = asdict(defaults)
         kwargs: dict[str, Any] = {}
         for name, default in template.items():
             if name in item:

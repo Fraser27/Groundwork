@@ -14,6 +14,7 @@ that matter are not "does it fan out" but:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,9 +22,15 @@ import pytest
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
 from src.query.planner import Lane, Planner, Provenance, Tier
+from src.query.resolver import UNGOVERNED_BLOCKED
 from src.query.router import RouterDecision
 
 TENANT = "demo-firm"
+
+#: The default cap is vector-first, where the graph is reached by walking out of a retrieved
+#: passage. A test about the graph's lexical term search has to ask for the direction that runs it:
+#: tier 2 and tier 3 are one search in opposite directions and a tenant gets one of them.
+GRAPH_FIRST = GovernanceSettings(allowed_tiers=frozenset({1, 2}))
 
 
 @pytest.fixture
@@ -131,7 +138,7 @@ class TestFanOut:
     def test_no_metric_match_runs_the_other_lanes(self, ctx):
         planner = Planner(
             metric_matcher=FakeMatcher(matches=False),
-            graph_reader=FakeGraph(hits=[{"assertion_id": "a1", "subject_id": "s1"}]),
+            graph_reader=FakeGraph(walked=[{"assertion_id": "a1", "subject_id": "s1"}]),
             vector_search=FakeVectors([{"document_id": "d1", "page": 2}]),
         )
         answer = planner.plan(ctx, "who represents northwind", GovernanceSettings())
@@ -141,7 +148,7 @@ class TestFanOut:
         """Merging them would need a common score, and the three retrievers use incompatible
         scales: weighted term overlap, cosine, and structural reachability with no score."""
         planner = Planner(
-            graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]),
+            graph_reader=FakeGraph(walked=[{"assertion_id": "a1"}]),
             vector_search=FakeVectors([{"document_id": "d1"}]),
         )
         answer = planner.plan(ctx, "q", GovernanceSettings())
@@ -151,7 +158,7 @@ class TestFanOut:
     def test_a_missing_collaborator_disables_its_lane_without_failing(self, ctx):
         """A partial answer that names what it could not reach beats no answer."""
         planner = Planner(graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]))
-        answer = planner.plan(ctx, "q", GovernanceSettings())
+        answer = planner.plan(ctx, "q", GRAPH_FIRST)
         assert [p.lane for p in answer.parts] == [Lane.GRAPH]
 
     def test_nothing_matching_says_so(self, ctx):
@@ -277,9 +284,23 @@ class TestComposeWalksOutFromThePassagesToo:
         facts = next((p.content for p in answer.parts if p.lane == Lane.GRAPH), [])
         assert facts == []
 
-    def test_the_graph_lane_still_runs_when_no_passage_was_retrieved(self, ctx):
+    def test_no_passage_leaves_vector_first_with_no_graph_lane_and_says_why(self, ctx):
+        """The other side of the trade. Vector-first reaches the graph through the passages it
+        found, so nothing retrieved means nothing walked -- and the term search that would have
+        found a fact anyway is the direction this tenant declined. Named rather than silent: an
+        empty graph lane otherwise reads as an empty graph.
+        """
         answer = Planner(graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}])).plan(
             ctx, "q", GovernanceSettings(), allow_synthesis=False
+        )
+        assert answer.parts == []
+        assert "no passage was retrieved" in answer.lanes_skipped["graph"]
+
+    def test_graph_first_needs_no_passage_to_reach_the_graph(self, ctx):
+        """Same reader, same empty index, the other direction: the term search is step 1 here, so
+        retrieval finding nothing costs the passages and not the facts."""
+        answer = Planner(graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}])).plan(
+            ctx, "q", GRAPH_FIRST, allow_synthesis=False
         )
         assert [p.lane for p in answer.parts] == [Lane.GRAPH]
 
@@ -288,11 +309,11 @@ class TestComposeWalksOutFromThePassagesToo:
 
         class SearchOnly:
             def search(self, ctx: AuthContext, question: str, **kw: Any) -> list[dict]:
-                return [{"assertion_id": "a1"}]
+                return [{"assertion_id": "a1", "source": {"document_id": "doc-1"}}]
 
         answer = Planner(
             graph_reader=SearchOnly(), vector_search=FakeVectors([{"document_id": "doc-1"}])
-        ).plan(ctx, "q", GovernanceSettings(), allow_synthesis=False)
+        ).plan(ctx, "q", GRAPH_FIRST, allow_synthesis=False)
 
         assert {p.lane for p in answer.parts} == {Lane.GRAPH, Lane.PASSAGES}
 
@@ -312,7 +333,9 @@ class TestComposeWalksOutFromThePassagesToo:
 
 class TestTierGating:
     def test_a_forbidden_tier_is_skipped_with_a_reason(self, ctx):
-        settings = GovernanceSettings(allowed_tiers=frozenset({2, 3}))
+        # Graph traversal alone. `{2, 3}` is refused outright now -- the two are one search in
+        # opposite directions -- so "tier 1 is forbidden" is expressed by permitting only tier 2.
+        settings = GovernanceSettings(allowed_tiers=frozenset({2}))
         planner = Planner(
             metric_matcher=FakeMatcher(),
             graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]),
@@ -366,7 +389,7 @@ class TestDeterministicBlocking:
                 {"assertion_id": "a2", "matter_id": "M-9"},
             ]
         )
-        answer = Planner(graph_reader=graph).plan(screened, "q", GovernanceSettings())
+        answer = Planner(graph_reader=graph).plan(screened, "q", GRAPH_FIRST)
 
         kept = answer.parts[0].content
         assert [row["assertion_id"] for row in kept] == ["a1"]
@@ -377,7 +400,7 @@ class TestDeterministicBlocking:
             tenant_id=TENANT, user_id="alice", matter_denylist=frozenset({"M-9"})
         )
         graph = FakeGraph(hits=[{"assertion_id": "a1", "matter_id": "M-1"}])
-        answer = Planner(graph_reader=graph).plan(screened, "q", GovernanceSettings())
+        answer = Planner(graph_reader=graph).plan(screened, "q", GRAPH_FIRST)
         assert len(answer.parts) == 1
 
     def test_a_rule_block_is_reported(self, ctx):
@@ -391,7 +414,7 @@ class TestDeterministicBlocking:
                 }
             ],
         )
-        answer = Planner(graph_reader=graph).plan(ctx, "q", GovernanceSettings())
+        answer = Planner(graph_reader=graph).plan(ctx, "q", GRAPH_FIRST)
         assert answer.blocks[0].rule == "conflict_check"
 
     def test_a_reader_that_cannot_report_blocks_says_so_in_the_response(self, ctx):
@@ -408,7 +431,7 @@ class TestDeterministicBlocking:
                 # there is nothing to veto and so nothing degraded.
                 return [{"assertion_id": "a1", "subject_id": "party:acme"}]
 
-        answer = Planner(graph_reader=NoBlockCheck()).plan(ctx, "q", GovernanceSettings())
+        answer = Planner(graph_reader=NoBlockCheck()).plan(ctx, "q", GRAPH_FIRST)
         assert len(answer.parts) == 1
         assert answer.gate["degraded"]
         assert any("could not be checked for conflicts" in w for w in answer.warnings)
@@ -421,7 +444,7 @@ class TestDeterministicBlocking:
             def search(self, ctx, question, **kw):
                 return [{"assertion_id": "a1"}]
 
-        answer = Planner(graph_reader=NoIds()).plan(ctx, "q", GovernanceSettings())
+        answer = Planner(graph_reader=NoIds()).plan(ctx, "q", GRAPH_FIRST)
         assert answer.gate["degraded"] is None
         assert answer.gate["seeds_considered"] == 0
 
@@ -440,7 +463,7 @@ class TestSynthesisNeverDecides:
             ]
         )
         synth = FakeSynthesiser()
-        Planner(graph_reader=graph, synthesiser=synth).plan(screened, "q", GovernanceSettings())
+        Planner(graph_reader=graph, synthesiser=synth).plan(screened, "q", GRAPH_FIRST)
 
         seen = str(synth.saw_parts)
         assert "secret" not in seen
@@ -453,7 +476,7 @@ class TestSynthesisNeverDecides:
         )
         synth = FakeSynthesiser()
         Planner(graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]), synthesiser=synth).plan(
-            screened, "q", GovernanceSettings()
+            screened, "q", GRAPH_FIRST
         )
         assert synth.saw_blocks
 
@@ -461,7 +484,7 @@ class TestSynthesisNeverDecides:
         synth = FakeSynthesiser()
         answer = Planner(
             graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]), synthesiser=synth
-        ).plan(ctx, "q", GovernanceSettings(), allow_synthesis=False)
+        ).plan(ctx, "q", GRAPH_FIRST, allow_synthesis=False)
         assert answer.synthesis is None
 
     def test_a_failed_synthesis_keeps_the_parts(self, ctx):
@@ -473,7 +496,7 @@ class TestSynthesisNeverDecides:
 
         answer = Planner(
             graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]), synthesiser=Broken()
-        ).plan(ctx, "q", GovernanceSettings())
+        ).plan(ctx, "q", GRAPH_FIRST)
 
         assert answer.synthesis is None
         assert len(answer.parts) == 1
@@ -481,7 +504,7 @@ class TestSynthesisNeverDecides:
 
     def test_no_synthesiser_is_reported_rather_than_silent(self, ctx):
         answer = Planner(graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}])).plan(
-            ctx, "q", GovernanceSettings()
+            ctx, "q", GRAPH_FIRST
         )
         assert any("No synthesis model" in w for w in answer.warnings)
 
@@ -492,7 +515,7 @@ class TestGovernanceLabel:
         composed answer containing a model's reading as governed."""
         answer = Planner(
             graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]), synthesiser=FakeSynthesiser()
-        ).plan(ctx, "q", GovernanceSettings())
+        ).plan(ctx, "q", GRAPH_FIRST)
 
         assert answer.governance_label != "governed"
         assert "synthesised" in answer.governance_label
@@ -502,17 +525,13 @@ class TestGovernanceLabel:
         graph = FakeGraph(
             hits=[{"assertion_id": "a1", "epistemic_class": "EXTRACTED_MODEL", "confidence": 0.72}]
         )
-        answer = Planner(graph_reader=graph).plan(
-            ctx, "q", GovernanceSettings(), allow_synthesis=False
-        )
+        answer = Planner(graph_reader=graph).plan(ctx, "q", GRAPH_FIRST, allow_synthesis=False)
         assert answer.parts[0].provenance is Provenance.INFERRED
         assert answer.parts[0].confidence == 0.72
 
     def test_a_declared_assertion_stays_deterministic(self, ctx):
         graph = FakeGraph(hits=[{"assertion_id": "a1", "epistemic_class": "DECLARED"}])
-        answer = Planner(graph_reader=graph).plan(
-            ctx, "q", GovernanceSettings(), allow_synthesis=False
-        )
+        answer = Planner(graph_reader=graph).plan(ctx, "q", GRAPH_FIRST, allow_synthesis=False)
         assert answer.parts[0].provenance is Provenance.DETERMINISTIC
         assert answer.is_fully_deterministic
 
@@ -621,7 +640,7 @@ class TestRoutingNeverNarrowsCompose:
         router = FakeRouter(decision([], degraded=True, reason="nothing resembled the question"))
         answer = Planner(
             router=router,
-            graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]),
+            graph_reader=FakeGraph(walked=[{"assertion_id": "a1"}]),
             vector_search=vectors,
         ).plan(ctx, "q", GovernanceSettings())
 
@@ -684,12 +703,10 @@ class TestTheRouterCannotWidenTheTenantCap:
         """ "Your administrator turned this off" and "this did not look relevant" are different
         facts, and a UI that cannot tell them apart tells the user to rephrase a question no
         rephrasing will help."""
-        router = FakeRouter(
-            decision([2, 3], dropped={"1": "tier 1 is not permitted for this tenant"})
-        )
+        router = FakeRouter(decision([2], dropped={"1": "tier 1 is not permitted for this tenant"}))
         answer = Planner(
             router=router, metric_matcher=FakeMatcher(), graph_reader=FakeGraph()
-        ).plan(ctx, "q", GovernanceSettings(allowed_tiers=frozenset({2, 3})))
+        ).plan(ctx, "q", GovernanceSettings(allowed_tiers=frozenset({2})))
 
         assert answer.lanes_skipped[Lane.METRIC.value] == "tier 1 is not permitted for this tenant"
 
@@ -711,3 +728,302 @@ class TestCitations:
     def test_the_response_explains_why_parts_are_separate(self, ctx):
         answer = Planner(metric_matcher=FakeMatcher()).plan(ctx, "q", GovernanceSettings())
         assert "not the same kind of claim" in answer.to_dict()["note"]
+
+
+class FakeCatalogTable:
+    def __init__(self, full_name: str) -> None:
+        self.full_name = full_name
+        self.description = ""
+        self.columns: list[Any] = []
+
+
+class FakeCatalog:
+    def __init__(self, *names: str) -> None:
+        self._tables = [FakeCatalogTable(n) for n in names]
+
+    def tables(self, tenant_id: str) -> list[FakeCatalogTable]:
+        return self._tables
+
+
+class CatalogGraph(FakeGraph):
+    """A graph whose term search also reaches catalogued tables, which is graph-first's step 1."""
+
+    def __init__(self, *nodes: str, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.nodes = list(nodes)
+
+    def catalog_search(self, ctx: AuthContext, question: str, **kw: Any) -> list[str]:
+        return self.nodes
+
+
+class FakeSqlLane:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def run(self, question: str, **kw: Any) -> Any:
+        self.calls.append(kw)
+        return SimpleNamespace(
+            generated=SimpleNamespace(
+                sql="SELECT count(*) FROM legal_db.matters",
+                tables_offered=["legal_db.matters"],
+            ),
+            rows={"columns": ["n"], "rows": [[3]]},
+            error=None,
+            error_code=None,
+        )
+
+
+class TestGraphFirstReportsWhereItLanded:
+    """The one thing a reader cannot infer from a graph-first answer. An empty passage list means
+    either that no document was reached or that the documents held no matching passage, and those
+    are different facts about the same corpus. See `query/graph_first.py`.
+    """
+
+    def test_a_question_reaching_no_fact_names_the_term_search(self, ctx):
+        answer = Planner(graph_reader=FakeGraph()).plan(ctx, "q", GRAPH_FIRST)
+        assert "matches this question's words" in answer.lanes_skipped[Lane.GRAPH.value]
+
+    def test_reaching_no_document_is_not_reported_as_no_matching_passage(self, ctx):
+        """A fact with no source document has a proof tree rather than a page, so there was nothing
+        to read -- which is not the documents failing to match."""
+        answer = Planner(
+            graph_reader=FakeGraph(hits=[{"assertion_id": "a1", "subject_id": "s1"}]),
+            vector_search=FakeVectors([{"document_id": "d1"}]),
+        ).plan(ctx, "q", GRAPH_FIRST, allow_synthesis=False)
+
+        assert "reached none" in answer.lanes_skipped[Lane.PASSAGES.value]
+
+    def test_passages_come_only_from_documents_a_fact_came_from(self, ctx):
+        """The claim the direction is entitled to make: every passage is in a document some verified
+        fact came out of, so "why was I shown this page" answers with an assertion id."""
+        vectors = FakeVectors([{"document_id": "d1", "page": 2}])
+        answer = Planner(
+            graph_reader=FakeGraph(
+                hits=[{"assertion_id": "a1", "source": {"document_id": "d1"}}]
+            ),
+            vector_search=vectors,
+        ).plan(ctx, "q", GRAPH_FIRST, allow_synthesis=False)
+
+        assert {p.lane for p in answer.parts} == {Lane.GRAPH, Lane.PASSAGES}
+        assert all(p.tier is Tier.GRAPH_TRAVERSAL for p in answer.parts)
+
+    def test_a_table_the_graph_reached_becomes_a_query(self, ctx):
+        """The inversion of tier 3's SQL lane. The graph named the table through DECLARED schema
+        edges, so the generated query is restricted to what the traversal landed on."""
+        sql = FakeSqlLane()
+        answer = Planner(
+            graph_reader=CatalogGraph("table:glue:legal_db.matters"),
+            catalog=FakeCatalog("legal_db.matters"),
+            sql_lane=sql,
+        ).plan(ctx, "how many matters", GRAPH_FIRST, allow_synthesis=False)
+
+        lanes = {p.lane: p for p in answer.parts}
+        assert set(lanes) == {Lane.CATALOG, Lane.SQL}
+        assert lanes[Lane.SQL].provenance is Provenance.MODEL_WRITTEN
+        assert lanes[Lane.SQL].tier is Tier.GRAPH_TRAVERSAL
+
+    def test_no_table_reached_names_the_sql_lane_for_the_same_reason(self, ctx):
+        answer = Planner(graph_reader=CatalogGraph(), catalog=FakeCatalog()).plan(
+            ctx, "q", GRAPH_FIRST
+        )
+        assert "catalogued table" in answer.lanes_skipped[Lane.SQL.value]
+
+    def test_the_kill_switch_outranks_the_graph_reaching_no_table(self, ctx):
+        """Two true reasons, and only one is actionable. An administrator turning the lane off is a
+        different fact from the graph reaching nothing, and the refusal is the one to report."""
+        planner = Planner(graph_reader=CatalogGraph(), catalog=FakeCatalog())
+        answer = planner.plan(
+            ctx,
+            "q",
+            GovernanceSettings(allowed_tiers=frozenset({1, 2}), block_ungoverned_queries=True),
+        )
+
+        assert answer.lanes_skipped[Lane.SQL.value] == UNGOVERNED_BLOCKED
+        assert planner.blocked, "a refused ungoverned query never reached the Governance screen"
+
+    def test_no_graph_leaves_every_traversal_lane_named(self, ctx):
+        """Graph-first has nothing to traverse from, so the passage and table lanes go with it --
+        they are downstream of the traversal here rather than beside it."""
+        answer = Planner(vector_search=FakeVectors([{"document_id": "d1"}])).plan(
+            ctx, "q", GRAPH_FIRST
+        )
+
+        for lane in (Lane.GRAPH, Lane.PASSAGES, Lane.CATALOG, Lane.SQL):
+            assert "no graph is configured" in answer.lanes_skipped[lane.value], lane
+
+    def test_a_note_from_the_lane_reaches_the_reader(self, ctx):
+        answer = Planner(
+            graph_reader=FakeGraph(hits=[{"assertion_id": "a1", "source": {"document_id": "d1"}}]),
+            vector_search=FakeVectors([]),
+        ).plan(ctx, "q", GRAPH_FIRST, allow_synthesis=False)
+
+        assert any("no passage" in w for w in answer.warnings)
+
+
+class TestTheDirectionIsReported:
+    """A skipped lane carries no part and therefore no tier of its own, so the trace has to name the
+    direction those lanes belonged to. Without it the UI labelled them from a hardcoded map and put
+    tier 3 on the lanes a graph-first tenant had declined.
+    """
+
+    def test_graph_first_says_graph_first(self, ctx):
+        answer = Planner(graph_reader=FakeGraph()).plan(ctx, "q", GRAPH_FIRST)
+        assert answer.to_dict()["retrieval_direction"] == "graph_first"
+
+    def test_vector_first_says_vector_first(self, ctx):
+        answer = Planner(vector_search=FakeVectors([])).plan(ctx, "q", GovernanceSettings())
+        assert answer.to_dict()["retrieval_direction"] == "vector_first"
+
+    def test_metrics_only_names_no_direction(self, ctx):
+        answer = Planner().plan(ctx, "q", GovernanceSettings(allowed_tiers=frozenset({1})))
+        assert answer.to_dict()["retrieval_direction"] == "metrics_only"
+
+    def test_a_run_with_no_parts_still_names_its_direction(self, ctx):
+        """The case the field exists for. Graph-first with no graph skips every traversal lane, so
+        there is no part's tier left to infer from and the skip reasons would be labelled with
+        whichever direction the reader's UI happens to default to."""
+        answer = Planner().plan(ctx, "q", GRAPH_FIRST)
+
+        assert answer.parts == []
+        assert answer.to_dict()["retrieval_direction"] == "graph_first"
+
+    def test_a_cap_naming_both_reports_the_direction_that_ran(self, ctx):
+        """Read from the coerced cap, not the raw one. `validate()` refuses both at construction, so
+        this can only arrive by assignment -- which is how a settings object gets mutated in
+        practice, and `plan()` coerces for exactly that reason. A field naming a direction other
+        than the one the lanes ran in would be worse than no field."""
+        settings = GovernanceSettings()
+        settings.allowed_tiers = frozenset({1, 2, 3})
+        answer = Planner(
+            graph_reader=FakeGraph(hits=[{"assertion_id": "a1"}]),
+            vector_search=FakeVectors([{"document_id": "d1"}]),
+        ).plan(ctx, "q", settings, allow_synthesis=False)
+
+        assert answer.to_dict()["retrieval_direction"] == "vector_first"
+        assert Lane.PASSAGES in answer.lanes_run
+
+
+class OneMetricHalf(FakeMatcher):
+    """Matches only the half a metric covers, so the other half has to be searched."""
+
+    def __init__(self, word: str) -> None:
+        super().__init__()
+        self.word = word
+
+    def match(self, question: str) -> Any:
+        return self if self.word in question else None
+
+
+class FakeSplitter:
+    def __init__(self, *parts: str, raises: bool = False) -> None:
+        self.parts = list(parts)
+        self.raises = raises
+
+    def split(self, question: str) -> list[str]:
+        if self.raises:
+            raise RuntimeError("bedrock unreachable")
+        return self.parts or [question]
+
+
+class TestDecomposition:
+    """A compound question run whole reaches one lane well and the other badly, and the half that
+    loses is reported as nothing found rather than as unanswered. Split, each half reaches the store
+    that can answer it -- and the split is disclosed rather than folded into the label.
+    """
+
+    def test_each_part_names_the_question_it_answers(self, ctx):
+        """Two parts from the same lane are otherwise indistinguishable: a reader looking at two
+        results needs to know they answer different questions, not that the lane ran twice."""
+        answer = Planner(
+            question_splitter=FakeSplitter("our exposure on Northwind", "does it exclude tax"),
+            vector_search=FakeVectors([{"document_id": "d1"}]),
+        ).plan(ctx, "both at once", GovernanceSettings(), allow_synthesis=False)
+
+        assert [p.sub_question for p in answer.parts] == [
+            "our exposure on Northwind",
+            "does it exclude tax",
+        ]
+
+    def test_the_split_is_disclosed_with_the_original(self, ctx):
+        answer = Planner(question_splitter=FakeSplitter("half one", "half two")).plan(
+            ctx, "both at once", GovernanceSettings()
+        )
+
+        assert answer.decomposition == {
+            "question": "both at once",
+            "parts": ["half one", "half two"],
+        }
+
+    def test_an_unsplit_question_is_not_disclosed_as_split(self, ctx):
+        """`sub_question` stays None too. A question asked whole must not read as one half of
+        itself."""
+        answer = Planner(
+            question_splitter=FakeSplitter(),
+            vector_search=FakeVectors([{"document_id": "d1"}]),
+        ).plan(ctx, "one thing", GovernanceSettings(), allow_synthesis=False)
+
+        assert answer.decomposition is None
+        assert [p.sub_question for p in answer.parts] == [None]
+
+    def test_a_splitter_that_raises_costs_the_split_not_the_answer(self, ctx):
+        """Splitting is an improvement to how a question is searched, and an improvement may not
+        cost the answer."""
+        answer = Planner(
+            question_splitter=FakeSplitter(raises=True),
+            vector_search=FakeVectors([{"document_id": "d1"}]),
+        ).plan(ctx, "q", GovernanceSettings(), allow_synthesis=False)
+
+        assert answer.decomposition is None
+        assert [p.lane for p in answer.parts] == [Lane.PASSAGES]
+
+    def test_a_metric_half_no_longer_short_circuits_the_other_half(self, ctx):
+        """Unsplit, a matching metric is the whole answer. Split, it answers one of two questions
+        and the other still has to be searched -- which is the whole reason to split: the document
+        half would otherwise be reported as nothing found rather than as never asked."""
+        answer = Planner(
+            question_splitter=FakeSplitter("fees billed last quarter", "does it exclude tax"),
+            metric_matcher=OneMetricHalf("fees"),
+            vector_search=FakeVectors([{"document_id": "d1"}]),
+        ).plan(ctx, "both at once", GovernanceSettings(), allow_synthesis=False)
+
+        assert {p.lane for p in answer.parts} == {Lane.METRIC, Lane.PASSAGES}
+        assert answer.governance_label != "governed", "a quoted passage is not a compiled metric"
+
+    def test_a_lane_that_ran_for_one_half_is_not_also_reported_skipped(self, ctx):
+        """Both would be true of different halves, and a trace saying both contradicts the parts
+        sitting next to it."""
+        answer = Planner(
+            question_splitter=FakeSplitter("half one", "half two"),
+            vector_search=FakeVectors([{"document_id": "d1"}]),
+        ).plan(ctx, "both at once", GovernanceSettings(), allow_synthesis=False)
+
+        assert Lane.PASSAGES in answer.lanes_run
+        assert Lane.PASSAGES.value not in answer.lanes_skipped
+
+    def test_splitting_can_be_declined(self, ctx):
+        answer = Planner(question_splitter=FakeSplitter("half one", "half two")).plan(
+            ctx, "both at once", GovernanceSettings(), decompose=False
+        )
+        assert answer.decomposition is None
+
+    def test_a_split_answer_from_metrics_alone_is_still_governed(self, ctx):
+        """The label describes what produced the answer. Every part still comes from the same
+        compiled metric it would have come from unsplit, so downgrading it because a model chose
+        where the sentence divided would report the wrong thing as ungoverned."""
+        answer = Planner(
+            question_splitter=FakeSplitter("fees billed last quarter", "hours billed last quarter"),
+            metric_matcher=FakeMatcher(),
+        ).plan(ctx, "both at once", GovernanceSettings(), allow_synthesis=False)
+
+        assert len(answer.parts) == 2
+        assert answer.governance_label == "governed"
+
+    def test_the_router_is_asked_once_for_the_whole_question(self, ctx):
+        """The decision is advisory unless the router narrows, so routing each half would buy a
+        longer trace and a model call per part while changing nothing about what runs."""
+        router = FakeRouter(decision([1, 3]))
+        Planner(
+            router=router, question_splitter=FakeSplitter("half one", "half two")
+        ).plan(ctx, "both at once", GovernanceSettings())
+
+        assert router.calls == ["both at once"]

@@ -7,6 +7,8 @@ answers even if the review gate itself were bypassed.
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 import pytest
 
 from src.governance import FIELD_HELP, GovernanceError, GovernanceSettings
@@ -132,8 +134,17 @@ class TestKillSwitches:
 class TestUiHelp:
     def test_every_configurable_field_has_help(self):
         """A control a lawyer cannot understand is a control they will set wrongly."""
-        configurable = set(GovernanceSettings().to_dict()) - {"updated_by", "updated_at"}
+        # Fields, not `to_dict()`: that also carries `retrieval_direction`, which is derived from
+        # `allowed_tiers` and has nothing for an administrator to set.
+        configurable = {f.name for f in fields(GovernanceSettings)} - {"updated_by", "updated_at"}
         assert configurable == set(FIELD_HELP)
+
+    def test_a_derived_key_is_not_offered_as_a_control(self):
+        """`to_dict` carries more than the fields. An Admin form built from it would render a
+        read-only value as an editable one, and a write of it would be silently ignored."""
+        derived = set(GovernanceSettings().to_dict()) - {f.name for f in fields(GovernanceSettings)}
+        assert derived == {"retrieval_direction"}
+        assert derived.isdisjoint(FIELD_HELP)
 
     def test_embedding_model_help_warns_about_migration(self):
         assert "RE-PROCESSING" in FIELD_HELP["embedding_model"]

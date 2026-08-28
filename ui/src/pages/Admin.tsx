@@ -829,33 +829,35 @@ export default function Admin() {
           <div className="card-header">
             <h3>Structured sources</h3>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Source</th>
-                <th>Kind</th>
-                <th className="num">Tables</th>
-                <th>Scanned</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sources.map((s) => (
-                <tr key={s.source_id}>
-                  <td>
-                    <strong>{s.name}</strong>
-                    <div className="dim" style={{ fontSize: 11 }}>
-                      {s.database} &middot; {s.region}
-                    </div>
-                  </td>
-                  <td>
-                    <span className="tag tag-blue">{s.kind}</span>
-                  </td>
-                  <td className="num">{fmtNum(s.table_count)}</td>
-                  <td className="nowrap dim">{fmtDateTime(s.last_scanned_at)}</td>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Kind</th>
+                  <th className="num">Tables</th>
+                  <th>Scanned</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sources.map((s) => (
+                  <tr key={s.source_id}>
+                    <td>
+                      <strong>{s.name}</strong>
+                      <div className="dim" style={{ fontSize: 11 }}>
+                        {s.database} &middot; {s.region}
+                      </div>
+                    </td>
+                    <td>
+                      <span className="tag tag-blue">{s.kind}</span>
+                    </td>
+                    <td className="num">{fmtNum(s.table_count)}</td>
+                    <td className="nowrap dim">{fmtDateTime(s.last_scanned_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <p className="card-note" style={{ marginTop: 10 }}>
             A scan records metadata only. Rows never leave the source.
           </p>
@@ -1046,49 +1048,51 @@ export default function Admin() {
               Closed list &middot; validated when a fact is written, not when it is read
             </span>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Relationship</th>
-                <th>From → to</th>
-                <th>Meaning</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ontology.governing_predicates.map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <code>{p.id}</code>
-                    {p.symmetric && (
-                      <span
-                        className="tag tag-neutral"
-                        style={{ marginLeft: 6 }}
-                        title="Holds in both directions. Recording it one way records it both ways, so a check cannot miss it by asking from the wrong end."
-                      >
-                        symmetric
-                      </span>
-                    )}
-                    {p.transitive && (
-                      <span
-                        className="tag tag-neutral"
-                        style={{ marginLeft: 6 }}
-                        title="A rule may follow a bounded chain of these edges as one premise, so a conflict reached through a group structure is still found. Every step stays in the proof tree."
-                      >
-                        transitive
-                      </span>
-                    )}
-                  </td>
-                  <td className="nowrap dim">
-                    {p.domain.join(' | ')} → {p.range.join(' | ')}
-                  </td>
-                  <td className="dim">
-                    {p.description}
-                    {p.help && <FieldHelp text={p.help} />}
-                  </td>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Relationship</th>
+                  <th>From → to</th>
+                  <th>Meaning</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {ontology.governing_predicates.map((p) => (
+                  <tr key={p.id}>
+                    <td>
+                      <code>{p.id}</code>
+                      {p.symmetric && (
+                        <span
+                          className="tag tag-neutral"
+                          style={{ marginLeft: 6 }}
+                          title="Holds in both directions. Recording it one way records it both ways, so a check cannot miss it by asking from the wrong end."
+                        >
+                          symmetric
+                        </span>
+                      )}
+                      {p.transitive && (
+                        <span
+                          className="tag tag-neutral"
+                          style={{ marginLeft: 6 }}
+                          title="A rule may follow a bounded chain of these edges as one premise, so a conflict reached through a group structure is still found. Every step stays in the proof tree."
+                        >
+                          transitive
+                        </span>
+                      )}
+                    </td>
+                    <td className="nowrap dim">
+                      {p.domain.join(' | ')} → {p.range.join(' | ')}
+                    </td>
+                    <td className="dim">
+                      {p.description}
+                      {p.help && <FieldHelp text={p.help} />}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <div className="card-header" style={{ marginTop: 22 }}>
             <h3>
@@ -1097,47 +1101,49 @@ export default function Admin() {
             </h3>
             <span className="card-note">Each conclusion carries its premises</span>
           </div>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Rule</th>
-                <th>When</th>
-                <th>Then</th>
-                <th>
-                  Minimum premise class
-                  <FieldHelp text="The weakest kind of fact the rule will fire on. Conflict checking is set so that it fires only on facts declared by a system of record or confirmed by a check, because a conflict flag resting on a model's guess would be worse than none at all." />
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {ontology.rules.map((r) => (
-                <tr key={r.id}>
-                  <td>
-                    <code>
-                      {r.id}@{r.version}
-                    </code>
-                    <div className="dim" style={{ fontSize: 12, marginTop: 3, maxWidth: 260 }}>
-                      {r.description}
-                      {r.help && <FieldHelp text={r.help} />}
-                    </div>
-                  </td>
-                  <td>
-                    {r.when.map((w) => (
-                      <div key={w}>
-                        <code style={{ fontSize: 11 }}>{w}</code>
-                      </div>
-                    ))}
-                  </td>
-                  <td>
-                    <code style={{ fontSize: 11 }}>{r.then}</code>
-                  </td>
-                  <td>
-                    <span className="tag tag-teal">{r.min_premise_class}</span>
-                  </td>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th>When</th>
+                  <th>Then</th>
+                  <th>
+                    Minimum premise class
+                    <FieldHelp text="The weakest kind of fact the rule will fire on. Conflict checking is set so that it fires only on facts declared by a system of record or confirmed by a check, because a conflict flag resting on a model's guess would be worse than none at all." />
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {ontology.rules.map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      <code>
+                        {r.id}@{r.version}
+                      </code>
+                      <div className="dim" style={{ fontSize: 12, marginTop: 3, maxWidth: 260 }}>
+                        {r.description}
+                        {r.help && <FieldHelp text={r.help} />}
+                      </div>
+                    </td>
+                    <td>
+                      {r.when.map((w) => (
+                        <div key={w}>
+                          <code style={{ fontSize: 11 }}>{w}</code>
+                        </div>
+                      ))}
+                    </td>
+                    <td>
+                      <code style={{ fontSize: 11 }}>{r.then}</code>
+                    </td>
+                    <td>
+                      <span className="tag tag-teal">{r.min_premise_class}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -1273,12 +1279,32 @@ function RetrievalReach({
   )
 }
 
-/** The tiers a tenant permits at all, as three switches.
+const DIRECTIONS: { value: string; label: string; note: string }[] = [
+  {
+    value: 'vector_first',
+    label: 'Vector first',
+    note: 'Retrieve the nearest passages, then follow verified relationships out of them and offer the table schema alongside. The right shape when the documents are the fuller source.',
+  },
+  {
+    value: 'graph_first',
+    label: 'Graph first',
+    note: "Match the graph on the question's words, then read only the documents a verified fact came from and query only the tables the graph named. Every passage is one an assertion vouches for; a document nothing has been extracted from yet is unreachable.",
+  },
+  {
+    value: 'metrics_only',
+    label: 'No retrieval',
+    note: 'Approved metrics and nothing else. Any question no metric covers is refused rather than answered from documents.',
+  },
+]
+
+/** Governed metrics, and which way this tenant traverses.
  *
- * A hard cap rather than a preference: a question that would have been answered at a forbidden
- * tier is refused, not quietly answered at another one. `allowed_tiers` has been enforced by the
- * resolver, planner and router since it was added — this is the control that was missing, so the
- * only way to change it was an API call.
+ * Two controls rather than three switches, because graph-first and vector-first are the same
+ * search in opposite directions and the API refuses both at once. Three independent switches
+ * offered a combination that could only ever come back as a validation error.
+ *
+ * A hard cap rather than a preference: a question that would have been answered on a route the
+ * tenant turned off is refused, not quietly answered on another one.
  */
 function TierPermissions({
   settings,
@@ -1289,70 +1315,88 @@ function TierPermissions({
   patch: (key: string, body: Partial<TenantSettings>, message: string) => void
   saving: string | null
 }) {
-  const allowed = settings.allowed_tiers ?? [1, 2, 3]
-  const tiers: { n: number; name: string; note: string }[] = [
-    {
-      n: 1,
-      name: 'Governed metrics',
-      note: 'Compiled from an approved definition, so the SQL is deterministic and no model writes it.',
-    },
-    {
-      n: 2,
-      name: 'Graph traversal',
-      note: 'Facts read from documents, each citing a page and a quote. Conflict checks live here.',
-    },
-    {
-      n: 3,
-      name: 'Hybrid',
-      note: 'Passage retrieval plus the relationships and table schema around what it found.',
-    },
-  ]
+  const allowed = settings.allowed_tiers ?? [1, 3]
+  const governed = allowed.includes(1)
+  // The API derives this from the cap, so falling back to the cap keeps an older deployment's
+  // page working rather than showing a direction it is not running.
+  const direction =
+    settings.retrieval_direction ??
+    (allowed.includes(2) ? 'graph_first' : allowed.includes(3) ? 'vector_first' : 'metrics_only')
+  const chosen = DIRECTIONS.find((d) => d.value === direction)
 
-  const toggle = (n: number, on: boolean) => {
-    const next = on ? [...allowed, n].sort() : allowed.filter((t) => t !== n)
+  const retrievalTier = (value: string) =>
+    value === 'graph_first' ? [2] : value === 'vector_first' ? [3] : []
+
+  const toggleGoverned = (on: boolean) => {
+    const next = [...(on ? [1] : []), ...retrievalTier(direction)]
     patch(
-      `tier-${n}`,
+      'governed',
       { allowed_tiers: next },
-      on ? `Tier ${n} may now run` : `Tier ${n} will no longer run`,
+      on ? 'Governed metrics may now answer questions' : 'Governed metrics will no longer run',
     )
   }
 
+  const changeDirection = (value: string) => {
+    const next = [...(governed ? [1] : []), ...retrievalTier(value)]
+    patch(
+      'direction',
+      { allowed_tiers: next },
+      `Retrieval is now ${DIRECTIONS.find((d) => d.value === value)?.label.toLowerCase()}`,
+    )
+  }
+
+  const nothing = !governed && direction === 'metrics_only'
+
   return (
-    <div className="card" style={{ borderColor: allowed.length === 0 ? 'var(--red)' : undefined }}>
+    <div className="card" style={{ borderColor: nothing ? 'var(--red)' : undefined }}>
       <div className="card-header">
-        <h3>Resolution tiers</h3>
-        <span className={`tag ${allowed.length === 3 ? 'tag-green' : 'tag-orange'}`}>
-          {allowed.length} of 3 permitted
+        <h3>Resolution</h3>
+        <span className={`tag ${nothing ? 'tag-orange' : 'tag-green'}`}>
+          {chosen?.label ?? direction}
         </span>
       </div>
-      {tiers.map((tier) => (
-        <label className="switch" key={tier.n} style={{ marginBottom: 10 }}>
-          <input
-            type="checkbox"
-            checked={allowed.includes(tier.n)}
-            disabled={saving === `tier-${tier.n}`}
-            onChange={(e) => toggle(tier.n, e.target.checked)}
-          />
-          <span className="switch-track" />
-          <span>
-            Tier {tier.n}: {tier.name}
-            <span className="dim" style={{ display: 'block', fontSize: 11.5, marginTop: 2 }}>
-              {tier.note}
-            </span>
+      <label className="switch" style={{ marginBottom: 12 }}>
+        <input
+          type="checkbox"
+          checked={governed}
+          disabled={saving === 'governed'}
+          onChange={(e) => toggleGoverned(e.target.checked)}
+        />
+        <span className="switch-track" />
+        <span>
+          Governed metrics
+          <span className="dim" style={{ display: 'block', fontSize: 11.5, marginTop: 2 }}>
+            Compiled from an approved definition, so the SQL is deterministic and no model writes
+            it. Tried first, and a question it covers is answered there and nowhere else.
           </span>
-        </label>
-      ))}
-      {allowed.length === 0 && (
+        </span>
+      </label>
+      <div className="form-group">
+        <label>Retrieval direction</label>
+        <select
+          value={direction}
+          onChange={(e) => changeDirection(e.target.value)}
+          disabled={saving === 'direction'}
+        >
+          {DIRECTIONS.map((d) => (
+            <option key={d.value} value={d.value}>
+              {d.label}
+            </option>
+          ))}
+        </select>
+        <p className="hint">{chosen?.note}</p>
+      </div>
+      {nothing && (
         <p className="card-note qtrace-withheld">
-          No tier is permitted, so no question can be answered at all. Every request will be
+          Nothing is permitted, so no question can be answered at all. Every request will be
           refused with that as its stated reason.
         </p>
       )}
       <p className="card-note" style={{ marginTop: 9 }}>
-        A forbidden tier is refused rather than substituted: "answered at a tier you disallowed"
-        and "answered at the tier you asked for" must not look the same. Turning one off does not
-        remove the facts underneath it, a disabled tier is named in the trace of every question
-        that would have used it.
+        One direction or the other, never both: they are the same three stores searched in opposite
+        orders, and running both would answer twice from the same evidence while claiming the graph
+        chose the documents in one of them. A route turned off is refused rather than substituted,
+        and it is named in the trace of every question that would have used it.
       </p>
     </div>
   )

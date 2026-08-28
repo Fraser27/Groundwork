@@ -39,10 +39,38 @@ export function asRows(answer: QueryAnswer): QueryRows | null {
   return null
 }
 
+/**
+ * The facts an answer rests on, whichever tier and whichever direction produced them.
+ *
+ * `facts` is tier 2's key and `related` is tier 3's, and the difference is not cosmetic: one
+ * matched the graph and the other walked out from passages. Both are the same rows to a reader,
+ * so both are read here — the tier-2 key was missing for the whole life of that tier, which made
+ * every graph-first answer render as zero facts with a clean `tsc`.
+ */
 export function asHits(answer: QueryAnswer): QueryHit[] {
   if (Array.isArray(answer)) return answer
-  if (answer && typeof answer === 'object' && 'related' in answer) return answer.related ?? []
+  if (!answer || typeof answer !== 'object') return []
+  if ('related' in answer) return answer.related ?? []
+  if ('facts' in answer) return answer.facts ?? []
   return []
+}
+
+/** Tier 2's tables: the catalogued schema the question's words reached through the graph. */
+export function asTables(answer: QueryAnswer): CatalogSchemaRef[] {
+  if (!answer || typeof answer !== 'object' || !('tables' in answer)) return []
+  return asSchema(answer.tables)
+}
+
+/**
+ * How far a graph-first traversal reached. Empty for every other tier, which claims nothing.
+ *
+ * Read rather than inferred from which lists came back empty: "no document was reached" and "the
+ * documents reached held no matching passage" are different facts about the same corpus, and a
+ * diagram that shows both as an empty lane has answered the reader's question wrongly.
+ */
+export function asLanded(answer: QueryAnswer): string[] {
+  if (!answer || typeof answer !== 'object' || !('landed' in answer)) return []
+  return Array.isArray(answer.landed) ? answer.landed : []
 }
 
 export function asPassages(answer: QueryAnswer): QueryPassage[] {
@@ -152,9 +180,43 @@ export function laneCount(lane: TraceLane): number {
   )
 }
 
-/** Fallback only: a part carries its own tier. Catalogue and the SQL lane are tier 3, alongside
- *  the passages — the catalogue finds the schema and the SQL lane is what writes over it. */
+/**
+ * Fallback only, and only for a lane with no tier of its own to read.
+ *
+ * The traversal lanes are listed at tier 3 because vector-first is the default direction, not
+ * because they belong to it: graph-first runs the same four lanes at tier 2. Prefer
+ * `retrieval_direction`, and prefer a part's own `tier` over both.
+ */
 const LANE_TIER: Record<Lane, number> = { metric: 1, graph: 2, passages: 3, catalog: 3, sql: 3 }
+
+/** The traversal lanes, which belong to whichever direction the run was in. `metric` is tier 1
+ *  either way, and `graph` is the one lane both directions agree on the number for. */
+const TRAVERSAL_LANES: ReadonlySet<string> = new Set(['graph', 'passages', 'catalog', 'sql'])
+
+/**
+ * The tier to label a skipped lane with.
+ *
+ * A skipped lane produced no part, so it carries no tier and one has to be supplied. Read from the
+ * direction the server says it ran in, and inferred from the tiers of the parts that did run only
+ * when the field is absent — an older response should still label its own lanes rather than have
+ * the default direction asserted over it.
+ */
+function skippedTier(lane: string, composed: ComposedResult): number {
+  const known = lane in LANES ? (lane as Lane) : null
+  if (known === null) return 0
+  if (!TRAVERSAL_LANES.has(lane)) return LANE_TIER[known]
+  if (composed.retrieval_direction === 'graph_first') return 2
+  if (composed.retrieval_direction === 'vector_first') return 3
+
+  // `metrics_only`, or the field absent on an older response. Infer from a traversal lane that did
+  // run, and fall back to the map rather than claiming no tier: `TiersStep` groups a skipped lane
+  // under the tier whose refusal already explains it, and one with no tier gets listed instead as a
+  // lane that was permitted and still did not run.
+  const ran = (composed.parts ?? []).find(
+    (p) => TRAVERSAL_LANES.has(p.lane) && (p.tier === 2 || p.tier === 3),
+  )
+  return ran ? ran.tier : LANE_TIER[known]
+}
 
 /**
  * The single tier that answered, as lanes.
@@ -170,9 +232,7 @@ export function lanesFromResult(result: QueryResult): TraceLane[] {
   if (result.tier === 1) {
     return [{ ...laneShell('metric'), tier: 1, ran: true, rows, sql: result.sql ?? null }]
   }
-  if (result.tier === 2) {
-    return [{ ...laneShell('graph'), tier: 2, ran: true, facts }]
-  }
+  if (result.tier === 2) return graphFirstLanes(result.answer, facts, passages)
   if (result.tier === 3) {
     const lanes: TraceLane[] = [{ ...laneShell('passages'), tier: 3, ran: true, passages }]
     if (facts.length > 0) lanes.push({ ...laneShell('graph'), tier: 3, ran: true, facts })
@@ -193,6 +253,78 @@ export function lanesFromResult(result: QueryResult): TraceLane[] {
   // A tier this build does not know, which today means a retired one. No lane is claimed for it:
   // drawing a passage lane would assert that passages were searched, and nothing here knows that.
   return []
+}
+
+/**
+ * Tier 2 as four lanes, in the order it ran them.
+ *
+ * Deliberately the same shape `Planner._graph_first` reports, and driven off the same `landed`
+ * field, so `/query` and `/query/compose` cannot describe one graph-first run two ways. This used
+ * to be a single graph lane, which dropped the passages, the tables and the generated query from
+ * the diagram even though all three were sitting in the response.
+ *
+ * The skip wording is written here rather than quoted, because `/query` carries no `lanes_skipped`.
+ */
+function graphFirstLanes(
+  answer: QueryAnswer,
+  facts: QueryHit[],
+  passages: QueryPassage[],
+): TraceLane[] {
+  const landed = asLanded(answer)
+  const tables = asTables(answer)
+  const generated = asGenerated(answer)
+
+  // Always ran, and shown even with nothing in it. Matching the graph on the question's words is
+  // step 1 of this direction, so an empty graph lane is a result and not an absence of one.
+  const lanes: TraceLane[] = [{ ...laneShell('graph'), tier: 2, ran: true, facts }]
+
+  lanes.push(
+    landed.includes('documents')
+      ? { ...laneShell('passages'), tier: 2, ran: true, passages }
+      : {
+          ...laneShell('passages'),
+          tier: 2,
+          ran: false,
+          reason:
+            'no document was searched: graph-first reads only documents a verified fact came ' +
+            'from, and this question reached none',
+        },
+  )
+
+  lanes.push(
+    landed.includes('tables')
+      ? { ...laneShell('catalog'), tier: 2, ran: true, schema: tables }
+      : {
+          ...laneShell('catalog'),
+          tier: 2,
+          ran: false,
+          reason: "this question's words do not reach a catalogued table through the graph",
+        },
+  )
+
+  if (generated) {
+    lanes.push({
+      ...laneShell('sql'),
+      tier: 2,
+      ran: true,
+      provenance: 'model_written',
+      sql: generated.sql,
+      rows: generated.rows ?? undefined,
+      reason: generated.error ?? undefined,
+    })
+  } else if (landed.includes('tables')) {
+    // Three things cause this: the kill switch, no SQL lane in the deployment, or a lane that could
+    // write nothing for this question. All three put their own account in `warnings`, so the fact is
+    // stated and the cause is not guessed -- naming the switch would have the page assert a
+    // governance decision the server did not report.
+    lanes.push({
+      ...laneShell('sql'),
+      tier: 2,
+      ran: false,
+      reason: 'the graph reached tables and no query was run over them',
+    })
+  }
+  return lanes
 }
 
 function laneShell(lane: Lane): TraceLane {
@@ -217,7 +349,7 @@ export function lanesFromComposed(composed: ComposedResult): TraceLane[] {
       key: lane,
       label: known ? LANES[known].label : lane,
       colour: known ? LANES[known].colour : 'var(--text-dim)',
-      tier: known ? LANE_TIER[known] : 0,
+      tier: skippedTier(lane, composed),
       ran: false,
       reason,
     })

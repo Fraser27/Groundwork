@@ -29,6 +29,10 @@ from src.query.resolver import QueryBlocked, Resolver, Tier
 TENANT = "firm-acme"
 METRICS = "sample/metrics/legal.yaml"
 
+#: Tier 2 is not in the default cap: it and tier 3 are one search in opposite directions and the
+#: default is vector first. A test about graph traversal has to ask for graph traversal.
+GRAPH_FIRST = GovernanceSettings(allowed_tiers=frozenset({1, 2}))
+
 
 @pytest.fixture
 def ctx() -> AuthContext:
@@ -336,6 +340,65 @@ class TestExpandRanksBeforeTruncating:
             assert hit["matched_on"]
 
 
+class TestSearchIgnoresTheCatalog:
+    """A column name is schema, not evidence, and tier 2 must not offer one as an answer.
+
+    Once the Glue scan started writing catalog nodes into the graph, "what is the total
+    turnover?" came back as a list of columns called `total_returned`, `total_sold`,
+    `total_amount`. Ranking cannot fix it: a Glue declaration is DECLARED at 1.00, so on a
+    one-term match it legitimately outranks every fact a person asked about.
+    """
+
+    @pytest.fixture
+    def reader(self, ctx) -> GraphReader:
+        ontology = load_ontology("legal")
+        queue = ReviewQueue(
+            InMemoryAssertionStore(), governing_predicates=ontology.governing_predicates
+        )
+        catalog = [
+            build_assertion(
+                tenant_id=TENANT,
+                subject_id="table:glue:anycorp.sales",
+                predicate="HAS_COLUMN",
+                object_id=f"column:glue:anycorp.sales.{name}",
+                epistemic_class=EpistemicClass.DECLARED,
+                method="glue:catalog_scan",
+                confidence=1.0,
+                source_locator=SourceLocator(source_id="glue", table="anycorp.sales"),
+            )
+            for name in ("total_returned", "total_sold", "total_amount")
+        ]
+        fact = build_assertion(
+            tenant_id=TENANT,
+            subject_id="counsel:dalgleish-rowe",
+            predicate="REPRESENTS",
+            object_id="party:total-holdings-ltd",
+            epistemic_class=EpistemicClass.EXTRACTED_MODEL,
+            method="llm:opus-5",
+            confidence=0.9,
+            source_locator=SourceLocator(
+                document_id="d1", filename="d1.pdf", page=1, quote="Total Holdings Ltd"
+            ),
+        )
+        queue.stage(ctx, [*catalog, fact], job_id="j1")
+        queue.approve(ctx, fact.assertion_id)
+        queue.promote(ctx, job_id="j1")
+        return GraphReader(queue, ontology=ontology)
+
+    def test_a_column_is_never_a_search_result(self, reader, ctx):
+        hits = reader.search(ctx, "what is the total turnover?", min_confidence=0.0)
+        assert not [h for h in hits if h["object_id"].startswith(("table:", "column:"))]
+
+    def test_the_real_fact_is_not_buried_by_schema(self, reader, ctx):
+        hits = reader.search(ctx, "total holdings", min_confidence=0.0)
+        assert [h["object_id"] for h in hits] == ["party:total-holdings-ltd"]
+
+    def test_the_catalog_edges_are_readable_they_are_just_not_answers(self, reader, ctx):
+        """Excluded from `search`, not from the graph. The Tables pages read them."""
+        predicates = {r.assertion.predicate for r in reader._readable(ctx, 0.0)}
+        assert "HAS_COLUMN" in predicates
+
+
 #: The production shape that exposed the severed spine. `doc-d63a8228d513541553` carries only
 #: `MENTIONS` edges -- descriptive, so capped at the trust floor exactly -- while the facts anyone
 #: would ask for name it in `source_locator` and nowhere else. Raising the floor to 0.85 dropped
@@ -557,7 +620,7 @@ class TestTierOrdering:
 
     def test_falls_through_to_graph(self, matcher, reader, ctx):
         r = Resolver(metric_matcher=matcher, graph_reader=reader)
-        res = r.resolve(ctx, "which matters involve Acme Corporation", GovernanceSettings())
+        res = r.resolve(ctx, "which matters involve Acme Corporation", GRAPH_FIRST)
         assert res.tier is Tier.GRAPH_TRAVERSAL
         assert res.assertions_used
 
@@ -570,7 +633,7 @@ class TestTierOrdering:
     def test_tier_override_skips_earlier_tiers(self, matcher, reader, ctx):
         r = Resolver(metric_matcher=matcher, graph_reader=reader)
         res = r.resolve(
-            ctx, "fees billed by month", GovernanceSettings(), tier_override=Tier.GRAPH_TRAVERSAL
+            ctx, "fees billed by month", GRAPH_FIRST, tier_override=Tier.GRAPH_TRAVERSAL
         )
         assert res.tiers_attempted == [Tier.GRAPH_TRAVERSAL]
 
@@ -724,21 +787,21 @@ class TestTheEthicalScreenVetoesOnQueryToo:
 
     def test_a_screened_fact_does_not_survive_tier_two(self, screened):
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            screened, "acme corporation", GovernanceSettings()
+            screened, "acme corporation", GRAPH_FIRST
         )
-        assert [h["assertion_id"] for h in res.answer] == ["a-open"]
+        assert [h["assertion_id"] for h in res.answer["facts"]] == ["a-open"]
 
     def test_the_screened_assertion_id_is_stripped_from_the_audit_trail(self, screened):
         """Leaving the id behind would still hand the blocked subject to whatever reads the
         trail, and `See in graph` deep-links straight off this list."""
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            screened, "acme corporation", GovernanceSettings()
+            screened, "acme corporation", GRAPH_FIRST
         )
         assert res.assertions_used == ["a-open"]
 
     def test_the_block_is_reported_not_silent(self, screened):
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            screened, "acme corporation", GovernanceSettings()
+            screened, "acme corporation", GRAPH_FIRST
         )
         block = res.to_dict()["blocks"][0]
         assert block["matter_id"] == "M-9"
@@ -750,7 +813,7 @@ class TestTheEthicalScreenVetoesOnQueryToo:
         """A count, never the content. "One fact was withheld" is what stops the remainder
         reading as the whole answer."""
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            screened, "acme corporation", GovernanceSettings()
+            screened, "acme corporation", GRAPH_FIRST
         )
         assert any("withheld" in w for w in res.warnings)
 
@@ -758,17 +821,17 @@ class TestTheEthicalScreenVetoesOnQueryToo:
         """A nil result under a wall is the harm exactly: a conflict check that reads as clean
         when it is only incomplete."""
         res = Resolver(graph_reader=UnscopedReader([])).resolve(
-            screened, "zzzq unrelated gibberish", GovernanceSettings()
+            screened, "zzzq unrelated gibberish", GRAPH_FIRST
         )
         assert res.answer is None
         assert [b.matter_id for b in res.blocks] == ["M-9"]
 
     def test_an_unscreened_caller_carries_no_blocks(self, ctx):
         res = Resolver(graph_reader=UnscopedReader(HITS)).resolve(
-            ctx, "acme corporation", GovernanceSettings()
+            ctx, "acme corporation", GRAPH_FIRST
         )
         assert res.to_dict()["blocks"] == []
-        assert len(res.answer) == 2
+        assert len(res.answer["facts"]) == 2
 
     def test_a_hybrid_answer_is_screened_on_both_halves(self, screened):
         class Vectors:
@@ -812,9 +875,9 @@ class TestTheEthicalScreenVetoesOnQueryToo:
                 }
             ],
         )
-        res = Resolver(graph_reader=reader).resolve(screened, "acme", GovernanceSettings())
+        res = Resolver(graph_reader=reader).resolve(screened, "acme", GRAPH_FIRST)
         assert "conflict_check" in [b.rule for b in res.blocks]
-        assert res.answer == []
+        assert res.answer["facts"] == []
 
 
 class TestTierOneIsExemptByDecision:

@@ -398,8 +398,25 @@ class Services:
             # runs. The router's decision is part of the trace rather than a filter on it.
             router=self.build_tier_router(),
             sql_lane=self.build_sql_lane(tenant_id) if tenant_id else None,
+            question_splitter=self.build_question_splitter(tenant_id),
             synonyms_for=self.catalog_synonyms(),
         )
+
+    def build_question_splitter(self, tenant_id: str = "") -> Any | None:
+        """Splits a compound question, or None with no model configured.
+
+        `query_model`, the same model that writes SQL: splitting is a structural read of the
+        question rather than prose, so it belongs with the query-side setting a firm may pay more
+        for, not with the summariser. Planner-only -- `/query` answers from one tier, and half a
+        question answered by one tier is not an answer.
+        """
+        model_id = self.settings_for(tenant_id).query_model
+        if not model_id:
+            return None
+
+        from src.query.decompose import QuestionSplitter
+
+        return QuestionSplitter(model_id=model_id)
 
     def build_sql_lane(self, tenant_id: str) -> Any | None:
         """Model-written SQL over this tenant's catalogued schema, or None with no model.

@@ -56,30 +56,77 @@ def render(answer: dict[str, Any], fmt: str) -> str | None:
     return _table(normalised)
 
 
+#: Lists a multi-store answer can carry, and what to call each one to a reader. A traversal tier
+#: returns one dict holding several of them -- graph-first returns four -- and a single part wrapping
+#: that dict renders as `str(dict)`, so the reader is shown a Python repr instead of an answer.
+_EVIDENCE_LANES = {
+    "facts": "facts",
+    "passages": "passages",
+    "related": "related facts",
+    "tables": "schema",
+}
+
+
 def _as_parts(resolution: dict[str, Any]) -> dict[str, Any]:
     """A single-tier `Resolution` in the part-wise shape, so one renderer serves both tools.
 
     Not a general adapter: it exists so `ask` can be rendered at all. The tier name becomes the
-    part's lane because that is what a reader of a single-tier answer recognises.
+    part's lane because that is what a reader of a single-tier answer recognises, except where the
+    tier searched several stores -- then each list becomes its own part, the way compose reports
+    them, because "quoted from a document" and "a relationship in the graph" are not the same claim
+    and a reader has to be able to tell which they are looking at.
     """
     answer = resolution.get("answer")
-    has_answer = bool(answer) or bool(resolution.get("sql"))
-    parts = (
-        [
+    common: dict[str, Any] = {
+        "provenance": "deterministic" if resolution.get("governed") else "model_written",
+        "tier": resolution.get("tier"),
+        "confidence": None,
+        "error": None,
+        "sql": None,
+        "assertion_ids": [],
+    }
+
+    parts: list[dict[str, Any]] = []
+    if isinstance(answer, dict) and any(key in answer for key in _EVIDENCE_LANES):
+        for key, lane in _EVIDENCE_LANES.items():
+            rows = answer.get(key)
+            if not rows:
+                continue
+            parts.append(
+                {
+                    **common,
+                    "lane": lane,
+                    "content": rows,
+                    "assertion_ids": [
+                        r["assertion_id"]
+                        for r in rows
+                        if isinstance(r, dict) and r.get("assertion_id")
+                    ],
+                }
+            )
+        generated = answer.get("generated")
+        if isinstance(generated, dict) and generated.get("sql"):
+            parts.append(
+                {
+                    **common,
+                    # Never deterministic, whatever the tier says: nothing approved this query.
+                    "provenance": "model_written",
+                    "lane": "generated query",
+                    "content": generated.get("rows"),
+                    "sql": generated.get("sql"),
+                    "error": generated.get("error"),
+                }
+            )
+    elif bool(answer) or bool(resolution.get("sql")):
+        parts.append(
             {
+                **common,
                 "lane": str(resolution.get("tier_name", "result")).lower(),
-                "provenance": "deterministic" if resolution.get("governed") else "model_written",
-                "tier": resolution.get("tier"),
                 "content": answer,
                 "sql": resolution.get("sql"),
                 "assertion_ids": resolution.get("assertions_used") or [],
-                "confidence": None,
-                "error": None,
             }
-        ]
-        if has_answer
-        else []
-    )
+        )
     return {
         "parts": parts,
         "blocks": resolution.get("blocks") or [],

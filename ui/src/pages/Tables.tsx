@@ -146,54 +146,56 @@ export default function Tables() {
       </div>
 
       <div className="card">
-        <table className="data-table data-table-hover">
-          <thead>
-            <tr>
-              <th>Table</th>
-              <th>Source</th>
-              <th className="num">Rows</th>
-              <th>
-                How reached
-                <FieldHelp text={HELP.epistemicClass} />
-              </th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((t) => (
-              <tr
-                key={t.full_name}
-                onClick={() => {
-                  window.location.href = `/tables/${encodeURIComponent(t.full_name)}`
-                }}
-              >
-                <td>
-                  <Link to={`/tables/${encodeURIComponent(t.full_name)}`}>{t.name}</Link>
-                  <div className="dim" style={{ fontSize: 11.5 }}>
-                    <code>{t.database}</code>
-                  </div>
-                </td>
-                <td className="nowrap dim">{sourceName(t.source_id)}</td>
-                <td className="num">{fmtNum(t.row_count)}</td>
-                <td>
-                  <EpistemicBadge epistemicClass={t.epistemic_class} size="sm" />
-                </td>
-                <td className="dim">{t.description || '-'}</td>
-              </tr>
-            ))}
-            {filtered.length === 0 && (
+        <div className="table-scroll">
+          <table className="data-table data-table-hover">
+            <thead>
               <tr>
-                <td colSpan={5}>
-                  <EmptyState title={tables.length === 0 ? 'No tables in the catalogue' : 'No tables match'}>
-                    {tables.length === 0
-                      ? 'A catalogue scan has not been run. Start one from Admin.'
-                      : 'Clear the search or pick a different source.'}
-                  </EmptyState>
-                </td>
+                <th>Table</th>
+                <th>Source</th>
+                <th className="num">Rows</th>
+                <th>
+                  How reached
+                  <FieldHelp text={HELP.epistemicClass} />
+                </th>
+                <th>Description</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filtered.map((t) => (
+                <tr
+                  key={t.full_name}
+                  onClick={() => {
+                    window.location.href = `/tables/${encodeURIComponent(t.full_name)}`
+                  }}
+                >
+                  <td>
+                    <Link to={`/tables/${encodeURIComponent(t.full_name)}`}>{t.name}</Link>
+                    <div className="dim" style={{ fontSize: 11.5 }}>
+                      <code>{t.database}</code>
+                    </div>
+                  </td>
+                  <td className="nowrap dim">{sourceName(t.source_id)}</td>
+                  <td className="num">{fmtNum(t.row_count)}</td>
+                  <td>
+                    <EpistemicBadge epistemicClass={t.epistemic_class} size="sm" />
+                  </td>
+                  <td className="dim">{t.description || '-'}</td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={5}>
+                    <EmptyState title={tables.length === 0 ? 'No tables in the catalogue' : 'No tables match'}>
+                      {tables.length === 0
+                        ? 'A catalogue scan has not been run. Start one from Admin.'
+                        : 'Clear the search or pick a different source.'}
+                    </EmptyState>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   )

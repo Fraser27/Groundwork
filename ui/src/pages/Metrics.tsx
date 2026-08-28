@@ -553,160 +553,162 @@ export default function Metrics() {
       </div>
 
       <div className="card">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Metric</th>
-              <th>Expression</th>
-              <th>Source</th>
-              <th>
-                Time grains
-                <FieldHelp text={HELP.timeGrain} />
-              </th>
-              <th>
-                Additivity
-                <FieldHelp text={HELP.additivity} />
-              </th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((m) => (
-              <>
-                <tr key={m.metric_id}>
-                  <td>
-                    <strong>{m.name}</strong>
-                    <div className="dim" style={{ fontSize: 11.5 }}>
-                      <code>{m.metric_id}</code> v{m.version}
-                    </div>
-                    <div className="dim" style={{ fontSize: 12, marginTop: 3, maxWidth: 280 }}>
-                      {m.definition}
-                    </div>
-                    {m.synonyms.length > 0 && (
-                      <div style={{ marginTop: 5, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {m.synonyms.map((s) => (
-                          <span key={s} className="tag tag-neutral" title="A question using this wording matches this metric.">
-                            {s}
-                          </span>
-                        ))}
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Expression</th>
+                <th>Source</th>
+                <th>
+                  Time grains
+                  <FieldHelp text={HELP.timeGrain} />
+                </th>
+                <th>
+                  Additivity
+                  <FieldHelp text={HELP.additivity} />
+                </th>
+                <th>Status</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((m) => (
+                <>
+                  <tr key={m.metric_id}>
+                    <td>
+                      <strong>{m.name}</strong>
+                      <div className="dim" style={{ fontSize: 11.5 }}>
+                        <code>{m.metric_id}</code> v{m.version}
                       </div>
-                    )}
-                  </td>
-                  <td>
-                    <code style={{ fontSize: 11.5 }}>{m.expression}</code>
-                  </td>
-                  <td>
-                    <span className="tag tag-blue tag-mono">{m.source_table}</span>
-                    {m.grain.length > 0 && (
-                      <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
-                        by {m.grain.join(', ')}
+                      <div className="dim" style={{ fontSize: 12, marginTop: 3, maxWidth: 280 }}>
+                        {m.definition}
                       </div>
-                    )}
-                  </td>
-                  <td className="nowrap">
-                    {m.time_grains.map((g) => (
-                      <span key={g} className="tag tag-purple" style={{ marginRight: 4 }}>
-                        {g}
+                      {m.synonyms.length > 0 && (
+                        <div style={{ marginTop: 5, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          {m.synonyms.map((s) => (
+                            <span key={s} className="tag tag-neutral" title="A question using this wording matches this metric.">
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <code style={{ fontSize: 11.5 }}>{m.expression}</code>
+                    </td>
+                    <td>
+                      <span className="tag tag-blue tag-mono">{m.source_table}</span>
+                      {m.grain.length > 0 && (
+                        <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                          by {m.grain.join(', ')}
+                        </div>
+                      )}
+                    </td>
+                    <td className="nowrap">
+                      {m.time_grains.map((g) => (
+                        <span key={g} className="tag tag-purple" style={{ marginRight: 4 }}>
+                          {g}
+                        </span>
+                      ))}
+                      {m.time_grain_column && (
+                        <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                          on <code>{m.time_grain_column}</code>
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span
+                        className={`tag ${
+                          m.aggregation === 'additive'
+                            ? 'tag-green'
+                            : m.aggregation === 'semi_additive'
+                              ? 'tag-orange'
+                              : 'tag-red'
+                        }`}
+                        title={fillUnit(AGGREGATION_HELP[m.aggregation], unit)}
+                      >
+                        {m.aggregation.replace('_', '-')}
                       </span>
-                    ))}
-                    {m.time_grain_column && (
-                      <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
-                        on <code>{m.time_grain_column}</code>
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <span
-                      className={`tag ${
-                        m.aggregation === 'additive'
-                          ? 'tag-green'
-                          : m.aggregation === 'semi_additive'
-                            ? 'tag-orange'
-                            : 'tag-red'
-                      }`}
-                      title={fillUnit(AGGREGATION_HELP[m.aggregation], unit)}
-                    >
-                      {m.aggregation.replace('_', '-')}
-                    </span>
-                  </td>
-                  <td>
-                    <span
-                      className={`tag ${
-                        m.status === 'approved'
-                          ? 'tag-green'
-                          : m.status === 'deprecated'
-                            ? 'tag-red'
-                            : 'tag-orange'
-                      }`}
-                      title={
-                        m.status === 'approved'
-                          ? 'Answerable. Questions matching this metric compile to its SQL.'
-                          : m.status === 'draft'
-                            ? 'Not answerable yet. A draft is never used to answer a question.'
-                            : 'Withdrawn. Kept for the audit trail but no longer used.'
-                      }
-                    >
-                      {m.status}
-                    </span>
-                    {m.updated_by && (
-                      <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
-                        {m.updated_by.split('@')[0]} &middot; {fmtDateTime(m.updated_at)}
-                      </div>
-                    )}
-                  </td>
-                  <td className="nowrap">
-                    <button
-                      className={`btn btn-sm ${sql[m.metric_id] ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() => toggleSql(m)}
-                      style={{ marginRight: 5 }}
-                      title="Compile this definition to SQL. Deterministic, no model is invoked."
-                    >
-                      SQL
-                    </button>
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      style={{ marginRight: 5 }}
-                      onClick={() => openModal(m)}
-                    >
-                      Edit
-                    </button>
-                    {m.status !== 'approved' ? (
-                      <button className="btn btn-approve btn-sm" onClick={() => setStatus(m, 'approved')}>
-                        Approve
+                    </td>
+                    <td>
+                      <span
+                        className={`tag ${
+                          m.status === 'approved'
+                            ? 'tag-green'
+                            : m.status === 'deprecated'
+                              ? 'tag-red'
+                              : 'tag-orange'
+                        }`}
+                        title={
+                          m.status === 'approved'
+                            ? 'Answerable. Questions matching this metric compile to its SQL.'
+                            : m.status === 'draft'
+                              ? 'Not answerable yet. A draft is never used to answer a question.'
+                              : 'Withdrawn. Kept for the audit trail but no longer used.'
+                        }
+                      >
+                        {m.status}
+                      </span>
+                      {m.updated_by && (
+                        <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>
+                          {m.updated_by.split('@')[0]} &middot; {fmtDateTime(m.updated_at)}
+                        </div>
+                      )}
+                    </td>
+                    <td className="nowrap">
+                      <button
+                        className={`btn btn-sm ${sql[m.metric_id] ? 'btn-primary' : 'btn-ghost'}`}
+                        onClick={() => toggleSql(m)}
+                        style={{ marginRight: 5 }}
+                        title="Compile this definition to SQL. Deterministic, no model is invoked."
+                      >
+                        SQL
                       </button>
-                    ) : (
-                      <button className="btn btn-ghost btn-sm" onClick={() => setStatus(m, 'deprecated')}>
-                        Deprecate
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        style={{ marginRight: 5 }}
+                        onClick={() => openModal(m)}
+                      >
+                        Edit
                       </button>
-                    )}
-                  </td>
-                </tr>
-                {sql[m.metric_id] && (
-                  <tr key={`${m.metric_id}-sql`}>
-                    <td colSpan={7} style={{ padding: 0 }}>
-                      <CompilerWarnings warnings={sql[m.metric_id].warnings} />
-                      <pre className="code-block" style={{ margin: 0, borderRadius: 0, border: 'none' }}>
-                        {sql[m.metric_id].sql}
-                      </pre>
+                      {m.status !== 'approved' ? (
+                        <button className="btn btn-approve btn-sm" onClick={() => setStatus(m, 'approved')}>
+                          Approve
+                        </button>
+                      ) : (
+                        <button className="btn btn-ghost btn-sm" onClick={() => setStatus(m, 'deprecated')}>
+                          Deprecate
+                        </button>
+                      )}
                     </td>
                   </tr>
-                )}
-              </>
-            ))}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={7}>
-                  <EmptyState title={metrics.length === 0 ? 'No metrics defined' : 'No metrics match'}>
-                    {metrics.length === 0
-                      ? 'A governed metric turns a recurring question into a fixed, auditable calculation. Use New metric to define the first one.'
-                      : 'Clear the filter to see every metric.'}
-                  </EmptyState>
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                  {sql[m.metric_id] && (
+                    <tr key={`${m.metric_id}-sql`}>
+                      <td colSpan={7} style={{ padding: 0 }}>
+                        <CompilerWarnings warnings={sql[m.metric_id].warnings} />
+                        <pre className="code-block" style={{ margin: 0, borderRadius: 0, border: 'none' }}>
+                          {sql[m.metric_id].sql}
+                        </pre>
+                      </td>
+                    </tr>
+                  )}
+                </>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7}>
+                    <EmptyState title={metrics.length === 0 ? 'No metrics defined' : 'No metrics match'}>
+                      {metrics.length === 0
+                        ? 'A governed metric turns a recurring question into a fixed, auditable calculation. Use New metric to define the first one.'
+                        : 'Clear the filter to see every metric.'}
+                    </EmptyState>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {modal && (

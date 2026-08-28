@@ -341,11 +341,12 @@ code, pre { font-family: var(--mono); }
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 18px;
+  --card-pad: 18px;
+  padding: var(--card-pad);
   box-shadow: var(--shadow);
 }
 .card + .card { margin-top: 16px; }
-.card-tight { padding: 14px; }
+.card-tight { --card-pad: 14px; padding: var(--card-pad); }
 
 .card-header {
   display: flex;
@@ -434,6 +435,16 @@ code, pre { font-family: var(--mono); }
 /* Epistemic tile: a left rule in the class colour, so the dashboard reads as a
    spectrum of trust rather than five interchangeable counters. */
 .stat-card.epi-tile { border-left: 3px solid var(--epi-colour); }
+
+/* A wide table has to scroll rather than escape its card: `width: 100%` cannot shrink a cell below
+   its own content, so a row's action buttons overflowed the card's right edge once the sidebar took
+   the width back. Bled out to the card's edges so the scrollbar is not inset by the padding, and
+   keyed off `--card-pad` so it stays in step with whichever card variant wraps it. */
+.table-scroll {
+  overflow-x: auto;
+  margin-inline: calc(-1 * var(--card-pad, 0px));
+  padding-inline: var(--card-pad, 0px);
+}
 
 .data-table { width: 100%; border-collapse: collapse; }
 

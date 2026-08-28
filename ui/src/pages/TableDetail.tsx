@@ -287,54 +287,56 @@ export default function TableDetail() {
             )}
           </div>
         </div>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>
-                Description
-                <FieldHelp text="Given to the model that writes SQL for questions no approved metric covers, so a column described as a {unit} status produces a better query than one called mtr_stat_cd. A description written here outranks a model's, and a model's is only used once approved." />
-              </th>
-              <th>Key</th>
-            </tr>
-          </thead>
-          <tbody>
-            {table.columns.map((c) => (
-              <tr key={c.name}>
-                <td>
-                  <strong>{c.name}</strong>
-                </td>
-                <td>
-                  <code style={{ fontSize: 11.5 }}>{c.data_type}</code>
-                </td>
-                <td>
-                  <EditableDescription
-                    value={c.description ?? ''}
-                    source={c.description_source}
-                    pending={c.pending_description}
-                    canEdit={admin}
-                    canApprove={reviewer}
-                    onSave={(text) => describe(text, c.name)}
-                    onApprove={approveAll}
-                    placeholder="-"
-                  />
-                </td>
-                <td className="nowrap">
-                  {c.is_primary_key && <span className="tag tag-green">primary</span>}{' '}
-                  {c.is_partition && (
-                    <span
-                      className="tag tag-orange"
-                      title="A partition key. Often a string rather than a real date, which is why it cannot be used as a metric's time axis."
-                    >
-                      partition
-                    </span>
-                  )}
-                </td>
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>
+                  Description
+                  <FieldHelp text="Given to the model that writes SQL for questions no approved metric covers, so a column described as a {unit} status produces a better query than one called mtr_stat_cd. A description written here outranks a model's, and a model's is only used once approved." />
+                </th>
+                <th>Key</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {table.columns.map((c) => (
+                <tr key={c.name}>
+                  <td>
+                    <strong>{c.name}</strong>
+                  </td>
+                  <td>
+                    <code style={{ fontSize: 11.5 }}>{c.data_type}</code>
+                  </td>
+                  <td>
+                    <EditableDescription
+                      value={c.description ?? ''}
+                      source={c.description_source}
+                      pending={c.pending_description}
+                      canEdit={admin}
+                      canApprove={reviewer}
+                      onSave={(text) => describe(text, c.name)}
+                      onApprove={approveAll}
+                      placeholder="-"
+                    />
+                  </td>
+                  <td className="nowrap">
+                    {c.is_primary_key && <span className="tag tag-green">primary</span>}{' '}
+                    {c.is_partition && (
+                      <span
+                        className="tag tag-orange"
+                        title="A partition key. Often a string rather than a real date, which is why it cannot be used as a metric's time axis."
+                      >
+                        partition
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   )
