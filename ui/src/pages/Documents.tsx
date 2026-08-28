@@ -6,6 +6,7 @@ import {
   type DocumentSummary,
   type IngestState,
   type Matter,
+  type Ontology,
 } from '../api'
 import { getTenantId } from '../auth'
 import { HELP, ingestPhase } from '../epistemic'
@@ -14,6 +15,7 @@ import DocumentViewer from '../components/DocumentViewer'
 import EpistemicBadge from '../components/EpistemicBadge'
 import FieldHelp from '../components/FieldHelp'
 import { SourceSpan } from '../components/ProvenancePanel'
+import ReasonerReportPanel from '../components/ReasonerReportPanel'
 import { CreateMatterDialog, LinkDocumentsDialog } from '../components/MatterDialog'
 import WipeDialog from '../components/WipeDialog'
 import { EmptyState, ErrorState, IngestPill, Pipeline, Spinner, Toast } from '../components/Shared'
@@ -50,6 +52,10 @@ export default function Documents() {
   const [docs, setDocs] = useState<DocumentSummary[]>([])
   const [matters, setMatters] = useState<Matter[]>([])
   const [floor, setFloor] = useState(0.8)
+  // The pack, so a rule that ran cleanly can be named rather than only counted. Kept out of
+  // `load` and keyed on the domain instead: `load` re-runs every 30s and the pack does not change.
+  const [domain, setDomain] = useState('')
+  const [ontology, setOntology] = useState<Ontology | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState('')
@@ -85,6 +91,7 @@ export default function Documents() {
         setDocs(d)
         setMatters(m.matters)
         setFloor(s.min_confidence)
+        setDomain(s.ontology_domain)
         setError('')
       })
       .catch((e: Error) => setError(e.message))
@@ -92,6 +99,20 @@ export default function Documents() {
   }
 
   useEffect(load, [tenant])
+
+  // Failing to load the pack costs the names of the rules that ran cleanly and nothing else, so
+  // it is swallowed: `ReasonerReportPanel` says so itself when handed an empty list.
+  useEffect(() => {
+    if (!domain) return
+    let live = true
+    api
+      .ontology(domain)
+      .then((o) => live && setOntology(o ?? null))
+      .catch(() => live && setOntology(null))
+    return () => {
+      live = false
+    }
+  }, [domain])
 
   /**
    * Live progress, with a poll underneath it.
@@ -668,6 +689,27 @@ export default function Documents() {
                       </div>
                     ))}
                   </div>
+                )}
+
+                {/* After the facts, because it is about what they did once they joined the graph.
+                    The facts above are this document's; this is the only part of the page that is
+                    about the corpus, and its most common useful answer is that a rule could not
+                    check rather than that it checked and cleared. */}
+                <div className="prov-section-title" style={{ marginTop: 20 }}>
+                  What the rule checks did
+                  <FieldHelp text="The pack's rules ran once this document's facts went live. A rule needs premises from more than one document, so this reports what the corpus could conclude, not what this page says." />
+                </div>
+                {detail.reasoning ? (
+                  <ReasonerReportPanel
+                    report={detail.reasoning}
+                    rules={ontology?.rules ?? []}
+                  />
+                ) : (
+                  <p className="card-note">
+                    No pass was recorded for this document. Documents ingested before this was kept
+                    show nothing here; it is not a report of a clean check. Run the rules from the
+                    review queue to get one.
+                  </p>
                 )}
 
                 <div className="modal-actions">

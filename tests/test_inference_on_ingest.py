@@ -77,6 +77,19 @@ class TestIngestReportsWhatItInferred:
         body = _ingest(c, "A short note naming nobody in particular.", matter_id=NTL)
         assert body["inferred"]["staged"] == 0
 
+    def test_the_response_carries_the_whole_report_not_a_summary_of_it(self, client):
+        """`rules_starved` is the field that separates a rule which found nothing from a rule which
+        had nothing to look at, and this endpoint used to drop it while returning the three fields
+        that cannot tell them apart. So the pass computed its most actionable line on every ingest
+        and discarded it, and an upload whose premises never joined looked exactly like a clean
+        one. Pinned by name: a summary here is the bug."""
+        c, _ = client
+        report = _ingest(c, "A short note naming nobody in particular.", matter_id=NTL)["inferred"]
+
+        for field in ("rules_starved", "conclusions_refused", "facts_considered", "inferences"):
+            assert field in report, f"{field} is missing, so zero conclusions cannot be explained"
+
+
 
 class TestTheCrossDocumentConflictAppearsByItself:
     """The failure from production, as a test: two documents, neither wrong alone."""

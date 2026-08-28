@@ -227,6 +227,8 @@ class IngestRunner:
         # terminal state is decided from these counts, that made a document look as though its
         # extraction had found nothing.
         job.staged_assertion_ids = list(result.get("staged_assertion_ids") or [])
+        inferred = result.get("inferred")
+        job.reasoning = inferred if isinstance(inferred, dict) else None
         for state in (JobState.EXTRACTING, JobState.EMBEDDING, JobState.GRAPH_STAGED):
             self.tracker.advance(job, state)
         self._emit(job, {"result": result})

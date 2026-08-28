@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -284,6 +285,13 @@ class IngestJob(BaseModel):
     history: list[StateChange] = Field(default_factory=list)
     chunk_count: int = 0
     staged_assertion_ids: list[str] = Field(default_factory=list)
+    #: `ReasonerReport.to_dict()` from the pass that ran once this document's facts went live.
+    #:
+    #: Stored rather than only returned, because on the async path nobody sees the response: the
+    #: upload finishes at S3 and the pipeline runs in a background task. Without this the one
+    #: report that says *why* a rule drew nothing existed only in a websocket event, so reloading
+    #: the page lost it and the document read as though nothing had been checked.
+    reasoning: dict[str, Any] | None = None
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
 
