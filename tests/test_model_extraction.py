@@ -380,40 +380,36 @@ class TestPrompt:
         assert adverse["subject_kinds"] == ["Matter"]
         assert adverse["object_kinds"] == ["Party"]
 
-    def test_a_predicate_carries_what_it_means_including_its_help(self):
-        """Names and shapes were not enough, and the retail pack measured it. `RELIES_ON` and
-        `CONTAINS_CLAUSE` both fit "this document and this clause", and only the help says the
-        first asserts the decision was taken under it. Two predicates a reader would distinguish
-        by reading the pack were offered to the model as bare words."""
-        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
-        ModelExtractor(load_ontology("retail"), bedrock=bedrock).extract(chunk())
-        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
-        relies = next(p for p in sent["allowed_predicates"] if p["predicate"] == "RELIES_ON")
-        assert "rests on this policy provision" in relies["meaning"]
-        assert "mentioned in passing" in relies["meaning"], "the help is where the distinction is"
+    @pytest.mark.parametrize("domain", sorted(ALL_PACKS))
+    def test_a_terms_help_reaches_the_model_and_not_only_its_description(self, domain):
+        """The measured failure, and the reason the help matters more than the description.
+        `Company` and `Merchant` went out as two bare words, so a non-trading holding company was
+        typed as a seller and `related_party_resale`, whose chain must end at a Merchant, drew
+        nothing from a memo stating the whole ownership ladder. `Company.description` alone does
+        not rule that out; the help does, in as many words.
 
-    def test_an_entity_kind_carries_what_it_means_including_its_help(self):
-        """The measured failure. `Company` and `Merchant` went out as two words with no
-        definitions, so a non-trading holding company was typed as a seller and
-        `related_party_resale`, whose chain must end at a Merchant, drew nothing from a memo that
-        states the whole ownership ladder. `Company.help` says in as many words that calling it a
-        Merchant asserts with a citation that it trades here, which the same page denies."""
+        Asserted against whatever the pack says rather than a copy of its wording. A test that
+        quotes the text goes red when somebody improves the text, and it also pins one pack's
+        vocabulary into a module that is supposed to have none.
+        """
+        ontology = load_ontology(domain)
         bedrock = FakeBedrock('{"entities": [], "relationships": []}')
-        ModelExtractor(load_ontology("retail"), bedrock=bedrock).extract(chunk())
+        ModelExtractor(ontology, bedrock=bedrock).extract(chunk())
         sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
-        kinds = {k["kind"]: k["meaning"] for k in sent["entity_kinds"]}
-        assert "does not itself trade through AnyCorp" in kinds["Company"]
-        assert "is not a Merchant" in kinds["Company"], "the help is where the distinction is"
-        assert "trading through AnyCorp" in kinds["Merchant"]
 
-    def test_a_kind_with_no_help_still_carries_its_description(self):
-        """`help` is optional in a pack, and joining an absent one must not leave a trailing
-        separator or an empty string where the definition should be."""
-        bedrock = FakeBedrock('{"entities": [], "relationships": []}')
-        ModelExtractor(load_ontology("retail"), bedrock=bedrock).extract(chunk())
-        sent = json.loads(bedrock.requests[0]["request"]["messages"][0]["content"][0]["text"])
-        kinds = {k["kind"]: k["meaning"] for k in sent["entity_kinds"]}
-        assert kinds["Product"] == "A sellable item or SKU."
+        for offered, declared in (
+            ({k["kind"]: k["meaning"] for k in sent["entity_kinds"]}, ontology.entities),
+            (
+                {p["predicate"]: p["meaning"] for p in sent["allowed_predicates"]},
+                ontology.predicates,
+            ),
+        ):
+            for name, meaning in offered.items():
+                defn = declared[name]
+                assert defn.description in meaning
+                # Absent help must leave no trailing separator and no empty meaning.
+                assert defn.help is None or defn.help in meaning
+                assert meaning == meaning.strip()
 
     def test_every_offered_term_has_a_meaning(self):
         """A term with an empty meaning is the case this change exists to remove, and a pack is

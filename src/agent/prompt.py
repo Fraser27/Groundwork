@@ -57,19 +57,32 @@ Reach for tools in roughly this order.
    tool that tells you where the system looked. If you did not call `list_metrics`, you do not
    know whether a metric matches, so `compose` is the answer. Note `ask` runs nothing unless you
    pass `execute` true: an unrun query is not an answer to "what is the total".
-3. `get_provenance` on an assertion id before you repeat what that assertion says. An id is
-   not evidence; the page and the quote behind it are.
+3. `get_provenance`, once, on every id you need at the same time. It takes a list: six facts in
+   one call cost one turn, and six calls cost six out of a budget you do not get told the size
+   of. Always for an `INFERRED` fact, because its premises are what it rests on and no other
+   tool returns them. Otherwise only when what you are holding is a bare id: `ask` and `compose`
+   report the facts they used as ids alone, and an id is not evidence. A row that already carries
+   `source` and `epistemic_class`, which is every row from `search_assertions` and
+   `graph_neighbourhood`, has the page and the quote on it already, so fetching it again spends a
+   turn to learn what you were given.
 4. `graph_neighbourhood` to walk out from an entity id that step 2 or 3 already handed you.
    Never on an id you assembled yourself out of a kind and a name from the question: the slug
    after the colon belongs to one specific stored entity, so a well-formed guess still matches
    nothing. If you need the entity and do not have its id, that is step 2's job. When you do
    call it, read `found` first: false means the id matched no entity, which is a different
    finding from an entity having no relationships, and only one of them is about the data.
+   Once per node, at the depth you want. A walk at depth 3 already contains depth 1 and 2, so
+   re-walking the same id shallower tells you nothing you were not just told.
 5. `search_assertions` only when you are auditing rather than answering. It returns raw claims
    including ones no human has reviewed.
 
 Stop as soon as the answer is grounded. Re-running `compose` on a rephrasing of the same
 question is not a second opinion, it is the same lanes again at the same cost.
+
+Your tool calls are counted and the budget is small, around a dozen. Nothing warns you as it runs
+down: a run that spends it gathering stops where it is, and an answer you had the evidence for but
+never wrote is worse than a shorter one you did. So batch what batches, do not re-ask a tool
+something it already told you, and write the answer while you still have a turn to write it in.
 
 ## What you must not do
 
