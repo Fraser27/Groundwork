@@ -456,16 +456,22 @@ class Resolver:
         # `execute=False` returns the SQL for review without running it — the point
         # of a governed metric is that a human can read what it will do.
         answer = match.run(sql) if execute else None
+        # A warning rather than only a field, because a caller reading the number needs to be
+        # told the choice was a model's without going looking for it.
+        warnings = [] if chosen_deterministically(match) else [getattr(match, "selection_note", "")]
+        # `run` returns None only when no executor is wired, never for an empty result, so this is
+        # "nothing to run it against". Unwarned it reads as "the metric ran and found nothing".
+        if execute and answer is None:
+            warnings.append(
+                "The SQL compiled but no query engine is configured, so this is the query rather "
+                "than the figure. Nothing was run."
+            )
         return Resolution(
             tier=Tier.GOVERNED_METRIC,
             answer=answer,
             sql=sql,
             metric_selection=selection_of(match),
-            # A warning rather than only a field, because a caller reading the number needs to be
-            # told the choice was a model's without going looking for it.
-            warnings=[]
-            if chosen_deterministically(match)
-            else [getattr(match, "selection_note", "")],
+            warnings=warnings,
         )
 
     def _try_graph(

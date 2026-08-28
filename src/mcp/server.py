@@ -137,8 +137,10 @@ async def ask(
         bool,
         Field(
             description=(
-                "Run the query. False returns the SQL unrun, which is the point of a governed "
-                "metric: a person can read what it will do before it does it."
+                "Run the query. Set this true when the caller wants the figure rather than the "
+                "definition: an unrun query has no number in it. False, the default, returns "
+                "the SQL unrun, which is the point of a governed metric: a person can read "
+                "what it will do before it does it."
             )
         ),
     ] = False,

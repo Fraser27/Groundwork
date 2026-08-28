@@ -382,6 +382,24 @@ class TestAsk:
             prov = _call(TOKEN_A, "get_provenance", {"assertion_id": aid}).structuredContent
             assert prov["assertion"]["source"]["quote"]
 
+    def test_the_default_returns_the_sql_without_running_it(self):
+        """The governance default: a person reads what the query will do before it does it. Pinned
+        because an agent that leaves `execute` alone and reports the result as a figure is the bug
+        this default invites."""
+        body = _call(TOKEN_A, "ask", {"question": "show me fees billed by month"}).structuredContent
+        assert "SELECT" in body["sql"]
+        assert body["answer"] is None
+
+    def test_asking_to_execute_with_no_engine_says_so(self):
+        """`answer: null` here means "nothing to run it against", and a metric that legitimately
+        matched no rows would say the same thing. Unwarned, an agent cannot tell the two apart and
+        will either invent a figure or report an empty warehouse as an empty result."""
+        body = _call(
+            TOKEN_A, "ask", {"question": "show me fees billed by month", "execute": True}
+        ).structuredContent
+        assert body["answer"] is None
+        assert any("no query engine is configured" in w for w in body["warnings"]), body["warnings"]
+
     def test_tiers_attempted_are_named_not_numbered(self):
         body = _call(TOKEN_A, "ask", {"question": "zzzq unrelated gibberish"}).structuredContent
         assert all(isinstance(t, str) for t in body["tiers_attempted"])
