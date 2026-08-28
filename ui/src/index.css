@@ -1626,6 +1626,40 @@ code, pre { font-family: var(--mono); }
   padding: 0 1px;
 }
 
+/* ── Model prose ────────────────────────────────────────────────────────────
+   Rendered markdown from `Markdown.tsx`. Tighter than a document would be: this
+   is one card among the evidence, not the page, so its headings have to read as
+   subdivisions of the answer rather than compete with the card title. */
+
+.md { font-size: 14px; line-height: 1.65; }
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md-para { margin: 0 0 10px; }
+.md-heading {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+  margin: 16px 0 6px;
+  letter-spacing: -0.01em;
+}
+.md-heading-sub { font-size: 12.5px; font-weight: 600; color: var(--text-dim); }
+/* Spacing sits on the wrapper, not the list, so a nested `ul` inside an `li` does not
+   inherit a block gap that would detach it from the item it belongs to. */
+.md-lists { margin: 0 0 10px; }
+.md-list { margin: 0; padding-left: 20px; }
+.md-list .md-list { margin-top: 4px; }
+.md-lists .md-list + .md-list { margin-top: 6px; }
+.md-list li { margin-bottom: 4px; }
+.md-list li:last-child { margin-bottom: 0; }
+.md code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
+}
+
 /* ── Query trace ────────────────────────────────────────────────────────────
    Four steps down a rail, not across. Each one opens onto a table of passages
    or a page of SQL, and four columns wide enough for that are too narrow to
