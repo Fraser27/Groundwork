@@ -763,6 +763,25 @@ export default function Admin() {
           </div>
           <div className="form-group">
             <label>
+              Query
+              <FieldHelp text="Two jobs, both on the query side. It writes the SQL for a question no approved metric covers, and it separates a question asking two things into the two questions it asks. The second is where a stronger model earns its cost: a question it fails to separate is searched as one, and the half that loses comes back as nothing found rather than as not asked. It never writes SQL for a governed metric, those are compiled from a definition somebody approved." />
+            </label>
+            <select
+              value={settings.query_model ?? ''}
+              onChange={(e) =>
+                patch('query-model', { query_model: e.target.value }, 'Query model updated')
+              }
+            >
+              {settings.available_models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <p className="hint">{modelNote(settings, settings.query_model)}</p>
+          </div>
+          <div className="form-group">
+            <label>
               Retrieval agent
               <FieldHelp text="Drives the Retrieval page's tool-calling loop: it decides which of this system's tools to call and in what order, then writes the answer over what they returned. Separate from the query model on purpose, so paying for a stronger model to write a query does not also change what drives the loop. A cheaper model here is worth trying, and the transcript shows you when it calls a tool badly." />
             </label>
@@ -1152,7 +1171,8 @@ export default function Admin() {
   )
 }
 
-/** How far a question's retrieval reaches: how many passages, and how far out from each.
+/** How far a question's retrieval reaches: how many passages, how far out from each, and how many
+ * times the agent may search.
  *
  * Governance rather than tuning. Every entity the traversal touches becomes a seed for the
  * conflict and ethical-wall check, so depth sets how much of the graph a conflict check can see.
@@ -1177,16 +1197,7 @@ function RetrievalReach({
 }) {
   const depth = retrieval.graph_expand_depth
   const topK = retrieval.vector_top_k
-  // Held as text, not written straight into `retrieval`: mid-edit a cleared field parses as 0,
-  // and putting that in the shared value loses the number to revert to when the edit is abandoned.
-  const [topKDraft, setTopKDraft] = useState(String(topK))
-  // Resynced during render rather than in an effect, so a saved value lands in one pass instead
-  // of rendering the stale draft first.
-  const [lastTopK, setLastTopK] = useState(topK)
-  if (topK !== lastTopK) {
-    setLastTopK(topK)
-    setTopKDraft(String(topK))
-  }
+  const searches = retrieval.max_compose_calls
 
   const commitDepth = (raw: string) => {
     const next = Number(raw)
@@ -1194,20 +1205,16 @@ function RetrievalReach({
     patchRetrieval('depth', { graph_expand_depth: next }, `Traversal depth set to ${next} hop(s)`)
   }
 
-  // Below the API's floor of 1 the edit is discarded rather than clamped: silently saving 1 for
-  // someone who cleared the box and looked away is a governance change nobody asked for.
-  const commitTopK = () => {
-    const next = Math.round(Number(topKDraft))
-    if (!Number.isFinite(next) || next < 1 || !topKDraft.trim()) {
-      setTopKDraft(String(topK))
-      return
-    }
-    if (next === topK) {
-      setTopKDraft(String(topK))
-      return
-    }
-    patchRetrieval('topk', { vector_top_k: next }, `Retrieving ${next} passages per question`)
-  }
+  const topKField = useNumberDraft(topK, 1, Infinity, (next) =>
+    patchRetrieval('topk', { vector_top_k: next }, `Retrieving ${next} passages per question`),
+  )
+  const searchesField = useNumberDraft(searches, 1, MAX_SEARCHES, (next) =>
+    patchRetrieval(
+      'searches',
+      { max_compose_calls: next },
+      next === 1 ? 'One full search per question' : `Up to ${next} full searches per question`,
+    ),
+  )
 
   return (
     <div className="card">
@@ -1250,7 +1257,7 @@ function RetrievalReach({
         </p>
       </div>
 
-      <div className="form-group" style={{ marginBottom: 0 }}>
+      <div className="form-group">
         <label>
           Passages retrieved
           {help.vector_top_k && <FieldHelp text={help.vector_top_k} />}
@@ -1259,10 +1266,10 @@ function RetrievalReach({
           type="number"
           min={1}
           step={1}
-          value={topKDraft}
+          value={topKField.draft}
           disabled={saving === 'topk'}
-          onChange={(e) => setTopKDraft(e.target.value)}
-          onBlur={commitTopK}
+          onChange={(e) => topKField.setDraft(e.target.value)}
+          onBlur={topKField.commit}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
           }}
@@ -1275,8 +1282,92 @@ function RetrievalReach({
           low figure here caps the reach above regardless of depth.
         </p>
       </div>
+
+      <div className="form-group" style={{ marginBottom: 0 }}>
+        <label>
+          Searches per question
+          {help.max_compose_calls && <FieldHelp text={help.max_compose_calls} />}
+        </label>
+        <input
+          type="number"
+          min={1}
+          max={MAX_SEARCHES}
+          step={1}
+          value={searchesField.draft}
+          disabled={saving === 'searches'}
+          onChange={(e) => searchesField.setDraft(e.target.value)}
+          onBlur={searchesField.commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="input-mono"
+          style={{ maxWidth: 120 }}
+        />
+        <p className="hint">
+          Applies to the Retrieval page only. One search reads the passages, the graph, the table
+          catalog and the approved metrics together, so this is the setting that bounds what a single
+          question costs. A question with several parts needs one search per part: at{' '}
+          <strong>{searches}</strong> the agent answers {ORDINALS[searches] ?? 'any further'} part
+          from whatever it already has, and says it was cut short rather than filling the gap.
+        </p>
+      </div>
     </div>
   )
+}
+
+/** Ceiling on searches per question, matching the API. Only the input's `max` here: the API is
+ *  what enforces it, so a drift shows up as a refused save rather than a silent difference. */
+const MAX_SEARCHES = 10
+
+/** Which part gets no search of its own, indexed by the cap. `ORDINALS[3]` is 'a fourth'. */
+const ORDINALS: (string | undefined)[] = [
+  undefined,
+  'a second',
+  'a third',
+  'a fourth',
+  'a fifth',
+  'a sixth',
+  'a seventh',
+  'an eighth',
+  'a ninth',
+  'a tenth',
+  'an eleventh',
+]
+
+/** A number input held as text until it is committed.
+ *
+ * The draft cannot be the shared value: mid-edit a cleared field parses as 0, and writing that in
+ * loses the number to revert to when the edit is abandoned. Out of range it is discarded rather
+ * than clamped, because silently saving the floor for someone who cleared the box and looked away
+ * is a governance change nobody asked for.
+ */
+function useNumberDraft(
+  value: number,
+  floor: number,
+  ceiling: number,
+  save: (next: number) => void,
+) {
+  const [draft, setDraft] = useState(String(value))
+  // Resynced during render rather than in an effect, so a saved value lands in one pass instead
+  // of rendering the stale draft first.
+  const [last, setLast] = useState(value)
+  if (value !== last) {
+    setLast(value)
+    setDraft(String(value))
+  }
+
+  const commit = () => {
+    const next = Math.round(Number(draft))
+    const usable =
+      draft.trim() !== '' && Number.isFinite(next) && next >= floor && next <= ceiling
+    if (!usable || next === value) {
+      setDraft(String(value))
+      return
+    }
+    save(next)
+  }
+
+  return { draft, setDraft, commit }
 }
 
 const DIRECTIONS: { value: string; label: string; note: string }[] = [

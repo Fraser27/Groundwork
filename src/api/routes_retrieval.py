@@ -82,7 +82,8 @@ def _agent_for(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "no MCP endpoint is configured (MCP_URL unset), so the agent has no tools to call",
         )
-    model_id = services.settings_for(tenant_id).retrieval_agent_model
+    settings = services.settings_for(tenant_id)
+    model_id = settings.retrieval_agent_model
     if not model_id:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -95,6 +96,11 @@ def _agent_for(
         model_id=model_id,
         region=services.config.models.region,
         retrieval_tool=_tool_choice(tool),
+        # Read per run, not per process. The right number depends on which model drives the loop,
+        # and that is a tenant setting too, so a constant here made the cheaper model's setting a
+        # trap: it spends calls rediscovering `compose`'s arguments and an administrator had no way
+        # to pay for that.
+        max_compose_calls=settings.max_compose_calls,
     )
 
 

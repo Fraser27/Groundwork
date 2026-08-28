@@ -32,7 +32,11 @@ logger = logging.getLogger(__name__)
 
 #: Words that carry no signal for entity matching. Kept small on purpose — an
 #: aggressive stop list drops real search terms ("the Crown", "In re Smith").
-_NOISE = frozenset(
+#:
+#: Public because `decompose._normalised` needs the same list rather than a second one that could
+#: disagree: it compares a split against its original after singularising, and a word this list
+#: would have dropped must not survive that step on one side only.
+NOISE_WORDS = frozenset(
     {
         "a", "an", "and", "any", "are", "our", "all", "about", "by", "did", "do",
         "does", "for", "from", "give", "has", "have", "how", "in", "involve",
@@ -82,7 +86,7 @@ def terms_of(question: str) -> list[str]:
     return [
         w.lower()
         for w in _WORD.findall(question)
-        if w.lower() not in _NOISE and len(w) > 1
+        if w.lower() not in NOISE_WORDS and len(w) > 1
     ]
 
 

@@ -30,6 +30,7 @@ from src.agent.loop import CAPPED_REASONS, RetrievalAgent
 from src.agent.prompt import SYSTEM_PROMPT
 from src.api.app import create_app
 from src.config import AuthConfig, GraphConfig, GroundworkConfig
+from src.governance import GovernanceSettings
 
 TENANT = "demo-firm"
 
@@ -391,6 +392,12 @@ class TestItStops:
         assert result.turns == 3
         assert sum(1 for e in result.events if e.get("is_error")) == 1
 
+    def test_the_search_budget_in_force_is_on_the_result(self):
+        """A `compose_limit` has to read as "2 of 2 searches". The number is a tenant setting now,
+        so the UI cannot hold it as a constant and has to be told."""
+        result = _agent([("compose", {}, OK)] * 4, max_compose_calls=2).run("q")
+        assert result.to_dict()["max_compose_calls"] == 2
+
     def test_every_cap_reports_a_reason_a_reader_can_tell_apart(self):
         """ "It finished" and "we cut it off" must not render the same, and neither must two
         different caps."""
@@ -479,6 +486,21 @@ class TestTheRoutesRefuseBeforeTheyPretend:
             f"/api/tenants/{TENANT}/retrieval/runs", json={"question": "hi", "tool": "sideways"}
         )
         assert r.status_code == 422, "an unknown tool is a bad request, not a silent auto"
+
+    def test_the_tenants_search_budget_reaches_the_loop(self):
+        """Read per run rather than baked into the loop. The right number depends on which model
+        drives it, and that is a tenant setting too, so a constant here made the cheaper model's
+        setting a trap: it spends calls rediscovering `compose`'s arguments and an administrator had
+        no way to pay for that."""
+        from types import SimpleNamespace
+
+        from src.api.routes_retrieval import _agent_for
+
+        settings = GovernanceSettings(max_compose_calls=7, retrieval_agent_model="m")
+        config = SimpleNamespace(mcp_url="http://mcp", models=SimpleNamespace(region="us-east-1"))
+        services = SimpleNamespace(config=config, settings_for=lambda _tenant: settings)
+
+        assert _agent_for(services, TENANT, "token").max_compose_calls == 7
 
     def test_a_bad_token_closes_the_socket_before_accepting_it(self, client):
         """Closed before accept, so an unauthorised caller cannot tell a bad token from a wrong

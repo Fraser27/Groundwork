@@ -45,6 +45,9 @@ RUN_DEADLINE_S = 120.0
 
 #: `compose` calls per run. The cost control: one call fans out across the vector store, the
 #: graph, the catalog and possibly Athena.
+#:
+#: The fallback, not the number in force: `routes_retrieval._agent_for` passes the tenant's
+#: `max_compose_calls`. This is what a caller that supplies nothing gets, which is tests.
 MAX_COMPOSE_CALLS = 3
 
 #: Consecutive failed tool calls before giving up. A model that has misread a schema three
@@ -77,6 +80,11 @@ class RunResult:
     searched: bool = True
     """Whether `ask` or `compose` ran. False means the prose has no retrieval under it."""
 
+    max_compose_calls: int = MAX_COMPOSE_CALLS
+    """The cap that was in force, so a `compose_limit` reads as "3 of 3 searches" rather than as a
+    limit the reader has to go and look up. It is a tenant setting now, so it is not a constant the
+    UI can hold."""
+
     @property
     def was_capped(self) -> bool:
         return self.stop_reason in CAPPED_REASONS
@@ -98,6 +106,7 @@ class RunResult:
             # that renders "here is why to distrust this" rather than one per producer.
             "warnings": self.warnings,
             "max_turns": MAX_TURNS,
+            "max_compose_calls": self.max_compose_calls,
             "note": (
                 "Every tool call and its raw result are in `events`. The prose is the agent's "
                 "own and is not governed."
@@ -178,6 +187,7 @@ class RetrievalAgent:
                 events=stream.collected,
                 stop_reason="error",
                 turns=stream.turn,
+                max_compose_calls=self.max_compose_calls,
             )
 
         stream.emit(
@@ -204,6 +214,7 @@ class RetrievalAgent:
             stop_reason=stop,
             turns=stream.turn,
             searched=self._searched,
+            max_compose_calls=self.max_compose_calls,
         )
 
     def _offer(self, tools: list[Any]) -> list[Any]:

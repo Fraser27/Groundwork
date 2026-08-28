@@ -1124,6 +1124,33 @@ class TestSettingsProjectsWhatThePageCanChange:
 
         assert body["retrieval_direction"] == "graph_first"
 
+    def test_every_model_the_page_offers_is_projected(self, client):
+        """`query_model` was the one that was not, for the whole life of the Models card. It is the
+        model that splits a compound question, so the setting that decides whether "X and Y" is
+        searched as two questions was the one setting nobody could change."""
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        for field in (
+            "extraction_model",
+            "synthesis_model",
+            "query_model",
+            "retrieval_agent_model",
+            "enrichment_model",
+            "embedding_model",
+        ):
+            assert field in body, f"{field} is missing, so saving it would revert"
+
+    def test_a_chosen_query_model_survives_the_re_read(self, client):
+        body = self._save(client, {"query_model": "anthropic.claude-haiku-4-5"})
+        assert body["query_model"] == "anthropic.claude-haiku-4-5"
+
+    def test_the_model_already_running_is_offered_even_if_uncurated(self, client):
+        """Otherwise opening the page and saving anything moves the tenant off the model that has
+        been running, because the picker could only ever offer the curated list."""
+        self._save(client, {"query_model": "some.vendor-model-nobody-curated"})
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+
+        assert body["query_model"] in {m["id"] for m in body["available_models"]}
+
     def test_a_retired_tier_cannot_be_re_enabled(self, client):
         """A `4` survived in a default long after the tier was retired, and `Tier(4)` raises where
         a refusal belongs. Refused at the boundary rather than at query time."""

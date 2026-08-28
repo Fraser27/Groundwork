@@ -56,6 +56,11 @@ VECTOR_FIRST_TIER = 3
 #: it gets without anyone asking for it.
 _DIRECTION_PRECEDENCE = VECTOR_FIRST_TIER
 
+#: Most full searches an administrator may allow one question. Not a technical limit: past this a
+#: single question costs more than a person watching it would sanction, and the agent has other
+#: ways to keep looking that do not fan out across every store.
+MAX_COMPOSE_CALLS_CEILING = 10
+
 
 def coerce_allowed_tiers(values: Any) -> frozenset[int]:
     """A tier cap narrowed to the tiers this build has, and to one traversal direction.
@@ -200,10 +205,13 @@ class GovernanceSettings:
 
     # ── Models ────────────────────────────────────────────────────────────────
     query_model: str = DEFAULT_QUERY_MODEL
-    """The model that writes tier 3's SQL when no approved metric covers the question.
+    """The model that writes tier 3's SQL, and the one that splits a compound question.
 
-    Read by `Services.build_sql_lane`. It was reserved and read by nothing for most of this
-    project's life, which is the same failure shape as the kill switch above: a setting an
+    Read by `Services.build_sql_lane` and `Services.build_question_splitter`. Two consumers, and
+    the split is the one that fails visibly: which model this is decides whether "X and Y" is
+    searched as two questions or as one, and a weak model here answers half of it with nothing
+    found rather than saying it only answered half. It was reserved and read by nothing for most of
+    this project's life, which is the same failure shape as the kill switch above: a setting an
     administrator can change and that controls nothing."""
 
     retrieval_agent_model: str = DEFAULT_QUERY_MODEL
@@ -243,6 +251,18 @@ class GovernanceSettings:
     vector_top_k: int = 20
     graph_expand_depth: int = 2
 
+    max_compose_calls: int = 3
+    """Full searches the Retrieval agent may run in one question.
+
+    The cost control on the agent: one `compose` fans out across the vector store, the graph, the
+    catalog and possibly Athena, so this is the setting that bounds what one question can spend.
+
+    Tenant-scoped rather than a constant because the right number depends on the model driving the
+    loop, which is itself a tenant setting. A cheap model spends calls rediscovering `compose`'s
+    arguments -- measured: three calls on one question, differing only by `execute` and
+    `synthesise` -- and then has nothing left for the sub-question that would have answered the
+    other half. A stronger model does not need more than the default."""
+
     updated_by: str | None = field(default=None)
     updated_at: str | None = field(default=None)
 
@@ -263,6 +283,14 @@ class GovernanceSettings:
             )
         if self.vector_top_k < 1:
             raise GovernanceError("vector_top_k must be >= 1")
+        # Upper bound as well as lower: this one is a spend cap, so a typo'd 300 is not a stricter
+        # setting but a much laxer one, and the failure it invites is a bill rather than a refusal.
+        if not 1 <= self.max_compose_calls <= MAX_COMPOSE_CALLS_CEILING:
+            raise GovernanceError(
+                f"max_compose_calls must be 1-{MAX_COMPOSE_CALLS_CEILING}. It is a spend cap on "
+                "the Retrieval agent: one full search fans out across the vector store, the "
+                "graph, the catalog and possibly Athena."
+            )
         if not 1 <= self.graph_expand_depth <= 5:
             raise GovernanceError(
                 "graph_expand_depth must be 1-5; deeper traversals fan out badly and "
@@ -361,6 +389,7 @@ class GovernanceSettings:
             enforce_closed_vocabulary=_b("GROUNDWORK_CLOSED_VOCABULARY", True),
             vector_top_k=int(os.getenv("GROUNDWORK_VECTOR_TOP_K", "20")),
             graph_expand_depth=int(os.getenv("GROUNDWORK_GRAPH_DEPTH", "2")),
+            max_compose_calls=int(os.getenv("GROUNDWORK_MAX_COMPOSE_CALLS", "3")),
         )
 
     def apply(self, patch: dict[str, Any], *, updated_by: str) -> GovernanceSettings:
@@ -475,9 +504,12 @@ FIELD_HELP: dict[str, str] = {
         "proposed from them."
     ),
     "query_model": (
-        "The AI model that writes SQL for a question no approved metric covers. Read on the "
-        "tier 3 path, so a change takes effect on the next question. It never writes SQL for a "
-        "governed metric: those are compiled from a definition somebody approved."
+        "The AI model that writes SQL for a question no approved metric covers, and the one that "
+        "separates a question asking two things into the two questions it asks. Both take effect "
+        "on the next question. A stronger model is worth more to the second job than the first: a "
+        "question it fails to separate is searched as one, and the half that loses comes back as "
+        "nothing found rather than as not asked. It never writes SQL for a governed metric: those "
+        "are compiled from a definition somebody approved."
     ),
     "retrieval_agent_model": (
         "The AI model that drives the Retrieval agent, which answers by calling this system's "
@@ -516,5 +548,13 @@ FIELD_HELP: dict[str, str] = {
     "graph_expand_depth": (
         "How many relationship hops to follow out from a retrieved passage. Two is "
         "usually right; more pulls in weakly related matters."
+    ),
+    "max_compose_calls": (
+        "How many full searches the Retrieval agent may run while answering one question. A full "
+        "search reads the documents, the graph, the table catalog and the approved metrics all at "
+        "once, so this is the setting that decides what one question can cost. Raise it for a "
+        "question with several parts, where the agent needs a separate search for each: it spends "
+        "these one at a time and, once they are gone, answers from whatever it has. The answer "
+        "then says it was cut short rather than pretending to be complete."
     ),
 }
