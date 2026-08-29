@@ -40,13 +40,16 @@ from src.agent.loop import AgentUnavailable, RetrievalAgent
 from src.agent.prompt import RETRIEVAL_TOOLS
 from src.api.deps import Services, ServicesDep, TenantDep, get_services
 from src.api.events import get_event_hub
-from src.auth import AuthError, bearer_from_header
+from src.auth import AuthError, TokenExpired, bearer_from_header
 from src.graph.scope import ScopeViolation
 from src.query_audit import event_for_run
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["retrieval"])
+
+SESSION_EXPIRED = "your session has expired, reload the page to sign in again"
+"""Sent as the close reason, because a websocket has no status code the page can read."""
 
 
 class RunRequest(BaseModel):
@@ -146,9 +149,15 @@ async def retrieval_events(websocket: WebSocket, tenant: str, token: str = "") -
     try:
         ctx, _ = services.authenticator.authenticate(token)
         services.authenticator.assert_tenant_matches(ctx, tenant)
+    except TokenExpired:
+        # The one auth failure worth naming. It discloses nothing to the holder of an expired token,
+        # and without it the page had no reason to show and said the agent refused the connection --
+        # an hour after sign-in, reading as an outage.
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=SESSION_EXPIRED)
+        return
     except (AuthError, ScopeViolation):
-        # Closed before accept, so an unauthorised caller never gets a socket and cannot tell a
-        # bad token from a wrong tenant.
+        # Closed before accept, and silent: an unauthorised caller never gets a socket and cannot
+        # tell a bad token from a wrong tenant.
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 

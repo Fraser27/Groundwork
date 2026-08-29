@@ -515,6 +515,50 @@ class TestTheRoutesRefuseBeforeTheyPretend:
         ):
             ws.receive_json()
 
+    def test_an_unauthorised_caller_is_told_nothing(self, client):
+        """The silence is the point: a reason here would let someone sweep tenant ids and learn
+        which ones exist from which refusals carried an explanation."""
+        assert not self._close_reason(client, "nonsense")
+
+    def test_an_expired_token_says_so_instead(self, client, monkeypatch):
+        """The one auth failure worth naming, because it discloses nothing to the holder of an
+        expired token. Without it the close carried no reason, the page fell back to its generic
+        string, and an hour after signing in the user was told the agent had refused the connection
+        -- which reads as an outage rather than as a session to renew."""
+        from src.api.deps import get_services
+        from src.auth import TokenExpired
+
+        def expired(_token: str) -> None:
+            raise TokenExpired("token expired")
+
+        monkeypatch.setattr(get_services().authenticator, "authenticate", expired)
+
+        assert "sign in again" in self._close_reason(client, "stale")
+
+    def test_expiry_is_still_a_401_on_the_ordinary_routes(self, client, monkeypatch):
+        """`TokenExpired` subclasses `AuthError`, so every handler that already catches one keeps
+        catching this. If it did not, an expired token would turn from a 401 the page recovers from
+        into a 500 on every request."""
+        from src.api.deps import get_services
+        from src.auth import TokenExpired
+
+        def expired(*_args: object, **_kw: object) -> None:
+            raise TokenExpired("token expired")
+
+        monkeypatch.setattr(get_services().authenticator, "authenticate", expired)
+        r = client.get(f"/api/tenants/{TENANT}/settings", headers={"Authorization": "Bearer stale"})
+
+        assert r.status_code == 401
+
+    def _close_reason(self, client, token: str) -> str:
+        """The reason the server closed with, or empty if it gave none."""
+        from starlette.websockets import WebSocketDisconnect
+
+        url = f"/api/tenants/{TENANT}/retrieval/events?token={token}"
+        with pytest.raises(WebSocketDisconnect) as caught, client.websocket_connect(url) as ws:
+            ws.receive_json()
+        return caught.value.reason or ""
+
 
 class TestTheRunIsRecordedOnce:
     """One row per run, not one per tool call.
