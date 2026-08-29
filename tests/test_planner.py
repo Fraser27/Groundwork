@@ -774,9 +774,12 @@ class TestCitations:
 
 
 class FakeCatalogTable:
-    def __init__(self, full_name: str) -> None:
+    def __init__(self, full_name: str, description: str = "") -> None:
         self.full_name = full_name
-        self.description = ""
+        # `relevant_tables` matches on `name`, not `full_name`, so a fake without one can never be
+        # selected by word overlap and every test of that selection would pass vacuously.
+        self.name = full_name.rpartition(".")[2] or full_name
+        self.description = description
         self.columns: list[Any] = []
 
 
@@ -901,6 +904,100 @@ class TestGraphFirstReportsWhereItLanded:
         ).plan(ctx, "q", GRAPH_FIRST, allow_synthesis=False)
 
         assert any("no passage" in w for w in answer.warnings)
+
+
+class SilentSqlLane:
+    """A generator that produced nothing usable, which `SqlLane.run` reports as None."""
+
+    def run(self, question: str, **kw: Any) -> None:
+        return None
+
+
+class TestVectorFirstReportsWhyALaneWasQuiet:
+    """Graph-first has always explained itself. Vector-first did not: a lane that contributed
+    nothing was in neither `lanes_run` nor `lanes_skipped`, so it left the trace entirely. On a
+    tenant whose catalogued tables share no word with the question, that read as tier 3 having no
+    SQL lane at all rather than as a lane with nothing to query.
+    """
+
+    def test_a_question_no_table_shares_a_word_with_names_both_lanes(self, ctx):
+        sql = FakeSqlLane()
+        answer = Planner(catalog=FakeCatalog("retail_db.orders"), sql_lane=sql).plan(
+            ctx, "who is adverse to Acme", GovernanceSettings()
+        )
+
+        for lane in (Lane.CATALOG, Lane.SQL):
+            assert "shares a word" in answer.lanes_skipped[lane.value], lane
+        assert not sql.calls, "the generator was paid for with no schema to write over"
+
+    def test_an_empty_catalogue_is_not_the_same_fact_as_a_question_that_missed(self, ctx):
+        """Different jobs. One is scanning a data source, the other is approving a synonym."""
+        answer = Planner(catalog=FakeCatalog(), sql_lane=FakeSqlLane()).plan(
+            ctx, "how many orders", GovernanceSettings()
+        )
+
+        assert "no table has been catalogued" in answer.lanes_skipped[Lane.CATALOG.value]
+
+    def test_no_catalogue_at_all_is_not_the_same_fact_either(self, ctx):
+        answer = Planner(sql_lane=FakeSqlLane()).plan(ctx, "how many orders", GovernanceSettings())
+
+        assert "no data catalogue is configured" in answer.lanes_skipped[Lane.CATALOG.value]
+
+    def test_a_generator_that_wrote_nothing_says_so_rather_than_disappearing(self, ctx):
+        """The schema was there and the lane still produced no part. Silence here is the case that
+        looks most like the feature being absent."""
+        answer = Planner(catalog=FakeCatalog("retail_db.orders"), sql_lane=SilentSqlLane()).plan(
+            ctx, "how many orders", GovernanceSettings()
+        )
+
+        assert answer.lanes_skipped[Lane.SQL.value] == (
+            "the model wrote no query over the schema it was offered"
+        )
+        assert Lane.CATALOG in answer.lanes_run, "the schema lane ran, so it is not skipped"
+
+    def test_no_sql_generator_configured_is_reported_against_the_lane_it_disables(self, ctx):
+        answer = Planner(catalog=FakeCatalog("retail_db.orders")).plan(
+            ctx, "how many orders", GovernanceSettings()
+        )
+
+        assert "no SQL generator is configured" in answer.lanes_skipped[Lane.SQL.value]
+        assert Lane.CATALOG in answer.lanes_run
+
+    def test_the_schema_shown_is_the_schema_the_query_was_written_over(self, ctx):
+        """The reason both lanes select from one function. A reader shown one list of tables while
+        the query was written over another cannot check the query against it."""
+        sql = FakeSqlLane()
+        answer = Planner(
+            catalog=FakeCatalog("retail_db.orders", "retail_db.returns"), sql_lane=sql
+        ).plan(ctx, "how many orders", GovernanceSettings(), allow_synthesis=False)
+
+        catalog = next(p for p in answer.parts if p.lane is Lane.CATALOG)
+        shown = {row["full_name"] for row in catalog.content}
+        assert shown == {"retail_db.orders"}
+        assert {t.full_name for t in sql.calls[0]["candidates"]} == shown
+
+    def test_the_kill_switch_still_outranks_a_question_reaching_no_table(self, ctx):
+        """Same precedence graph-first applies. An administrator turning the lane off is the
+        actionable fact, and it must not be overwritten by the question having missed."""
+        planner = Planner(catalog=FakeCatalog(), sql_lane=FakeSqlLane())
+        answer = planner.plan(
+            ctx, "q", GovernanceSettings(block_ungoverned_queries=True), allow_synthesis=False
+        )
+
+        assert answer.lanes_skipped[Lane.SQL.value] == UNGOVERNED_BLOCKED
+        assert planner.blocked, "a refused ungoverned query never reached the Governance screen"
+
+    def test_no_document_search_configured_names_the_passage_lane(self, ctx):
+        answer = Planner().plan(ctx, "q", GovernanceSettings())
+
+        assert "no document search is configured" in answer.lanes_skipped[Lane.PASSAGES.value]
+
+    def test_a_retrieval_that_matched_nothing_is_not_reported_as_unconfigured(self, ctx):
+        """Two facts a reader acts on differently: one is a deployment gap, the other is a corpus
+        that does not cover the question."""
+        answer = Planner(vector_search=FakeVectors([])).plan(ctx, "q", GovernanceSettings())
+
+        assert "similar enough" in answer.lanes_skipped[Lane.PASSAGES.value]
 
 
 class TestTheDirectionIsReported:
