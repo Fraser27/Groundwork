@@ -731,6 +731,7 @@ async def get_settings(services: ServicesDep, principal: TenantDep) -> dict[str,
         "retrieval_direction": settings.retrieval_direction,
         "extraction_model": settings.extraction_model or models.extraction_model,
         "synthesis_model": models.synthesis_model,
+        "query_model": settings.query_model,
         "retrieval_agent_model": settings.retrieval_agent_model,
         "enrichment_model": settings.enrichment_model,
         "embedding_model": services.config.vector.embedding_model,
@@ -764,6 +765,7 @@ def _selectable_models(settings: Any, models: Any) -> list[dict[str, str]]:
     ]
     configured = {
         settings.extraction_model,
+        settings.query_model,
         settings.retrieval_agent_model,
         settings.enrichment_model,
         models.extraction_model,

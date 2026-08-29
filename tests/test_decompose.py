@@ -21,6 +21,7 @@ No AWS. The Bedrock client is injected.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from src.query.decompose import (
@@ -142,6 +143,32 @@ class TestASplitNeverInventsAQuestion:
     def test_a_question_with_no_content_words_covers_nothing(self):
         assert covers("and or the", ["and or the"]) is False
 
+    def test_an_unpunctuated_contraction_is_not_a_word_to_cover(self):
+        """The bug that punished the better model. `terms_of` drops noise before the trailing `s`
+        comes off, so "whats" survives the filter and only then becomes "what" -- leaving the
+        original carrying a content word no grammatically written part could ever cover. Measured on
+        this question: Haiku split it correctly six times out of six and all six were refused."""
+        assert covers(
+            "whats the accomplices in the fraud and whats the total turnover",
+            ["What are the accomplices in the fraud?", "What is the total turnover?"],
+        )
+
+    def test_how_the_reader_typed_it_does_not_decide_whether_it_splits(self):
+        """Three spellings of one word. The check has to see the same question in all three, or the
+        split depends on the apostrophe."""
+        parts = ["what is the accomplice in the fraud", "what is the total turnover"]
+        for form in ("whats", "what's", "what is"):
+            question = f"{form} the accomplices in the fraud and {form} the total turnover"
+            assert covers(question, parts), form
+
+    def test_a_rephrase_behind_a_contraction_is_still_rejected(self):
+        """The loosening only reaches words the noise list already covers. "turnover" becoming
+        "revenue" is still the model answering a question nobody asked."""
+        assert not covers(
+            "whats the accomplices in the fraud and whats the total turnover",
+            ["Who are the accomplices in the fraud?", "What is the total revenue?"],
+        )
+
 
 class TestFailureFallsBackToTheWholeQuestion:
     def test_an_unreachable_model_asks_the_question_whole(self):
@@ -212,6 +239,45 @@ class TestWhatComesBackIsBounded:
 
         assert bedrock.calls[0]["modelId"] == "m"
         assert bedrock.calls[0]["system"]
+
+
+class TestAFallbackSaysWhy:
+    """A split that did not happen looks exactly like a question that only asked one thing, because
+    both return one part. The difference only exists in the log, which is how a model answering `[]`
+    on two calls in three went unnoticed."""
+
+    def test_an_empty_array_is_not_read_as_a_verdict(self, caplog):
+        """`[]` is valid JSON and a valid list, so it used to fall through the type check and out of
+        an item loop that ran zero times, saying nothing on the way. The prompt promises at least
+        the question itself, so a model sending it is a model to replace."""
+        with caplog.at_level(logging.INFO, logger="src.query.decompose"):
+            assert splitter("[]").split(COMPOUND) == [COMPOUND]
+
+        assert "empty array" in caplog.text
+
+    def test_output_that_is_not_a_list_is_named_as_such(self, caplog):
+        with caplog.at_level(logging.INFO, logger="src.query.decompose"):
+            assert splitter('{"parts": ["a", "b"]}').split(COMPOUND) == [COMPOUND]
+
+        assert "not an array" in caplog.text
+
+    def test_parts_that_were_all_unusable_are_distinguished_from_none_offered(self, caplog):
+        """A model that returned fragments is a different problem from one that returned nothing,
+        and the fix for each is different, so the log has to tell them apart."""
+        with caplog.at_level(logging.INFO, logger="src.query.decompose"):
+            assert proposing("tax", "vat").split(COMPOUND) == [COMPOUND]
+
+        assert "usable part" in caplog.text
+
+    def test_a_refused_split_names_the_parts_it_refused(self, caplog):
+        """A model that consistently rephrases is a prompt problem, and its wording is the evidence
+        for which rule it is ignoring."""
+        with caplog.at_level(logging.INFO, logger="src.query.decompose"):
+            proposing(
+                "What is our financial risk on Northwind?", "Does the letter exclude tax advice?"
+            ).split(COMPOUND)
+
+        assert "financial risk" in caplog.text
 
 
 class TestTheSplitIsDisclosed:

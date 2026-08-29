@@ -1408,6 +1408,8 @@ export interface TenantSettings {
   retrieval_direction?: RetrievalDirection
   extraction_model: string
   synthesis_model: string
+  /** Writes tier 3's SQL, and separates a question that asks two things into both. */
+  query_model?: string
   /** Drives the Retrieval agent's loop. Separate from the query model, deliberately. */
   retrieval_agent_model?: string
   /** Writes catalog descriptions. A cheap model is the right choice, so it is settable alone. */
@@ -1434,7 +1436,7 @@ export interface TenantSettings {
 }
 
 /**
- * The two retrieval knobs the `/settings` projection does not carry.
+ * The retrieval knobs the `/settings` projection does not carry.
  *
  * Read and written through `/governance` directly. Routing them through `updateSettings` would
  * patch correctly and then blank the control, because that call re-reads `/settings` and a field
@@ -1443,6 +1445,7 @@ export interface TenantSettings {
 export interface RetrievalGovernance {
   vector_top_k: number
   graph_expand_depth: number
+  max_compose_calls: number
 }
 
 // ── Entity merge ─────────────────────────────────────────────────────────────

@@ -11,7 +11,12 @@ from dataclasses import fields
 
 import pytest
 
-from src.governance import FIELD_HELP, GovernanceError, GovernanceSettings
+from src.governance import (
+    FIELD_HELP,
+    MAX_COMPOSE_CALLS_CEILING,
+    GovernanceError,
+    GovernanceSettings,
+)
 from src.graph.assertions import answerable_confidence
 
 
@@ -116,6 +121,17 @@ class TestBounds:
     def test_floor_outside_unit_range_rejected(self, floor):
         with pytest.raises(GovernanceError):
             GovernanceSettings(min_confidence_floor=floor)
+
+    @pytest.mark.parametrize("calls", [0, MAX_COMPOSE_CALLS_CEILING + 1, 300])
+    def test_search_budget_outside_range_rejected(self, calls):
+        """Bounded above as well as below, unlike the other reach settings. This one is a spend cap,
+        so a typo'd 300 is not a stricter setting but a far laxer one, and what it invites is a bill
+        rather than a refusal."""
+        with pytest.raises(GovernanceError, match="max_compose_calls"):
+            GovernanceSettings(max_compose_calls=calls)
+
+    def test_the_ceiling_itself_is_allowed(self):
+        assert GovernanceSettings(max_compose_calls=MAX_COMPOSE_CALLS_CEILING).max_compose_calls
 
 
 class TestKillSwitches:

@@ -32,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from src.query.graph_reader import terms_of
+from src.query.graph_reader import NOISE_WORDS, terms_of
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,8 @@ each can be searched where it can actually be answered.
 Rules:
 - Return a JSON array of strings and nothing else. No markdown fence, no commentary.
 - If the question asks one thing, return an array with that one question, unchanged.
+- Never return an empty array. Every reply has at least one part, because the question itself is \
+always a valid answer.
 - Use at most {MAX_PARTS} parts.
 - Use the asker's own words. Do not rephrase, do not substitute synonyms, do not add a word they \
 did not use. A part containing wording they did not write is rejected outright.
@@ -91,8 +93,21 @@ def _normalised(text: str) -> set[str]:
     Singularised because "matters" becoming "matter" in a part is a faithful split, and failing it
     would send every plural question down the fallback path. `sql_generation._terms` strips the
     same trailing `s` for the same reason.
+
+    **Noise is re-checked after singularising, not before.** `terms_of` filters against
+    `NOISE_WORDS` first, so an unpunctuated contraction gets through: "whats" is not a noise word,
+    survives, and only then loses its `s` to become "what" -- which is. The original then carried a
+    content word no grammatical part could ever cover, so a model that split correctly *and wrote
+    proper English* was rejected while one that copied the typo passed. Measured on
+    "whats the accomplices in the fraud and whats the total turnover": three correct splits from
+    Haiku, all three refused, missing word "what".
+
+    Over-filtering here is safe in a way under-filtering is not: this set is only ever compared
+    against another set from the same function, so a word dropped from both sides costs a little
+    strictness. A word present on one side alone costs the split.
     """
-    return {w.rstrip("s") for w in terms_of(text)}
+    stems = {w.replace("'", "").rstrip("s") for w in terms_of(text)}
+    return {s for s in stems if s not in NOISE_WORDS and len(s) > 1}
 
 
 def covers(question: str, parts: list[str]) -> bool:
@@ -187,6 +202,15 @@ class QuestionSplitter:
             logger.info("question not split, model returned no JSON array: %r", text[:200])
             return []
         if not isinstance(raw, list):
+            logger.info("question not split, model returned %s not an array", type(raw).__name__)
+            return []
+        if not raw:
+            # An empty array is a contract violation, not a verdict: the prompt guarantees at least
+            # the question itself. It was the majority answer from Nova 2 Lite -- four of six calls
+            # on a question it split correctly the other two -- and it used to return silently,
+            # indistinguishable in the log from "this asks one thing". A model returning it half the
+            # time is a model to replace, and that is only visible if it is said.
+            logger.info("question not split, model returned an empty array")
             return []
 
         seen: set[str] = set()
@@ -199,4 +223,6 @@ class QuestionSplitter:
             parts.append(part)
             if len(parts) >= self.max_parts:
                 break
+        if not parts:
+            logger.info("question not split, nothing the model returned was a usable part: %r", raw)
         return parts
