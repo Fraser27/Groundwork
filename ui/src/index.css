@@ -1614,6 +1614,37 @@ code, pre { font-family: var(--mono); }
 }
 .path-hop-index { font-size: 10.5px; color: var(--text-faint); font-weight: 700; }
 
+.path-chains { display: flex; flex-direction: column; gap: 8px; }
+.path-chain-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+}
+.path-chain-meta { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.path-chain-hops {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+/* Wraps rather than scrolls: a four-hop chain overflows a narrow column, and a horizontal
+   scrollbar hides the end of the chain, which is the part naming who is at the far end. */
+.path-chain-flow { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; font-size: 12.5px; }
+.path-chain-step { display: inline-flex; align-items: baseline; gap: 5px; }
+.path-chain-node { font-weight: 600; color: var(--text); }
+.path-chain-edge {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 .answer-block {
   font-size: 14px;
   line-height: 1.65;

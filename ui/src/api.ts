@@ -722,6 +722,40 @@ export interface QueryHit {
   source: SourceLocator
 }
 
+/**
+ * One hop of a chain, with the direction the chain reads it in.
+ *
+ * `subject_id` and `object_id` stay as the assertion was written, so `reversed` is what says the
+ * chain traversed it the other way. Render the direction from that flag: printing
+ * `A REPRESENTS B` for a chain that arrived at A from B states the relationship backwards.
+ */
+export interface QueryPathStep {
+  assertion_id: string
+  subject_id: string
+  predicate: string
+  object_id: string
+  epistemic_class: EpistemicClass
+  confidence: number
+  reversed: boolean
+}
+
+/**
+ * A multi-hop connection the graph assembled, two hops or more.
+ *
+ * Every step is an edge already in the lane's flat fact list — see `src/query/paths.py`. The value
+ * is that the join is the graph's rather than a reader's: the alternative is a person or a model
+ * spotting that three rows out of two hundred share an entity, which is the one step in the chain
+ * nobody can audit.
+ *
+ * `confidence` is the weakest hop, because a chain is an argument and an argument is as good as its
+ * worst step.
+ */
+export interface QueryPath {
+  nodes: string[]
+  steps: QueryPathStep[]
+  confidence: number
+}
+
 /** A passage the vector search returned, before the graph expanded around it. */
 export interface QueryPassage {
   document_id: string
@@ -748,7 +782,12 @@ export interface QueryRows {
 export type QueryAnswer =
   | QueryRows
   | QueryHit[]
-  | { passages: QueryPassage[]; related: QueryHit[]; generated?: GeneratedSQLResult }
+  | {
+      passages: QueryPassage[]
+      related: QueryHit[]
+      paths?: QueryPath[]
+      generated?: GeneratedSQLResult
+    }
   | GraphFirstAnswer
   | null
 
@@ -772,6 +811,8 @@ export interface GraphFirstAnswer {
    * reads it rather than reporting both as a lane that found nothing.
    */
   landed: string[]
+  /** Multi-hop connections between the facts, assembled by `src/query/paths.py`. */
+  paths?: QueryPath[]
   generated?: GeneratedSQLResult
 }
 
@@ -1026,6 +1067,9 @@ export interface AnswerPart {
   sql?: string | null
   citations?: QueryCitation[]
   assertion_ids?: string[]
+  /** Graph lane only: multi-hop connections between the facts in `content`. Absent on a response
+   *  from before the field existed, and empty when nothing in the lane chained up. */
+  paths?: QueryPath[]
   confidence?: number | null
   /** Metric lane only. */
   metric_selection?: MetricSelection | null
@@ -1448,6 +1492,7 @@ export interface TenantSettings {
 export interface RetrievalGovernance {
   vector_top_k: number
   graph_expand_depth: number
+  graph_expand_limit: number
   max_compose_calls: number
 }
 

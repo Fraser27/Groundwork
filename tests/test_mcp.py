@@ -125,6 +125,25 @@ def _stage(
     return a.assertion_id
 
 
+def _stage_second_edge_off_d1(tenant_id: str, *, matter_id: str) -> None:
+    """A second neighbour, so a cap has something to cut. `_stage` writes one deterministic id."""
+    services = get_services()
+    a = build_assertion(
+        tenant_id=tenant_id,
+        subject_id="document:d1",
+        predicate="CONCERNS_TOPIC",
+        object_id="topic:second",
+        epistemic_class=EpistemicClass.DECLARED,
+        method="cms:export@v1",
+        confidence=0.9,
+        source_locator=SourceLocator(
+            document_id="doc-1", filename="skeleton.pdf", page=8, quote="and further agree"
+        ),
+        matter_id=matter_id,
+    )
+    services.review_queue.stage(AuthContext(user_id="ingest", tenant_id=tenant_id), [a])
+
+
 def _install(config: GroundworkConfig) -> None:
     """Install a service container, with Cognito stubbed and one screened user.
 
@@ -890,6 +909,19 @@ class TestGraphNeighbourhood:
         _stage(TENANT_A, matter_id="M-1")
         result = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:doc-1"})
         assert [e["predicate"] for e in result.structuredContent["edges"]] == ["CONCERNS_TOPIC"]
+
+    def test_the_walk_is_held_to_the_tenants_own_edge_cap(self):
+        """Fourth caller of `expand`, and the cap has to be the tenant's rather than the tool's. A
+        number of its own would make this report a different neighbourhood for one entity than the
+        answer that cited it, and the two are meant to be checkable against each other."""
+        _stage(TENANT_A, matter_id="M-1")
+        _stage_second_edge_off_d1(TENANT_A, matter_id="M-1")
+        before = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"})
+        assert len(before.structuredContent["edges"]) == 2, "nothing to cap"
+
+        get_services().settings_for(TENANT_A).graph_expand_limit = 1
+        body = _call(TOKEN_A, "graph_neighbourhood", {"node_id": "document:d1"}).structuredContent
+        assert len(body["edges"]) == 1
 
     def test_below_floor_edges_are_excluded(self):
         """`graph_neighbourhood` is the defensible view; `search_assertions` is the raw one.

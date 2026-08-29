@@ -15,6 +15,9 @@ What it is told, in the prompt, is as important as what it is given:
 - **Never introduce a fact.** Every claim has to be in the parts. There is no retrieval here.
 - **Name the basis.** "Per the engagement letter" beats an assertive sentence with no source, since
   the reader's next move is to check it.
+- **Do not join facts up yourself.** The graph lane sends `connections`, chains it assembled
+  deterministically (`query.paths`). A model joining a flat edge list into a chain is guessing at
+  the one step nobody can audit, which is exactly the step this system exists to make checkable.
 """
 
 from __future__ import annotations
@@ -48,6 +51,9 @@ letter", "the fees billed metric", "the matters table". The reader's next move i
 what it was.
 - No preamble, no restating the question, no offers of further help. Lead with the answer.
 - If the parts do not answer the question, say exactly that. That is a useful answer.
+- A part's `connections` are chains the graph joined up itself, each hop a verified relationship. \
+Prefer them for any question about how two things are related, and do not chain the flat facts \
+into a longer connection of your own: if a link is not in `connections`, the graph did not find it.
 
 Write plainly. Two or three short paragraphs at most, and fewer where fewer will do."""
 
@@ -93,6 +99,9 @@ def build_prompt(
                 "kind": p.get("provenance") or p.get("lane"),
                 "tier": p.get("tier"),
                 "how_to_cite_it": _describe(p),
+                # Before `content` on purpose: a chain is the same edges already joined up, and a
+                # model that reads the flat list first has usually committed to a reading of it.
+                **({"connections": _clip(p["paths"])} if p.get("paths") else {}),
                 "content": _clip(p.get("content")),
                 "sql": p.get("sql"),
                 "confidence": p.get("confidence"),

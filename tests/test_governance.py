@@ -13,6 +13,7 @@ import pytest
 
 from src.governance import (
     FIELD_HELP,
+    GRAPH_EXPAND_LIMIT_CEILING,
     MAX_COMPOSE_CALLS_CEILING,
     GovernanceError,
     GovernanceSettings,
@@ -132,6 +133,18 @@ class TestBounds:
 
     def test_the_ceiling_itself_is_allowed(self):
         assert GovernanceSettings(max_compose_calls=MAX_COMPOSE_CALLS_CEILING).max_compose_calls
+
+    @pytest.mark.parametrize("limit", [0, GRAPH_EXPAND_LIMIT_CEILING + 1])
+    def test_walk_limit_outside_range_rejected(self, limit):
+        """Bounded above because past the ceiling the walk stops being evidence and becomes a dump,
+        and bounded below because the cap applies to the whole walk: set it under the number of
+        edges at one hop and `graph_expand_depth` silently stops meaning anything."""
+        with pytest.raises(GovernanceError, match="graph_expand_limit"):
+            GovernanceSettings(graph_expand_limit=limit)
+
+    def test_the_walk_limit_ceiling_itself_is_allowed(self):
+        settings = GovernanceSettings(graph_expand_limit=GRAPH_EXPAND_LIMIT_CEILING)
+        assert settings.graph_expand_limit == GRAPH_EXPAND_LIMIT_CEILING
 
 
 class TestKillSwitches:

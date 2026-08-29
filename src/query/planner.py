@@ -69,6 +69,7 @@ from src.query.blocks import (
 from src.query.graph_first import GraphFirstLane
 from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
+from src.query.paths import chains
 from src.query.resolver import UNGOVERNED_BLOCKED, BlockedQuery, Tier
 from src.query.sql_generation import relevant_tables
 
@@ -149,6 +150,14 @@ class Part:
     sql: str | None = None
     citations: list[dict[str, Any]] = field(default_factory=list)
     assertion_ids: list[str] = field(default_factory=list)
+
+    paths: list[dict[str, Any]] = field(default_factory=list)
+    """Graph lane only: multi-hop connections between the facts in `content`.
+
+    Beside the edges rather than instead of them. A chain is an assembled reading of facts already
+    in `content`, so a consumer that ignores this field loses nothing it was relying on -- and a
+    consumer that reads it does not have to perform the join itself. See `query.paths`."""
+
     confidence: float | None = None
     """None for a deterministic part. A number here means the part is a model's reading, and
     the absence of a number is not the same as certainty about a fuzzy thing."""
@@ -181,6 +190,7 @@ class Part:
             "sql": self.sql,
             "citations": self.citations,
             "assertion_ids": self.assertion_ids,
+            "paths": self.paths,
             "confidence": self.confidence,
             "metric_selection": self.metric_selection,
             "error": self.error,
@@ -821,6 +831,7 @@ class Planner:
             tier=tier,
             content=list(hits),
             assertion_ids=[h["assertion_id"] for h in hits if "assertion_id" in h],
+            paths=chains(hits),
             confidence=min(confidences) if confidences and model_written else None,
         )
 
@@ -850,6 +861,7 @@ class Planner:
             seeds,
             depth=settings.graph_expand_depth,
             min_confidence=settings.min_confidence_floor,
+            limit=settings.graph_expand_limit,
         )
         seen = {h.get("assertion_id") for h in already}
         return [e for e in edges if e.get("assertion_id") not in seen]

@@ -53,6 +53,7 @@ from src.query.blocks import (
 from src.query.graph_first import GraphFirstLane
 from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
+from src.query.paths import chains
 
 logger = logging.getLogger(__name__)
 
@@ -585,6 +586,7 @@ class Resolver:
                     passage_seeds(passages),
                     depth=settings.graph_expand_depth,
                     min_confidence=settings.min_confidence_floor,
+                    limit=settings.graph_expand_limit,
                 )
 
         # Attempted even with no passages, and that is the point: "how much have we billed" is
@@ -595,7 +597,13 @@ class Resolver:
         if not passages and generated is None:
             return None
 
-        answer: dict[str, Any] = {"passages": passages, "related": expanded}
+        # `paths` beside `related`, not instead of it. Chains are an assembled reading of the same
+        # edges, so a consumer that ignores the field is unaffected -- see `query.paths`.
+        answer: dict[str, Any] = {
+            "passages": passages,
+            "related": expanded,
+            "paths": chains(expanded),
+        }
         if generated is not None:
             # Reported beside the passages rather than as the answer. The passages are quoted and
             # the facts are verified; this is neither, so merging them would make one label cover

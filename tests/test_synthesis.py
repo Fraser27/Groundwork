@@ -165,6 +165,52 @@ class TestWhatTheModelIsGiven:
         assert bedrock.request["inferenceConfig"]["temperature"] == 0.0
 
 
+PATHS = [
+    {
+        "nodes": ["associate:curtis", "order:o-1", "customer:sam"],
+        "steps": [
+            {"assertion_id": "a2", "predicate": "APPROVED_RETURN", "reversed": False},
+            {"assertion_id": "a1", "predicate": "PLACED_ORDER", "reversed": True},
+        ],
+        "confidence": 0.9,
+    }
+]
+
+
+class TestTheModelIsNotAskedToDoTheJoin:
+    """Chaining a flat edge list is the one step in this system nobody can audit.
+
+    Everything else the model is given carries an `assertion_id` back to a page. A link the model
+    inferred between two facts carries nothing, and reads exactly like a link the graph found. So
+    the chains are assembled deterministically and handed over, and the prompt closes off the
+    alternative.
+    """
+
+    def test_the_chains_reach_the_model(self):
+        prompt = build_prompt("who helped sam", parts=[_part(paths=PATHS)])
+        assert "APPROVED_RETURN" in prompt
+        assert "connections" in prompt
+
+    def test_the_chains_come_before_the_flat_facts(self):
+        """Order is the intervention. A model that reads two hundred loose edges first has usually
+        committed to a reading of them before it ever reaches the joined-up version."""
+        prompt = build_prompt("q", parts=[_part(paths=PATHS)])
+        assert prompt.index("connections") < prompt.index("Thorne Vaux")
+
+    def test_a_part_with_no_chains_carries_no_empty_section(self):
+        """An empty `connections` invites the model to fill it. Absent says the graph found no
+        route, which is the honest report."""
+        assert "connections" not in build_prompt("q", parts=[_part(paths=[])])
+        assert "connections" not in build_prompt("q", parts=[_part()])
+
+    def test_the_system_prompt_forbids_chaining_the_flat_facts(self):
+        bedrock = FakeBedrock()
+        Synthesiser(model_id="m", bedrock=bedrock).summarise("q", parts=[_part(paths=PATHS)])
+        system = bedrock.request["system"][0]["text"]
+        assert "connections" in system
+        assert "the graph did not find it" in system
+
+
 class TestFailureModes:
     def test_no_parts_means_no_summary(self):
         """None, not an apology: the caller already renders the empty state and its warnings."""

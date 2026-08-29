@@ -798,6 +798,38 @@ class TestHybridSeedsTheWalkWithGraphNodeIds:
         assert all(h["hops"] is None for h in hits)
         assert any(h["matched_on"] for h in hits)
 
+    def test_the_answer_carries_chains_beside_the_edges(self, reader, ctx):
+        """`paths` is added, not substituted. A consumer reading `related` is unaffected, which is
+        what makes the field safe to add to an endpoint the UI already narrows on by key."""
+        res = self._resolver(reader).resolve(
+            ctx, "what does d1 say about acme", GovernanceSettings(), tier_override=Tier.HYBRID
+        )
+
+        assert res.answer["related"]
+        assert isinstance(res.answer["paths"], list)
+
+    def test_the_walk_is_held_to_the_governed_edge_cap(self, reader, ctx):
+        """All four call sites read one setting. `expand` applies its limit to the whole walk, so a
+        site with a number of its own makes `graph_expand_depth` mean something different there."""
+        seen: dict[str, object] = {}
+
+        class Recording:
+            def search(self, c, q, **kw):
+                return reader.search(c, q, **kw)
+
+            def expand(self, c, seeds, **kw):
+                seen.update(kw)
+                return reader.expand(c, seeds, **kw)
+
+        self._resolver(Recording()).resolve(
+            ctx,
+            "what does d1 say about acme",
+            GovernanceSettings(graph_expand_limit=137),
+            tier_override=Tier.HYBRID,
+        )
+
+        assert seen["limit"] == 137
+
 
 class UnscopedReader:
     """A reader that returns everything, screened or not.

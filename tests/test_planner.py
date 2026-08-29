@@ -83,6 +83,7 @@ class FakeGraph:
         self.walked = walked or []
         self.searched = False
         self.expanded_from: list[str] | None = None
+        self.expanded_with: dict[str, Any] = {}
 
     def search(self, ctx: AuthContext, question: str, **kw: Any) -> list[dict]:
         self.searched = True
@@ -90,6 +91,7 @@ class FakeGraph:
 
     def expand(self, ctx: AuthContext, seeds: list[str], **kw: Any) -> list[dict]:
         self.expanded_from = seeds
+        self.expanded_with = dict(kw)
         return self.walked
 
     def blocking_facts(self, ctx: AuthContext, seeds: list[str], **kw: Any) -> list[dict]:
@@ -290,6 +292,20 @@ class TestComposeWalksOutFromThePassagesToo:
 
         assert set(graph.expanded_from or []) == {"doc-1", "document:doc-1", "M-1", "matter:M-1"}
 
+    def test_the_walk_runs_under_the_governed_edge_cap(self, ctx):
+        """The cap and the depth are one control. `expand` applies its limit to the whole walk, so a
+        cap the tenant did not choose -- the hardcoded 50 this replaced -- silently makes
+        `graph_expand_depth` inert once hop 1 fills it. Measured on the retail demo at 50: every
+        returned edge was `hops=1`, so a firm that had asked for two hops was getting one."""
+        graph = FakeGraph()
+        settings = GovernanceSettings(graph_expand_limit=137, graph_expand_depth=3)
+        Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(ctx, "q", settings, allow_synthesis=False)
+
+        assert graph.expanded_with["limit"] == 137
+        assert graph.expanded_with["depth"] == 3
+
     def test_a_walked_fact_is_not_reported_twice(self, ctx):
         """The term search and the walk can both find one fact, and a reader counting facts would
         be told the graph holds two."""
@@ -372,6 +388,72 @@ class TestComposeWalksOutFromThePassagesToo:
         assert vectors.searched is False
         assert graph.expanded_from is None
         assert [p.lane for p in answer.parts] == [Lane.GRAPH]
+
+
+class TestTheGraphPartCarriesItsChains:
+    """Beside the edges, never instead of them.
+
+    The join a chain performs is otherwise left to whatever reads the flat list, and on the answer
+    path the only reader is a language model. So the part carries both: `content` for a consumer
+    that predates chains, `paths` for one that does not have to guess at the join.
+    """
+
+    def test_connected_facts_arrive_joined_up(self, ctx):
+        graph = FakeGraph(
+            walked=[
+                {
+                    "assertion_id": "a1",
+                    "subject_id": "customer:sam",
+                    "predicate": "PLACED_ORDER",
+                    "object_id": "order:o-1",
+                    "confidence": 0.95,
+                },
+                {
+                    "assertion_id": "a2",
+                    "subject_id": "associate:curtis",
+                    "predicate": "APPROVED_RETURN",
+                    "object_id": "order:o-1",
+                    "confidence": 0.9,
+                },
+            ]
+        )
+        answer = Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(ctx, "who helped sam", GovernanceSettings(), allow_synthesis=False)
+
+        part = next(p for p in answer.parts if p.lane == Lane.GRAPH)
+        assert [s["assertion_id"] for s in part.paths[0]["steps"]] == ["a2", "a1"]
+        # The flat list is untouched, so nothing that ignores `paths` loses anything.
+        assert [f["assertion_id"] for f in part.content] == ["a1", "a2"]
+
+    def test_unconnected_facts_leave_the_field_empty_rather_than_guessing(self, ctx):
+        """An empty `paths` is the honest report that the graph holds no route between these facts.
+        Inventing one is the single step in this system nobody could audit."""
+        graph = FakeGraph(
+            walked=[
+                {"assertion_id": "a1", "subject_id": "party:a", "object_id": "matter:m-1"},
+                {"assertion_id": "a2", "subject_id": "party:b", "object_id": "matter:m-2"},
+            ]
+        )
+        answer = Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(ctx, "q", GovernanceSettings(), allow_synthesis=False)
+
+        assert next(p for p in answer.parts if p.lane == Lane.GRAPH).paths == []
+
+    def test_the_chains_survive_serialisation(self, ctx):
+        graph = FakeGraph(
+            walked=[
+                {"assertion_id": "a1", "subject_id": "party:a", "object_id": "matter:m-1"},
+                {"assertion_id": "a2", "subject_id": "party:b", "object_id": "matter:m-1"},
+            ]
+        )
+        answer = Planner(
+            graph_reader=graph, vector_search=FakeVectors([{"document_id": "doc-1"}])
+        ).plan(ctx, "q", GovernanceSettings(), allow_synthesis=False)
+
+        part = next(p for p in answer.to_dict()["parts"] if p["lane"] == "graph")
+        assert len(part["paths"]) == 1
 
 
 class TestTierGating:
