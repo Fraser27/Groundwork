@@ -19,6 +19,7 @@ import type {
   GateTrace,
   QueryBlock,
   QueryHit,
+  QueryPath,
   QueryPassage,
   RouterLayer,
   RouterTrace,
@@ -37,6 +38,7 @@ import {
 import ConfidenceBar from './ConfidenceBar'
 import EpistemicBadge from './EpistemicBadge'
 import FieldHelp from './FieldHelp'
+import { PATH_HELP, PathChainList } from './PathChains'
 import { TierBadge } from './Shared'
 import { epiStyle } from '../format'
 
@@ -640,7 +642,15 @@ function LanesStep({
  * `matched_on` stays empty on a walked edge -- and the panel used to discard it, so a reader could
  * not tell a fact stated in the document from one two steps away.
  */
-function FactList({ facts, floor }: { facts: QueryHit[]; floor: number }) {
+function FactList({
+  facts,
+  paths,
+  floor,
+}: {
+  facts: QueryHit[]
+  paths: QueryPath[]
+  floor: number
+}) {
   const matched = facts.filter((h) => h.hops == null)
   const walked = facts.filter((h) => h.hops != null)
 
@@ -661,14 +671,35 @@ function FactList({ facts, floor }: { facts: QueryHit[]; floor: number }) {
     </div>
   )
 
+  // Chains lead. They are assembled from the rows below rather than additional to them, and a
+  // reader who has already scanned the flat list has usually settled on a reading of it.
+  const connections = paths.length > 0 && (
+    <>
+      <p className="qtrace-note dim">
+        Connections the graph joined up, longest first. Each arrow is one relationship from the
+        list below.
+        <FieldHelp text={PATH_HELP} />
+      </p>
+      <PathChainList paths={paths} floor={floor} />
+    </>
+  )
+
   // One list when everything arrived the same way, which is the common case. Splitting then would
   // add a heading that says nothing.
   if (!walked.length || !matched.length) {
-    return <div className="path-chain">{facts.map(row)}</div>
+    return (
+      <>
+        {connections}
+        <div className="path-chain" style={{ marginTop: paths.length > 0 ? 10 : 0 }}>
+          {facts.map(row)}
+        </div>
+      </>
+    )
   }
   return (
     <>
-      <p className="qtrace-note dim">
+      {connections}
+      <p className="qtrace-note dim" style={{ marginTop: paths.length > 0 ? 10 : 0 }}>
         Matched by name in the question, the graph was asked about these directly.
       </p>
       <div className="path-chain">{matched.map(row)}</div>
@@ -758,7 +789,9 @@ function LaneCard({
             </div>
           )}
 
-          {lane.facts && lane.facts.length > 0 && <FactList facts={lane.facts} floor={floor} />}
+          {lane.facts && lane.facts.length > 0 && (
+            <FactList facts={lane.facts} paths={lane.paths ?? []} floor={floor} />
+          )}
 
           {lane.passages && lane.passages.length > 0 && (
             <>

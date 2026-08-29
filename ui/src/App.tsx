@@ -5,6 +5,8 @@ import { useUnitLabel } from './useUnitLabel'
 import {
   isAuthEnabled,
   isAuthenticated,
+  canRenewSession,
+  ensureAccessToken,
   handleAuthCallback,
   hasPendingAuthCode,
   getUserEmail,
@@ -43,14 +45,18 @@ function App() {
   // Three states, not two: `null` means "a code is still being exchanged". Rendering the
   // login page during that would flash it at a user who is already part-way through
   // signing in.
+  //
+  // A renewable session is pending for the same reason. The access token lasts an hour and the
+  // refresh token thirty days, so a user returning the next morning holds an expired token and a
+  // good one: showing them the login page and then signing them in behind it is the same flash.
   const [authed, setAuthed] = useState<boolean | null>(() =>
-    hasPendingAuthCode() ? null : isAuthenticated(),
+    hasPendingAuthCode() || canRenewSession() ? null : isAuthenticated(),
   )
 
   useEffect(() => {
     if (authed !== null) return
     handleAuthCallback()
-      .then((ok) => setAuthed(ok || isAuthenticated()))
+      .then(async (ok) => setAuthed(ok || !!(await ensureAccessToken()) || isAuthenticated()))
       .catch(() => setAuthed(false))
   }, [authed])
   const [theme, setTheme] = useState<'light' | 'dark'>(

@@ -56,6 +56,7 @@ class FakeGraph:
         self.catalog_nodes = catalog_nodes or []
         self.searched_at: float | None = None
         self.expanded_from: list[str] | None = None
+        self.expanded_with: dict[str, Any] = {}
 
     def search(self, ctx: AuthContext, question: str, *, min_confidence: float = 0.8) -> list[dict]:
         self.searched_at = min_confidence
@@ -63,6 +64,7 @@ class FakeGraph:
 
     def expand(self, ctx: AuthContext, seeds: list[str], **kw: Any) -> list[dict]:
         self.expanded_from = list(seeds)
+        self.expanded_with = dict(kw)
         return self.walked
 
     def catalog_search(self, ctx: AuthContext, question: str, **kw: Any) -> list[str]:
@@ -193,6 +195,15 @@ class TestTheGraphChoosesTheDocuments:
         lane(graph_reader=graph).run(ctx, "q", settings)
 
         assert graph.searched_at == 0.9
+
+    def test_the_walk_is_held_to_the_governed_edge_cap(self, ctx):
+        """Both directions walk under the tenant's own cap. A lane with a number of its own would
+        report a different neighbourhood for one entity than the other lane citing it."""
+        graph = FakeGraph(hits=[fact("a1")])
+        settings = GovernanceSettings(graph_expand_limit=137)
+        lane(graph_reader=graph).run(ctx, "q", settings)
+
+        assert graph.expanded_with["limit"] == 137
 
     def test_no_graph_match_costs_the_passages_too(self, ctx):
         """Not a bug, and the reason the direction is a tenant-level choice: a document nothing has
@@ -439,7 +450,21 @@ class TestTheResultShape:
             .to_dict()
         )
 
-        assert set(payload) == {"facts", "passages", "tables", "landed"}
+        assert set(payload) == {"facts", "passages", "tables", "landed", "paths"}
+
+    def test_the_chains_describe_the_facts_as_finally_assembled(self, ctx):
+        """Derived in `to_dict` rather than held as a field, because `facts` is appended to after
+        the result is constructed: the walk's edges join the term matches. A chain set computed at
+        construction would describe a fact list that no longer exists, and would go quiet on exactly
+        the connection this lane exists to find -- one spanning a term match and a walked edge."""
+        graph = FakeGraph(
+            hits=[fact("a1", subject="party:acme")],
+            walked=[{"assertion_id": "a2", "subject_id": "party:beta", "object_id": "party:gamma"}],
+        )
+        payload = lane(graph_reader=graph).run(ctx, "q", GovernanceSettings()).to_dict()
+
+        assert len(payload["paths"]) == 1
+        assert [s["assertion_id"] for s in payload["paths"][0]["steps"]] == ["a1", "a2"]
 
     def test_generated_is_absent_rather_than_null_when_nothing_was_written(self, ctx):
         """The UI reads `generated` to decide whether an answer contains model-written SQL, so a

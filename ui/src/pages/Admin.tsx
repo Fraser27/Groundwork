@@ -1197,6 +1197,7 @@ function RetrievalReach({
 }) {
   const depth = retrieval.graph_expand_depth
   const topK = retrieval.vector_top_k
+  const walkLimit = retrieval.graph_expand_limit
   const searches = retrieval.max_compose_calls
 
   const commitDepth = (raw: string) => {
@@ -1207,6 +1208,13 @@ function RetrievalReach({
 
   const topKField = useNumberDraft(topK, 1, Infinity, (next) =>
     patchRetrieval('topk', { vector_top_k: next }, `Retrieving ${next} passages per question`),
+  )
+  const walkLimitField = useNumberDraft(walkLimit, 1, MAX_WALK_LIMIT, (next) =>
+    patchRetrieval(
+      'walklimit',
+      { graph_expand_limit: next },
+      `Up to ${next} relationships per search`,
+    ),
   )
   const searchesField = useNumberDraft(searches, 1, MAX_SEARCHES, (next) =>
     patchRetrieval(
@@ -1254,6 +1262,35 @@ function RetrievalReach({
           an ethical wall, so this is what decides whether a conflict two parties away is found at
           all. Each extra hop widens that reach and costs latency: at 1 a non-adjacent conflict is
           missed, and on a well-connected firm 5 is slow.
+        </p>
+      </div>
+
+      <div className="form-group">
+        <label>
+          Relationships per search
+          {help.graph_expand_limit && <FieldHelp text={help.graph_expand_limit} />}
+        </label>
+        <input
+          type="number"
+          min={1}
+          max={MAX_WALK_LIMIT}
+          step={10}
+          value={walkLimitField.draft}
+          disabled={saving === 'walklimit'}
+          onChange={(e) => walkLimitField.setDraft(e.target.value)}
+          onBlur={walkLimitField.commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="input-mono"
+          style={{ maxWidth: 120 }}
+        />
+        <p className="hint">
+          The cap on the whole walk, applied after it finishes, which is why it decides whether the
+          depth above does anything: if the relationships next to the passage already fill{' '}
+          <strong>{walkLimit}</strong>, the second hop never arrives and a chain of connections is
+          cut off partway. The strongest relationships are kept first, so lowering this drops the
+          weakest rather than an arbitrary slice.
         </p>
       </div>
 
@@ -1318,6 +1355,10 @@ function RetrievalReach({
 /** Ceiling on searches per question, matching the API. Only the input's `max` here: the API is
  *  what enforces it, so a drift shows up as a refused save rather than a silent difference. */
 const MAX_SEARCHES = 10
+
+/** Ceiling on relationships per search, mirroring `GRAPH_EXPAND_LIMIT_CEILING`. Same argument as
+ *  `MAX_SEARCHES`: the input hints, `validate()` enforces. */
+const MAX_WALK_LIMIT = 500
 
 /** Which part gets no search of its own, indexed by the cap. `ORDINALS[3]` is 'a fourth'. */
 const ORDINALS: (string | undefined)[] = [

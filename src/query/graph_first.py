@@ -41,6 +41,7 @@ from typing import Any
 
 from src.governance import GovernanceSettings
 from src.graph.scope import AuthContext
+from src.query.paths import chains
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,10 @@ class GraphFirstResult:
                 for t in self.tables
             ],
             "landed": list(self.landed),
+            # Derived here rather than held as a field: `facts` is appended to after construction
+            # (the walk's edges join the term matches), so a chain set computed earlier would
+            # describe a fact list that no longer exists.
+            "paths": chains(self.facts),
         }
         if self.generated is not None:
             out["generated"] = {
@@ -216,6 +221,7 @@ class GraphFirstLane:
             seeds,
             depth=settings.graph_expand_depth,
             min_confidence=settings.min_confidence_floor,
+            limit=settings.graph_expand_limit,
         )
         seen = {f.get("assertion_id") for f in facts}
         return [e for e in edges if e.get("assertion_id") not in seen]

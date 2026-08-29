@@ -69,6 +69,7 @@ from src.query.blocks import (
 from src.query.graph_first import GraphFirstLane
 from src.query.graph_reader import passage_seeds
 from src.query.metric_matcher import chosen_deterministically, match_metric, selection_of
+from src.query.paths import chains
 from src.query.resolver import UNGOVERNED_BLOCKED, BlockedQuery, Tier
 from src.query.sql_generation import relevant_tables
 
@@ -149,6 +150,14 @@ class Part:
     sql: str | None = None
     citations: list[dict[str, Any]] = field(default_factory=list)
     assertion_ids: list[str] = field(default_factory=list)
+
+    paths: list[dict[str, Any]] = field(default_factory=list)
+    """Graph lane only: multi-hop connections between the facts in `content`.
+
+    Beside the edges rather than instead of them. A chain is an assembled reading of facts already
+    in `content`, so a consumer that ignores this field loses nothing it was relying on -- and a
+    consumer that reads it does not have to perform the join itself. See `query.paths`."""
+
     confidence: float | None = None
     """None for a deterministic part. A number here means the part is a model's reading, and
     the absence of a number is not the same as certainty about a fuzzy thing."""
@@ -181,6 +190,7 @@ class Part:
             "sql": self.sql,
             "citations": self.citations,
             "assertion_ids": self.assertion_ids,
+            "paths": self.paths,
             "confidence": self.confidence,
             "metric_selection": self.metric_selection,
             "error": self.error,
@@ -312,6 +322,19 @@ def _skipped_traversal(allowed: set[int], decision: Any | None) -> str:
 #: relationship comes first because it is the stronger claim and a reader should meet it before a
 #: passage chosen by similarity.
 _TRAVERSAL_LANES = (Lane.GRAPH, Lane.PASSAGES, Lane.CATALOG, Lane.SQL)
+
+
+def _schema_rows(tables: Sequence[Any]) -> list[dict[str, Any]]:
+    """Schemas only. Rows stay in Athena and are queried in place, which is what lets one graph hold
+    structured metadata and unstructured content without copying a warehouse into it."""
+    return [
+        {
+            "full_name": t.full_name,
+            "description": t.description,
+            "columns": [c.name for c in t.columns],
+        }
+        for t in tables
+    ]
 
 
 @dataclass
@@ -540,6 +563,10 @@ class Planner:
 
         The reported order still leads with the graph. A verified relationship is the stronger
         claim, whatever order the stores were called in.
+
+        Every lane that contributes nothing says why, as graph-first does. Without that a lane was
+        in neither `lanes_run` nor `lanes_skipped` and vanished from the trace, so a question no
+        catalogued table shared a word with read as tier 3 not having a SQL lane at all.
         """
         passage_part = self._passage_part(ctx, question, settings)
         passages = passage_part.content if passage_part is not None else None
@@ -561,10 +588,19 @@ class Planner:
             lanes.parts.append(passage_part)
             lanes.run.append(Lane.PASSAGES)
             lanes.seeds.extend(self._seeds_from(passage_part))
+        else:
+            lanes.skipped[Lane.PASSAGES.value] = (
+                "no document search is configured, so no passage could be retrieved"
+                if self._vectors is None
+                else "no passage in the searchable documents was similar enough to this question"
+            )
 
-        catalog_part = self._catalog_part(ctx, question)
-        if catalog_part is not None:
-            lanes.parts.append(catalog_part)
+        offered, no_tables = self._offered_tables(ctx, question)
+        if no_tables is not None:
+            lanes.skipped[Lane.CATALOG.value] = no_tables
+            lanes.skipped[Lane.SQL.value] = no_tables
+        else:
+            lanes.parts.append(self._catalog_part_of(_schema_rows(offered), tier=Tier.HYBRID))
             lanes.run.append(Lane.CATALOG)
 
         # Gated on the kill switch, which refuses this lane alone. Refusing the whole tier would
@@ -573,10 +609,21 @@ class Planner:
         if settings.block_ungoverned_queries:
             self._refuse_sql(ctx, question, lanes)
             return
-        sql_part = self._sql_part(ctx, question)
+        if no_tables is not None:
+            return
+        if self._sql is None:
+            lanes.skipped[Lane.SQL.value] = (
+                "no SQL generator is configured, so the offered schema could not be queried"
+            )
+            return
+        sql_part = self._sql_part(question, offered)
         if sql_part is not None:
             lanes.parts.append(sql_part)
             lanes.run.append(Lane.SQL)
+        else:
+            lanes.skipped[Lane.SQL.value] = (
+                "the model wrote no query over the schema it was offered"
+            )
 
     def _no_walk_reason(self, passages: Any) -> str:
         """Why vector-first's graph lane contributed nothing.
@@ -784,6 +831,7 @@ class Planner:
             tier=tier,
             content=list(hits),
             assertion_ids=[h["assertion_id"] for h in hits if "assertion_id" in h],
+            paths=chains(hits),
             confidence=min(confidences) if confidences and model_written else None,
         )
 
@@ -813,6 +861,7 @@ class Planner:
             seeds,
             depth=settings.graph_expand_depth,
             min_confidence=settings.min_confidence_floor,
+            limit=settings.graph_expand_limit,
         )
         seen = {h.get("assertion_id") for h in already}
         return [e for e in edges if e.get("assertion_id") not in seen]
@@ -848,38 +897,31 @@ class Planner:
             ],
         )
 
-    def _catalog_part(self, ctx: AuthContext, question: str) -> Part | None:
-        """Schema that might answer the structured half.
+    def _offered_tables(self, ctx: AuthContext, question: str) -> tuple[list[Any], str | None]:
+        """The tables vector-first's catalog and SQL lanes work on, or the reason there are none.
 
-        Schemas only. Rows stay in Athena and are queried in place, which is what lets one
-        graph hold structured metadata and unstructured content without copying a warehouse
-        into it.
+        One selection for both lanes, so a reader shown one list of schema cannot be reading it
+        against a query written over another. Four distinct reasons because a reader can act on
+        only one of them: an unconfigured catalogue, an unreachable one, an empty one, and a
+        question sharing no word with anything in it are four different jobs.
         """
         if self._catalog is None:
-            return None
+            return [], "no data catalogue is configured, so there is no schema to offer"
         try:
             tables = self._catalog.tables(ctx.tenant_id)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug("catalog lane unavailable: %s", e)
-            return None
+            return [], f"the data catalogue could not be read: {e}"
         if not tables:
-            return None
+            return [], "no table has been catalogued for this tenant"
 
-        # The same selection the SQL lane makes, from the same function. A reader shown one list of
-        # schema while a query was written over another could not check the query against it.
-        relevant = [
-            {
-                "full_name": t.full_name,
-                "description": t.description,
-                "columns": [c.name for c in t.columns],
-            }
-            for t in relevant_tables(question, tables, synonyms=self._synonyms(ctx))
-        ]
-        if not relevant:
-            return None
-        # Tier 3, matching the gate that let this lane run. It claimed tier 2 while nothing checked
-        # it against tier 2, so the reported tier was unbacked by any permission check.
-        return self._catalog_part_of(relevant, tier=Tier.HYBRID)
+        offered = relevant_tables(question, tables, synonyms=self._synonyms(ctx))
+        if not offered:
+            return [], (
+                "no catalogued table's name, description or approved synonym shares a word with "
+                "this question, so there was nothing to offer or query"
+            )
+        return list(offered), None
 
     @staticmethod
     def _catalog_part_of(rows: Sequence[dict[str, Any]], *, tier: Tier) -> Part:
@@ -891,24 +933,18 @@ class Planner:
             content=list(rows),
         )
 
-    def _sql_part(self, ctx: AuthContext, question: str) -> Part | None:
+    def _sql_part(self, question: str, offered: Sequence[Any]) -> Part | None:
         """A query a model wrote over the catalogued schema, run if it cleared the firewall.
 
         Never `DETERMINISTIC`, whatever came back. The figure may be an exact aggregate, but
         nothing approved the arithmetic, so `MODEL_WRITTEN` is what makes `governance_label` stop
         saying governed -- which is the point of the distinction.
-        """
-        if self._sql is None or self._catalog is None:
-            return None
-        try:
-            tables = self._catalog.tables(ctx.tenant_id)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("SQL lane unavailable, no catalog: %s", e)
-            return None
-        if not tables:
-            return None
 
-        result = self._sql.run(question, tables=tables, synonyms=self._synonyms(ctx))
+        `offered` is the list the catalog lane displayed, passed as `candidates` rather than
+        re-derived: word overlap run twice is the same answer, and a caller that has already chosen
+        must not be able to show one schema while the query is written over another.
+        """
+        result = self._sql.run(question, tables=offered, candidates=offered)
         if result is None:
             return None
         return Part(

@@ -61,6 +61,11 @@ _DIRECTION_PRECEDENCE = VECTOR_FIRST_TIER
 #: ways to keep looking that do not fan out across every store.
 MAX_COMPOSE_CALLS_CEILING = 10
 
+#: Most edges an administrator may let one walk return. Past this the walk stops being evidence and
+#: becomes a dump: nothing downstream can read a thousand edges, and the ranking that decides which
+#: ones survive is worth more than the ones it drops.
+GRAPH_EXPAND_LIMIT_CEILING = 500
+
 
 def coerce_allowed_tiers(values: Any) -> frozenset[int]:
     """A tier cap narrowed to the tiers this build has, and to one traversal direction.
@@ -251,6 +256,18 @@ class GovernanceSettings:
     vector_top_k: int = 20
     graph_expand_depth: int = 2
 
+    graph_expand_limit: int = 200
+    """Most edges one walk may return, ranked before the cut.
+
+    Paired with `graph_expand_depth`, and the pairing is the point: the cap is applied after the
+    whole walk, so if hop 1 alone fills it the depth setting is inert. Measured on the retail demo
+    at the old hardcoded 50 -- every returned edge was `hops=1`, so a firm that had asked for two
+    hops was getting one. Raising this is what makes the depth control mean anything.
+
+    Ranking survives the cut in the order `expand` documents: governing predicates first, then
+    confidence, then hop distance. So lowering this drops the weakest edges rather than a random
+    slice, which is why it is safe to tune."""
+
     max_compose_calls: int = 3
     """Full searches the Retrieval agent may run in one question.
 
@@ -295,6 +312,12 @@ class GovernanceSettings:
             raise GovernanceError(
                 "graph_expand_depth must be 1-5; deeper traversals fan out badly and "
                 "pull in weakly related matters"
+            )
+        if not 1 <= self.graph_expand_limit <= GRAPH_EXPAND_LIMIT_CEILING:
+            raise GovernanceError(
+                f"graph_expand_limit must be 1-{GRAPH_EXPAND_LIMIT_CEILING}. It caps the whole "
+                "walk, so setting it below the number of edges at one hop makes "
+                "graph_expand_depth inert."
             )
         # Cosine, so -1 is meaningful in principle. Bounded at 0 because a negative floor admits
         # items pointing away from the question, which is never what an administrator means.
@@ -389,6 +412,7 @@ class GovernanceSettings:
             enforce_closed_vocabulary=_b("GROUNDWORK_CLOSED_VOCABULARY", True),
             vector_top_k=int(os.getenv("GROUNDWORK_VECTOR_TOP_K", "20")),
             graph_expand_depth=int(os.getenv("GROUNDWORK_GRAPH_DEPTH", "2")),
+            graph_expand_limit=int(os.getenv("GROUNDWORK_GRAPH_LIMIT", "200")),
             max_compose_calls=int(os.getenv("GROUNDWORK_MAX_COMPOSE_CALLS", "3")),
         )
 
@@ -548,6 +572,15 @@ FIELD_HELP: dict[str, str] = {
     "graph_expand_depth": (
         "How many relationship hops to follow out from a retrieved passage. Two is "
         "usually right; more pulls in weakly related matters."
+    ),
+    "graph_expand_limit": (
+        "How many relationships one search may bring back in total. This is the cap that decides "
+        "whether the depth setting above does anything: it applies to the whole walk, so if the "
+        "relationships next to the passage already fill it, the second hop never arrives and a "
+        "chain of connections is cut off partway. Raise it to find who is connected to whom "
+        "through an intermediary; lower it for shorter, faster answers. The strongest "
+        "relationships are kept first, so lowering it drops the weakest rather than an "
+        "arbitrary slice."
     ),
     "max_compose_calls": (
         "How many full searches the Retrieval agent may run while answering one question. A full "

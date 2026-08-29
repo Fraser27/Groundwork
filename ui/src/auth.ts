@@ -24,6 +24,22 @@ interface RuntimeConfig {
   defaultTenantId?: string
 }
 
+interface TokenResponse {
+  access_token?: string
+  id_token?: string
+  refresh_token?: string
+  expires_in?: number
+}
+
+/**
+ * How long before expiry a token is renewed.
+ *
+ * Ahead of expiry rather than on it, because a token that lapses between this check and the server
+ * reading it fails as an unexplained refusal, and on the websocket path there is no status code to
+ * explain it with.
+ */
+const RENEW_MARGIN_MS = 5 * 60 * 1000
+
 let runtimeConfig: RuntimeConfig = {}
 
 export async function loadRuntimeConfig(): Promise<void> {
@@ -119,7 +135,9 @@ export async function login(): Promise<void> {
 }
 
 export function logout(): void {
-  clearTokens()
+  // The whole session, not just the tokens it is using. Leaving the refresh token behind would let
+  // the next page load renew itself straight back into the account somebody just signed out of.
+  clearSession()
   if (!isAuthEnabled()) {
     window.location.reload()
     return
@@ -168,24 +186,8 @@ export async function handleAuthCallback(): Promise<boolean> {
     const tokens = await res.json()
     if (!tokens.id_token || !tokens.access_token) return false
 
-    localStorage.setItem('id_token', tokens.id_token)
-    localStorage.setItem('access_token', tokens.access_token)
-    localStorage.setItem('token_expiry', String(Date.now() + (tokens.expires_in ?? 3600) * 1000))
-    if (tokens.refresh_token) localStorage.setItem('refresh_token', tokens.refresh_token)
-
-    const payload = decodeClaims(tokens.id_token)
-    if (payload) {
-      localStorage.setItem(
-        'user_email',
-        String(payload.email || payload['cognito:username'] || 'user'),
-      )
-      // Tenant is a token claim, not a user preference: a caller must not be able
-      // to widen their own scope by editing it.
-      const tenant = payload['custom:tenant_id'] || payload.tenant_id
-      if (tenant) localStorage.setItem('tenant_id', String(tenant))
-    } else {
-      localStorage.setItem('user_email', 'user')
-    }
+    // Email and tenant come out of the id token in here, so a renewal keeps them current too.
+    storeTokens(tokens)
     return true
   } finally {
     // Single-use, and the code must not survive in the address bar either way.
@@ -223,6 +225,102 @@ export function getAccessToken(): string | null {
 export function isAuthenticated(): boolean {
   if (!isAuthEnabled()) return true // Auth disabled in local dev
   return !!getAccessToken()
+}
+
+/**
+ * Whether a spent session can be renewed without sending the user back to Cognito.
+ *
+ * Read at mount, so a returning user with an expired access token waits for a renewal instead of
+ * being shown the login page and then signed in behind it.
+ */
+export function canRenewSession(): boolean {
+  return isAuthEnabled() && !!localStorage.getItem('refresh_token') && !getAccessToken()
+}
+
+function storeTokens(tokens: TokenResponse): void {
+  if (!tokens.access_token) return
+  localStorage.setItem('access_token', tokens.access_token)
+  localStorage.setItem('token_expiry', String(Date.now() + (tokens.expires_in ?? 3600) * 1000))
+  // Cognito does not rotate the refresh token, so a response without one means keep the one held.
+  if (tokens.refresh_token) localStorage.setItem('refresh_token', tokens.refresh_token)
+  if (!tokens.id_token) return
+
+  localStorage.setItem('id_token', tokens.id_token)
+  // Read on every grant, renewals included. `clearTokens` drops the email along with the token it
+  // came from, so a renewal that restored only the tokens would leave a signed-in session showing
+  // "user" in the header.
+  const claims = decodeClaims(tokens.id_token)
+  const email = claims?.email || claims?.['cognito:username'] || 'user'
+  localStorage.setItem('user_email', String(email))
+  // Tenant is a token claim, not a user preference: a caller must not be able to widen their own
+  // scope by editing it.
+  const tenant = claims?.['custom:tenant_id'] || claims?.tenant_id
+  if (tenant) localStorage.setItem('tenant_id', String(tenant))
+}
+
+let renewal: Promise<string | null> | null = null
+
+/**
+ * A usable access token, renewed if the stored one is spent. The only way a caller should obtain a
+ * token for a request.
+ *
+ * `getAccessToken` reads what is stored and starts answering null an hour after sign-in, because
+ * that is the access token's validity. The refresh token is good for thirty days, which is the
+ * session the pool was actually configured for; redeeming it was never written, so every surface
+ * inherited the hour. On the websocket paths that cliff was invisible: the token went as a query
+ * parameter, an absent one went as `token=`, and the server's refusal reached the page as a failed
+ * connection.
+ */
+export async function ensureAccessToken(): Promise<string | null> {
+  if (!isAuthEnabled()) return null
+
+  const token = localStorage.getItem('access_token')
+  const expiry = parseInt(localStorage.getItem('token_expiry') || '0')
+  if (token && Date.now() < expiry - RENEW_MARGIN_MS) return token
+  if (!localStorage.getItem('refresh_token')) {
+    clearTokens()
+    return null
+  }
+
+  // One renewal at a time. A page mount fires several requests at once, and each would otherwise
+  // redeem the same refresh token concurrently.
+  renewal ??= renew().finally(() => {
+    renewal = null
+  })
+  return renewal
+}
+
+async function renew(): Promise<string | null> {
+  const refresh = localStorage.getItem('refresh_token')
+  if (!refresh) return null
+
+  try {
+    const res = await fetch(`https://${getDomain()}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: getClientId(),
+        refresh_token: refresh,
+      }),
+    })
+    if (!res.ok) {
+      // A refused refresh is terminal: revoked, past its thirty days, or issued by another pool.
+      // The refresh token has to go with it, or every later call retries a token that cannot work
+      // and the user is never sent to sign in.
+      clearSession()
+      return null
+    }
+
+    const tokens: TokenResponse = await res.json()
+    storeTokens(tokens)
+    return tokens.access_token ?? null
+  } catch {
+    // A network failure is not a revoked session, so the refresh token stays. Fall back to whatever
+    // is stored: inside the renewal margin it is still valid, and past expiry this answers null and
+    // the caller reports an expired session rather than a mystery.
+    return getAccessToken()
+  }
 }
 
 export function getUserEmail(): string {
@@ -263,9 +361,16 @@ export function canReview(): boolean {
   return ['platform-admin', 'matter-owner', 'reviewer'].some((r) => roles.includes(r))
 }
 
+/** The tokens a request uses, but not the refresh token, which is what replaces them. */
 function clearTokens(): void {
   localStorage.removeItem('id_token')
   localStorage.removeItem('access_token')
   localStorage.removeItem('token_expiry')
   localStorage.removeItem('user_email')
+}
+
+/** Everything, including the means to renew. Sign-out and a refused refresh, nothing else. */
+function clearSession(): void {
+  clearTokens()
+  localStorage.removeItem('refresh_token')
 }

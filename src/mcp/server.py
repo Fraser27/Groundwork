@@ -900,7 +900,15 @@ async def graph_neighbourhood(
 
     settings = services.settings_for(auth_ctx.tenant_id)
     floor = settings.min_confidence_floor
-    edges = services.graph_reader.expand(auth_ctx, [node_id], depth=depth, min_confidence=floor)
+    # Same governed cap the query surfaces walk under. A tool with its own number would report a
+    # different neighbourhood for one entity than the answer that cited it.
+    edges = services.graph_reader.expand(
+        auth_ctx,
+        [node_id],
+        depth=depth,
+        min_confidence=floor,
+        limit=settings.graph_expand_limit,
+    )
     status = services.graph_reader.entity_status(auth_ctx, node_id, min_confidence=floor)
 
     # Derived from the edges alone. This used to seed itself with `node_id`, so every call

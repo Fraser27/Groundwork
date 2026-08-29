@@ -6,15 +6,18 @@
  * only for routing, never for authorisation.
  */
 
-import { getAccessToken, hasPendingAuthCode, isAuthEnabled } from './auth'
+import { ensureAccessToken, hasPendingAuthCode, isAuthEnabled } from './auth'
 
 const BASE = '/api'
+
+/** What an expired session looks like on a socket, where there is no status code to carry it. */
+const SESSION_EXPIRED = 'your session has expired, reload the page to sign in again'
 
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
   if (isAuthEnabled()) {
-    const token = getAccessToken()
+    const token = await ensureAccessToken()
     if (token) headers['Authorization'] = `Bearer ${token}`
   }
 
@@ -719,6 +722,40 @@ export interface QueryHit {
   source: SourceLocator
 }
 
+/**
+ * One hop of a chain, with the direction the chain reads it in.
+ *
+ * `subject_id` and `object_id` stay as the assertion was written, so `reversed` is what says the
+ * chain traversed it the other way. Render the direction from that flag: printing
+ * `A REPRESENTS B` for a chain that arrived at A from B states the relationship backwards.
+ */
+export interface QueryPathStep {
+  assertion_id: string
+  subject_id: string
+  predicate: string
+  object_id: string
+  epistemic_class: EpistemicClass
+  confidence: number
+  reversed: boolean
+}
+
+/**
+ * A multi-hop connection the graph assembled, two hops or more.
+ *
+ * Every step is an edge already in the lane's flat fact list — see `src/query/paths.py`. The value
+ * is that the join is the graph's rather than a reader's: the alternative is a person or a model
+ * spotting that three rows out of two hundred share an entity, which is the one step in the chain
+ * nobody can audit.
+ *
+ * `confidence` is the weakest hop, because a chain is an argument and an argument is as good as its
+ * worst step.
+ */
+export interface QueryPath {
+  nodes: string[]
+  steps: QueryPathStep[]
+  confidence: number
+}
+
 /** A passage the vector search returned, before the graph expanded around it. */
 export interface QueryPassage {
   document_id: string
@@ -745,7 +782,12 @@ export interface QueryRows {
 export type QueryAnswer =
   | QueryRows
   | QueryHit[]
-  | { passages: QueryPassage[]; related: QueryHit[]; generated?: GeneratedSQLResult }
+  | {
+      passages: QueryPassage[]
+      related: QueryHit[]
+      paths?: QueryPath[]
+      generated?: GeneratedSQLResult
+    }
   | GraphFirstAnswer
   | null
 
@@ -769,6 +811,8 @@ export interface GraphFirstAnswer {
    * reads it rather than reporting both as a lane that found nothing.
    */
   landed: string[]
+  /** Multi-hop connections between the facts, assembled by `src/query/paths.py`. */
+  paths?: QueryPath[]
   generated?: GeneratedSQLResult
 }
 
@@ -1023,6 +1067,9 @@ export interface AnswerPart {
   sql?: string | null
   citations?: QueryCitation[]
   assertion_ids?: string[]
+  /** Graph lane only: multi-hop connections between the facts in `content`. Absent on a response
+   *  from before the field existed, and empty when nothing in the lane chained up. */
+  paths?: QueryPath[]
   confidence?: number | null
   /** Metric lane only. */
   metric_selection?: MetricSelection | null
@@ -1445,6 +1492,7 @@ export interface TenantSettings {
 export interface RetrievalGovernance {
   vector_top_k: number
   graph_expand_depth: number
+  graph_expand_limit: number
   max_compose_calls: number
 }
 
@@ -1657,7 +1705,7 @@ export const api = {
     form.append('matter_id', matterId)
     const headers: Record<string, string> = {}
     if (isAuthEnabled()) {
-      const token = getAccessToken()
+      const token = await ensureAccessToken()
       if (token) headers['Authorization'] = `Bearer ${token}`
     }
     // Multipart: no Content-Type header — the browser supplies the boundary.
@@ -1748,30 +1796,41 @@ export const api = {
     onEvent: (event: IngestEvent) => void,
     onError?: () => void,
   ): (() => void) => {
-    const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const token = isAuthEnabled() ? getAccessToken() : ''
-    const url =
-      `${scheme}://${window.location.host}${BASE}/tenants/${tenant}/ingest/events` +
-      `?token=${encodeURIComponent(token || '')}`
-
     let socket: WebSocket | null = null
     let closed = false
-    try {
-      socket = new WebSocket(url)
-      socket.onmessage = (e) => {
-        try {
-          onEvent(JSON.parse(e.data))
-        } catch {
-          // A malformed frame is not worth tearing the connection down for.
+
+    // Opened after the token is in hand, because a browser cannot set headers on the handshake and
+    // an absent token would otherwise be sent as `token=` and refused. The poll behind this covers
+    // the wait.
+    void (async () => {
+      const token = isAuthEnabled() ? await ensureAccessToken() : ''
+      if (closed) return
+      if (isAuthEnabled() && !token) {
+        onError?.()
+        return
+      }
+
+      const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+      const url =
+        `${scheme}://${window.location.host}${BASE}/tenants/${tenant}/ingest/events` +
+        `?token=${encodeURIComponent(token || '')}`
+      try {
+        socket = new WebSocket(url)
+        socket.onmessage = (e) => {
+          try {
+            onEvent(JSON.parse(e.data))
+          } catch {
+            // A malformed frame is not worth tearing the connection down for.
+          }
         }
+        socket.onerror = () => onError?.()
+        socket.onclose = () => {
+          if (!closed) onError?.()
+        }
+      } catch {
+        onError?.()
       }
-      socket.onerror = () => onError?.()
-      socket.onclose = () => {
-        if (!closed) onError?.()
-      }
-    } catch {
-      onError?.()
-    }
+    })()
 
     return () => {
       closed = true
@@ -1795,35 +1854,47 @@ export const api = {
      *  not chosen, so the choice binds rather than suggests. */
     tool: RetrievalTool = 'auto',
   ): (() => void) => {
-    const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const token = isAuthEnabled() ? getAccessToken() : ''
-    const url =
-      `${scheme}://${window.location.host}${BASE}/tenants/${tenant}/retrieval/events` +
-      `?token=${encodeURIComponent(token || '')}`
-
     let socket: WebSocket | null = null
     let closed = false
     let sawEvent = false
-    try {
-      socket = new WebSocket(url)
-      socket.onopen = () => socket?.send(JSON.stringify({ question, tool }))
-      socket.onmessage = (e) => {
-        try {
-          sawEvent = true
-          onEvent(JSON.parse(e.data))
-        } catch {
-          // A malformed frame is not worth tearing the connection down for.
+
+    void (async () => {
+      const token = isAuthEnabled() ? await ensureAccessToken() : ''
+      if (closed) return
+      if (isAuthEnabled() && !token) {
+        // Said here rather than left to the server. With no token the socket used to be opened
+        // anyway, as `token=`, and closed with a policy violation carrying no reason -- so an hour
+        // after signing in the page reported that the agent had refused the connection, which reads
+        // as an outage and sent the reader looking at CloudFront.
+        onError?.(SESSION_EXPIRED)
+        return
+      }
+
+      const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+      const url =
+        `${scheme}://${window.location.host}${BASE}/tenants/${tenant}/retrieval/events` +
+        `?token=${encodeURIComponent(token || '')}`
+      try {
+        socket = new WebSocket(url)
+        socket.onopen = () => socket?.send(JSON.stringify({ question, tool }))
+        socket.onmessage = (e) => {
+          try {
+            sawEvent = true
+            onEvent(JSON.parse(e.data))
+          } catch {
+            // A malformed frame is not worth tearing the connection down for.
+          }
         }
+        socket.onerror = () => onError?.('the connection to the agent failed')
+        socket.onclose = (e) => {
+          // A close before any event means the server refused: a bad token, or no MCP endpoint.
+          // Its reason is the only explanation the user will get, so it is passed through.
+          if (!closed && !sawEvent) onError?.(e.reason || 'the agent refused the connection')
+        }
+      } catch {
+        onError?.('could not open a connection to the agent')
       }
-      socket.onerror = () => onError?.('the connection to the agent failed')
-      socket.onclose = (e) => {
-        // A close before any event means the server refused: a bad token, or no MCP endpoint.
-        // Its reason is the only explanation the user will get, so it is passed through.
-        if (!closed && !sawEvent) onError?.(e.reason || 'the agent refused the connection')
-      }
-    } catch {
-      onError?.('could not open a connection to the agent')
-    }
+    })()
 
     return () => {
       closed = true

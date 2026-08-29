@@ -35,6 +35,13 @@ class AuthError(PermissionError):
     """Authentication or authorization failure. Maps to 401/403 at the boundary."""
 
 
+class TokenExpired(AuthError):
+    """A token that verified but has run out. Separated because it is the one auth failure worth
+    naming to the caller: telling the holder of an expired token that it expired discloses nothing
+    they do not hold, and on a websocket it is the difference between "sign in again" and an
+    unexplained refusal."""
+
+
 @dataclass
 class Grants:
     """What a user may see, resolved from their groups and matter assignments.
@@ -89,7 +96,7 @@ class TokenVerifier:
                 options={"require": ["exp", "iss", "sub"]},
             )
         except jwt.ExpiredSignatureError as e:
-            raise AuthError("token expired") from e
+            raise TokenExpired("token expired") from e
         except (jwt.InvalidTokenError, httpx.HTTPError) as e:
             raise AuthError(f"token verification failed: {e}") from e
 

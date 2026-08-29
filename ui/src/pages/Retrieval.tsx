@@ -18,6 +18,7 @@ import DocumentViewer from '../components/DocumentViewer'
 import { FactsUsed, PassagesCited } from '../components/EvidencePanels'
 import FieldHelp from '../components/FieldHelp'
 import Markdown from '../components/Markdown'
+import PathChains from '../components/PathChains'
 import ProvenancePanel from '../components/ProvenancePanel'
 import QueryTrace from '../components/QueryTrace'
 import RunFlow from '../components/RunFlow'
@@ -307,6 +308,9 @@ export default function Retrieval() {
                           {/* The same panels Ask renders. A citation drawn two ways would be two
                               claims about what a citation is. */}
                           <PassagesCited passages={trace.passages} onOpen={setPassage} />
+                          {/* Above the relationships, not below: these are assembled from them,
+                              and the connection is what the question was usually about. */}
+                          <PathChains paths={trace.paths} floor={trace.floor} />
                           <FactsUsed
                             facts={trace.facts}
                             floor={trace.floor}

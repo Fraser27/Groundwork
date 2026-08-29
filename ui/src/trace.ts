@@ -17,6 +17,7 @@ import type {
   QueryBlock,
   QueryHit,
   QueryPassage,
+  QueryPath,
   QueryResult,
   QueryRows,
   RouterTrace,
@@ -53,6 +54,17 @@ export function asHits(answer: QueryAnswer): QueryHit[] {
   if ('related' in answer) return answer.related ?? []
   if ('facts' in answer) return answer.facts ?? []
   return []
+}
+
+/**
+ * The multi-hop connections a `/query` answer carries. Empty on a response from before they existed.
+ *
+ * Tier 2 and tier 3 put them under the same key, unlike the facts themselves — one key because a
+ * chain is the same object either direction the traversal ran in.
+ */
+export function asPaths(answer: QueryAnswer): QueryPath[] {
+  if (!answer || typeof answer !== 'object' || !('paths' in answer)) return []
+  return asPathList(answer.paths)
 }
 
 /** Tier 2's tables: the catalogued schema the question's words reached through the graph. */
@@ -110,6 +122,16 @@ export function factsFromComposed(composed: ComposedResult): QueryHit[] {
   return out
 }
 
+/** The connections a composed answer assembled, from the graph part. */
+export function pathsFromComposed(composed: ComposedResult): QueryPath[] {
+  const out: QueryPath[] = []
+  for (const part of composed.parts ?? []) {
+    if (part.lane !== 'graph') continue
+    out.push(...asPathList(part.paths))
+  }
+  return out
+}
+
 /** Tier 3's AI-written query, or null when none was written. Absent on every older response. */
 export function asGenerated(answer: QueryAnswer): GeneratedSQLResult | null {
   if (!answer || typeof answer !== 'object' || !('generated' in answer)) return null
@@ -136,6 +158,18 @@ function asFacts(content: unknown): QueryHit[] {
   return content.filter(
     (row): row is QueryHit =>
       !!row && typeof row === 'object' && typeof (row as QueryHit).assertion_id === 'string',
+  )
+}
+
+/** Guarded on `steps`, because a chain with no hops is not a connection and must not draw as one. */
+function asPathList(content: unknown): QueryPath[] {
+  if (!Array.isArray(content)) return []
+  return content.filter(
+    (row): row is QueryPath =>
+      !!row &&
+      typeof row === 'object' &&
+      Array.isArray((row as QueryPath).steps) &&
+      (row as QueryPath).steps.length > 0,
   )
 }
 
@@ -166,6 +200,13 @@ export interface TraceLane {
   sql?: string | null
   rows?: QueryRows | null
   facts?: QueryHit[]
+  /**
+   * Graph lane only: connections assembled from `facts`, two hops or more.
+   *
+   * Not counted by `laneCount`. These are a reading of the facts already counted, so adding them
+   * would report a lane as having returned more than it did.
+   */
+  paths?: QueryPath[]
   passages?: QueryPassage[]
   schema?: CatalogSchemaRef[]
 }
@@ -227,15 +268,16 @@ function skippedTier(lane: string, composed: ComposedResult): number {
 export function lanesFromResult(result: QueryResult): TraceLane[] {
   const rows = asRows(result.answer)
   const facts = asHits(result.answer)
+  const paths = asPaths(result.answer)
   const passages = asPassages(result.answer)
 
   if (result.tier === 1) {
     return [{ ...laneShell('metric'), tier: 1, ran: true, rows, sql: result.sql ?? null }]
   }
-  if (result.tier === 2) return graphFirstLanes(result.answer, facts, passages)
+  if (result.tier === 2) return graphFirstLanes(result.answer, facts, paths, passages)
   if (result.tier === 3) {
     const lanes: TraceLane[] = [{ ...laneShell('passages'), tier: 3, ran: true, passages }]
-    if (facts.length > 0) lanes.push({ ...laneShell('graph'), tier: 3, ran: true, facts })
+    if (facts.length > 0) lanes.push({ ...laneShell('graph'), tier: 3, ran: true, facts, paths })
     const generated = asGenerated(result.answer)
     if (generated) {
       lanes.push({
@@ -268,6 +310,7 @@ export function lanesFromResult(result: QueryResult): TraceLane[] {
 function graphFirstLanes(
   answer: QueryAnswer,
   facts: QueryHit[],
+  paths: QueryPath[],
   passages: QueryPassage[],
 ): TraceLane[] {
   const landed = asLanded(answer)
@@ -276,7 +319,7 @@ function graphFirstLanes(
 
   // Always ran, and shown even with nothing in it. Matching the graph on the question's words is
   // step 1 of this direction, so an empty graph lane is a result and not an absence of one.
-  const lanes: TraceLane[] = [{ ...laneShell('graph'), tier: 2, ran: true, facts }]
+  const lanes: TraceLane[] = [{ ...laneShell('graph'), tier: 2, ran: true, facts, paths }]
 
   lanes.push(
     landed.includes('documents')
@@ -369,7 +412,8 @@ function fromPart(part: AnswerPart): TraceLane {
     sql: part.sql ?? null,
   }
   if (part.lane === 'metric') return { ...base, rows: asRows(part.content as QueryAnswer) }
-  if (part.lane === 'graph') return { ...base, facts: asFacts(part.content) }
+  if (part.lane === 'graph')
+    return { ...base, facts: asFacts(part.content), paths: asPathList(part.paths) }
   if (part.lane === 'passages') return { ...base, passages: asPassageList(part.content) }
   if (part.lane === 'catalog') return { ...base, schema: asSchema(part.content) }
   // `content` is null when the query errored, and the error is what there is to show. Falling
@@ -430,6 +474,8 @@ export interface TraceView {
   lanes: TraceLane[]
   passages: QueryPassage[]
   facts: QueryHit[]
+  /** Multi-hop connections between `facts`, assembled by the server. Empty when none chained up. */
+  paths: QueryPath[]
   blocks: QueryBlock[]
   router: RouterTrace | null
   gate: GateTrace | null
@@ -465,6 +511,7 @@ export function traceOf(kind: string | undefined, result: unknown): TraceView | 
       lanes: lanesFromComposed(composed),
       passages: passagesFromComposed(composed),
       facts: factsFromComposed(composed),
+      paths: pathsFromComposed(composed),
       blocks: composed.blocks ?? [],
       router: composed.router ?? null,
       gate: composed.gate ?? null,
@@ -479,6 +526,7 @@ export function traceOf(kind: string | undefined, result: unknown): TraceView | 
       lanes: lanesFromResult(single),
       passages: asPassages(single.answer),
       facts: asHits(single.answer),
+      paths: asPaths(single.answer),
       blocks: single.blocks ?? [],
       router: single.router ?? null,
       gate: single.gate ?? null,
