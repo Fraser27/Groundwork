@@ -362,12 +362,13 @@ nothing about it is special-cased.
 ### The harder tier: documents built to defeat plain RAG, not just to feed the graph
 
 The four packs above each show one rule with the minimum documents that can carry it. A
-second, harder tier exists for the same three domains — [`sample/legal-multihop-demo.zip`](sample/legal-multihop-demo.zip),
-[`sample/healthcare-multihop-demo.zip`](sample/healthcare-multihop-demo.zip), and
-[`sample/fintech-multihop-demo.zip`](sample/fintech-multihop-demo.zip) — where every document
+second, harder tier exists for all four domains — [`sample/legal-multihop-demo.zip`](sample/legal-multihop-demo.zip),
+[`sample/healthcare-multihop-demo.zip`](sample/healthcare-multihop-demo.zip),
+[`sample/fintech-multihop-demo.zip`](sample/fintech-multihop-demo.zip), and
+[`sample/retail-multihop-demo.zip`](sample/retail-multihop-demo.zip) — where every document
 runs two to three pages and each pack's rule is walked to the full depth its ontology allows
-(`AFFILIATE_OF*1..3`, `CONTROLS*1..3`), with the premises spread across four or five documents
-instead of two or three.
+(`AFFILIATE_OF*1..3`, `CONTROLS*1..3`, `SUPERSEDES`), with the premises spread across three to
+eight documents instead of two or three.
 
 The point of this tier is that a nearest-neighbour hit over chunks cannot get the right
 answer even by luck. Each pack plants a name that is lexically close to a real entity but

@@ -35,6 +35,9 @@ Each pack still interlocks on real rules from `ontologies/*.yaml`:
              a same-chart CONTRAINDICATED_WITH pair that needs a fourth document to assert
   fintech    group_exposure_via_control (CONTROLS*1..3, three links, at the bound) +
              related_party_lending (three premises)
+  retail     exception_on_superseded_policy (SUPERSEDES, two-link revision chain) +
+             exception_during_investigation, with a status note that states the wrong
+             conclusion + related_party_resale (CONTROLS*1..3, three links, at the bound)
 
     .venv/bin/python sample/generate_multihop_demo_pdfs.py
 """
@@ -924,10 +927,409 @@ FINTECH: dict[str, Document] = {
     ],
 }
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# RETAIL — the AnyCorp dataset from `generate_retail_demo_pdfs.py`, taken to full depth.
+#
+# `exception_on_superseded_policy` walked two links instead of one: the Electronics
+# opened-returns provision was amended in 2025 before Policy Bulletin 2026-03 withdrew it
+# outright, and the desk's approval cites the original 2024 wording -- one step further back
+# than either supersession record names on its own. `SUPERSEDES` chains "the 2026 bulletin
+# supersedes the 2025 amendment, which supersedes the 2024 clause" across three documents, none
+# of which mentions the approval, and the approval mentions none of them by date.
+#
+# `related_party_resale` walked three links instead of two: Sam Parker controls Northgate
+# Holdings, which was restructured under an intermediate vehicle, Aldergate Ventures, which in
+# turn controls PixelPerfect Resale -- exactly at the ontology's *1..3 bound. Each link is
+# asserted in a different document than the others and than the seller-approval fact.
+#
+# The decoy: PixelPerfect Resale (the real, controlled storefront) vs PixelPerfect Returns
+# Direct (an unrelated AnyCorp-operated clearance channel, disambiguated only in the seller
+# directory extract most likely to be retrieved by a search for "PixelPerfect").
+#
+# The wrong conclusion: a case status note, filed after the goodwill approval, states outright
+# that "no exception has been granted to Sam Parker while case LP-2026-0088 has been open" --
+# true of every case file the analyst checked, and wrong about the one approval that a
+# different desk, in a different system, granted nine days earlier.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+RETAIL: dict[str, Document] = {
+    "AC-POL-2024-11-electronics-provision.pdf": [
+        [
+            ("head", "ANYCORP RETAIL"),
+            ("body", "Return Policy Manual 2024 -- Section 2, Return Windows by Category"),
+            ("space", ""),
+            ("sub", "PROVISION 2.4 -- ELECTRONICS, OPENED"),
+            ("body", "Reference: AC-POL-2024-11"),
+            ("body", "Issued: 3 June 2024"),
+            ("body", "Effective: 1 July 2024"),
+            ("body", "Issued by: Priya Kandasamy, Director of Returns Policy"),
+            ("space", ""),
+            ("sub", "1. THE PROVISION"),
+            (
+                "body",
+                "An opened electronics item may be returned within 30 days of the purchase date "
+                "subject to a 10% restocking fee. This is Provision 2.4 of the Return Policy "
+                "Manual 2024, the Electronics opened-returns provision.",
+            ),
+            ("space", ""),
+            ("sub", "2. RATIONALE"),
+            (
+                "body",
+                "The 30-day window aligns Electronics with the general merchandise window "
+                "elsewhere in Section 2. The 10% fee reflects the depreciation on an opened "
+                "electronics item observed in the 2023 markdown data.",
+            ),
+        ],
+        [
+            ("sub", "Provision 2.4 -- continued"),
+            ("sub", "3. SCOPE"),
+            (
+                "body",
+                "This provision applies to all electronics categories carried by AnyCorp "
+                "Retail, in store, online and through the contact centre. Unopened electronics "
+                "are governed separately by Provision 2.1 and are not affected here.",
+            ),
+            ("space", ""),
+            ("body", "Priya Kandasamy, Director of Returns Policy, AnyCorp Retail"),
+        ],
+    ],
+    "AC-POL-2025-07-electronics-amendment.pdf": [
+        [
+            ("head", "ANYCORP RETAIL"),
+            ("body", "Returns and Customer Care -- Policy Amendment"),
+            ("space", ""),
+            ("sub", "AMENDMENT AC-POL-2025-07"),
+            ("body", "Reference: AC-POL-2025-07"),
+            ("body", "Issued: 2 September 2025"),
+            ("body", "Effective: 16 September 2025"),
+            ("body", "Issued by: Delia Marchetti, Director of Returns Policy"),
+            ("space", ""),
+            ("sub", "1. PURPOSE"),
+            (
+                "body",
+                "Amendment AC-POL-2025-07 tightens the Electronics opened-returns provision "
+                "following the 2025 mid-year review of return rates by category.",
+            ),
+            ("space", ""),
+            ("sub", "2. PROVISION SUPERSEDED"),
+            (
+                "body",
+                "Amendment AC-POL-2025-07 supersedes Provision 2.4 of the Return Policy Manual "
+                "2024, the Electronics opened-returns provision, issued 3 June 2024. That "
+                "provision allowed a 30-day window at a 10% restocking fee. It is withdrawn in "
+                "full and replaced with the provision below.",
+            ),
+            ("space", ""),
+            ("sub", "3. PROVISION SUBSTITUTED"),
+            (
+                "body",
+                "An opened electronics item may be returned within 14 days of the purchase date "
+                "subject to a 15% restocking fee. This becomes the new Provision 2.4 of the "
+                "Return Policy Manual 2025.",
+            ),
+        ],
+        [
+            ("sub", "Amendment AC-POL-2025-07 -- continued"),
+            ("sub", "4. EFFECT ON OPEN RETURNS"),
+            (
+                "body",
+                "A return lodged before 16 September 2025 is assessed under the 2024 wording. A "
+                "return lodged on or after that date is assessed under the 14-day, 15% wording "
+                "above.",
+            ),
+            ("space", ""),
+            ("body", "Delia Marchetti, Director of Returns Policy, AnyCorp Retail"),
+        ],
+    ],
+    "LP-2026-0088-return-approval.pdf": [
+        [
+            ("head", "ANYCORP RETAIL"),
+            ("body", "Returns Desk -- Goodwill Approval Record"),
+            ("space", ""),
+            ("sub", "RETURN APPROVAL RTN-2026-00912"),
+            ("body", "Date: 16 March 2026"),
+            ("body", "Customer: Sam Parker, account 47"),
+            ("body", "Order: ORD-2026-04417, placed 2 March 2026"),
+            ("body", "Item: Bose Headphones, 299.99 USD, opened, all accessories present"),
+            ("body", "Approved by: Curtis Lindgren, Returns Desk Supervisor"),
+            ("space", ""),
+            ("sub", "1. DECISION"),
+            (
+                "body",
+                "Return RTN-2026-00912 is approved in favour of Sam Parker. The full purchase "
+                "price of 299.99 USD is refunded to the original payment method. The 10% "
+                "restocking fee is waived in full as a goodwill gesture.",
+            ),
+            ("space", ""),
+            ("sub", "2. AUTHORITY RELIED ON"),
+            (
+                "body",
+                "This approval is made under Provision 2.4 of the Return Policy Manual 2024, "
+                "the Electronics opened-returns provision: a 30-day window from the purchase "
+                "date, subject to a 10% restocking fee. Return RTN-2026-00912 was lodged 14 "
+                "days after purchase and so falls inside that window.",
+            ),
+            (
+                "body",
+                "The 10% restocking fee of 30.00 USD is waived under the Refund Adjustments "
+                "note at Section 4, which permits a fee to be waived where a supervisor records "
+                "a reason. The reason recorded is customer goodwill.",
+            ),
+        ],
+        [
+            ("sub", "Approval RTN-2026-00912 -- continued"),
+            ("sub", "3. CUSTOMER STANDING"),
+            (
+                "body",
+                "Sam Parker is described on the account as a long-standing customer at Silver "
+                "loyalty tier with a lifetime value of 12,450 USD. The desk treated that "
+                "history as the reason for goodwill.",
+            ),
+            ("space", ""),
+            ("sub", "4. CHECKS PERFORMED"),
+            (
+                "body",
+                "Receipt verified. Serial number matched the receipt. Packaging intact. No "
+                "manager escalation was raised and no loss prevention check was requested.",
+            ),
+            ("space", ""),
+            ("body", "Curtis Lindgren, Returns Desk Supervisor, Store 118, Omaha NE"),
+        ],
+    ],
+    "LP-2026-0088-investigation-memo.pdf": [
+        [
+            ("head", "ANYCORP RETAIL -- LOSS PREVENTION"),
+            ("body", "Confidential. Internal distribution only."),
+            ("space", ""),
+            ("sub", "CASE OPENING MEMORANDUM"),
+            ("body", "Case: LP-2026-0088"),
+            ("body", "Opened: 6 March 2026"),
+            ("body", "Subject: Sam Parker, account 47, 980 Maple St, Omaha, NE 68101"),
+            ("body", "Prepared by: Ada Okonjo, Loss Prevention Analyst"),
+            ("space", ""),
+            ("sub", "1. GROUND FOR OPENING"),
+            (
+                "body",
+                "Case LP-2026-0088 investigates Sam Parker for suspected return abuse. The "
+                "ground is the red flag at Section 6 of the Return Policy Manual 2025, Red "
+                "Flags for Fraudulent Returns, item 2: \"Pattern of returning high-value "
+                "electronics\".",
+            ),
+            (
+                "body",
+                "Sam Parker has nineteen recorded purchases and eight returns, a return rate of "
+                "42.10%. The account carries a fraud risk score of 85 and its status is under "
+                "review. Three suspicious-activity notes are on file.",
+            ),
+            ("space", ""),
+            ("sub", "2. PATTERN"),
+            (
+                "body",
+                "Every one of the eight returns was an electronics item in opened condition. "
+                "Seven of the eight were lodged on day 13 or day 14 of the 14-day opened "
+                "window. The items were a Samsung 65\" QLED TV on three separate occasions, an "
+                "Apple iPhone 15 Pro twice, a Sony PlayStation 5, a MacBook Pro 14\" and a set "
+                "of Bose Headphones.",
+            ),
+        ],
+        [
+            ("sub", "Case LP-2026-0088 -- continued"),
+            ("sub", "3. WHAT THIS MEMORANDUM DOES NOT SAY"),
+            (
+                "body",
+                "No conclusion is drawn. Sam Parker has not been notified and no privilege is "
+                "suspended. Case LP-2026-0088 remains open pending review of the resale enquiry "
+                "running separately.",
+            ),
+            ("space", ""),
+            ("body", "Ada Okonjo, Loss Prevention Analyst"),
+        ],
+    ],
+    "LP-2026-0088-case-status-note.pdf": [
+        [
+            ("head", "ANYCORP RETAIL -- LOSS PREVENTION"),
+            ("body", "Confidential. Internal distribution only."),
+            ("space", ""),
+            ("sub", "CASE STATUS NOTE"),
+            ("body", "Case: LP-2026-0088"),
+            ("body", "Note date: 25 March 2026"),
+            ("body", "Prepared by: Ada Okonjo, Loss Prevention Analyst"),
+            ("space", ""),
+            ("sub", "1. CURRENT STATUS"),
+            (
+                "body",
+                "Case LP-2026-0088 remains open. Ownership records requested from Marketplace "
+                "Onboarding on 12 March 2026 have not yet been received.",
+            ),
+            ("space", ""),
+            ("sub", "2. EXCEPTIONS DURING THE OPEN PERIOD"),
+            (
+                "body",
+                "This analyst has reviewed the returns desk exception log for Sam Parker "
+                "covering 6 March 2026 to 25 March 2026. No exception has been granted to Sam "
+                "Parker while case LP-2026-0088 has been open. The account has had no return "
+                "activity since the case opened.",
+            ),
+        ],
+        [
+            ("sub", "Case LP-2026-0088 -- continued"),
+            ("sub", "3. NOTE ON SCOPE"),
+            (
+                "body",
+                "The returns desk exception log reviewed for this note covers Store 118's own "
+                "system. Goodwill approvals recorded directly on an order by a store "
+                "supervisor, rather than routed through the exception log, are outside what "
+                "this analyst checked.",
+            ),
+            ("space", ""),
+            ("body", "Ada Okonjo, Loss Prevention Analyst"),
+        ],
+    ],
+    "MEM-2026-0231-merchant-onboarding-pixelperfect.pdf": [
+        [
+            ("head", "ANYCORP MARKETPLACE"),
+            ("body", "Seller Onboarding -- Approval Memorandum"),
+            ("space", ""),
+            ("sub", "SELLER APPROVAL MEM-2026-0231"),
+            ("body", "Date: 11 February 2026"),
+            ("body", "Seller: PixelPerfect Resale"),
+            ("body", "Category: Electronics, refurbished and open-box"),
+            ("body", "Prepared by: Naomi Ferreira, Marketplace Onboarding"),
+            ("space", ""),
+            ("sub", "1. APPROVAL"),
+            (
+                "body",
+                "PixelPerfect Resale is approved to trade on AnyCorp Marketplace from 18 "
+                "February 2026. PixelPerfect Resale sells refurbished consumer electronics. The "
+                "listings submitted at application were a Samsung 65\" QLED TV, an Apple "
+                "iPhone 15 Pro and a Sony PlayStation 5, all described as open-box.",
+            ),
+            ("space", ""),
+            ("sub", "2. OWNERSHIP"),
+            (
+                "body",
+                "PixelPerfect Resale is wholly owned by Aldergate Ventures. Aldergate Ventures "
+                "controls PixelPerfect Resale and holds no other subsidiary. Aldergate Ventures "
+                "is itself a non-trading company; ownership above Aldergate Ventures is a "
+                "matter for the group registry and is not addressed further in this "
+                "memorandum.",
+            ),
+        ],
+        [
+            ("sub", "Approval MEM-2026-0231 -- continued"),
+            ("sub", "3. REGISTERED ADDRESS"),
+            (
+                "body",
+                "PixelPerfect Resale's registered address is 980 Maple St, Omaha, NE 68101. "
+                "Aldergate Ventures' registered address was not supplied at application and is "
+                "not on file with Marketplace Onboarding.",
+            ),
+            ("space", ""),
+            ("sub", "4. CHECKS PERFORMED"),
+            (
+                "body",
+                "Company registration verified. Bank account verified in the name of "
+                "PixelPerfect Resale. Tax identifier supplied. Onboarding does not screen a "
+                "declared beneficial owner against the customer file, and no such check was "
+                "performed here.",
+            ),
+            ("space", ""),
+            ("body", "Naomi Ferreira, Marketplace Onboarding, AnyCorp Marketplace"),
+        ],
+    ],
+    "AC-REG-2026-04-seller-directory-extract.pdf": [
+        [
+            ("head", "ANYCORP MARKETPLACE"),
+            ("body", "Seller Directory -- Corporate Registry Extract"),
+            ("space", ""),
+            ("body", "Reference: AC-REG-2026-04"),
+            ("body", "Extract date: 20 March 2026"),
+            ("body", "Obtained for: Loss Prevention, Case LP-2026-0088 (ownership enquiry)"),
+            ("body", "Prepared by: Marketplace Legal and Registrations"),
+            ("space", ""),
+            ("sub", "1. ALDERGATE VENTURES"),
+            (
+                "body",
+                "Aldergate Ventures is a non-trading holding company. Aldergate Ventures "
+                "controls PixelPerfect Resale, holding the entire issued share capital. "
+                "Aldergate Ventures holds no other interest.",
+            ),
+            (
+                "body",
+                "Aldergate Ventures is wholly owned by Northgate Holdings. Northgate Holdings "
+                "controls Aldergate Ventures and holds no other subsidiary directly; its "
+                "interest in PixelPerfect Resale, if any, is held through Aldergate Ventures "
+                "rather than in its own name.",
+            ),
+        ],
+        [
+            ("sub", "Extract AC-REG-2026-04 -- continued"),
+            ("sub", "2. NOTE ON SIMILAR NAMES"),
+            (
+                "body",
+                "PixelPerfect Resale (registered seller, wholly owned by Aldergate Ventures) "
+                "should not be confused with PixelPerfect Returns Direct, an AnyCorp-operated "
+                "clearance channel for customer returns that is not a third-party seller and "
+                "has no ownership link to Aldergate Ventures, Northgate Holdings or any "
+                "customer account.",
+            ),
+            ("space", ""),
+            ("sub", "3. FILING HISTORY"),
+            (
+                "body",
+                "Aldergate Ventures was incorporated on 4 January 2026 and acquired "
+                "PixelPerfect Resale on 18 January 2026, before Marketplace Onboarding's "
+                "approval of 11 February 2026. No change of ownership recorded since.",
+            ),
+            ("space", ""),
+            ("body", "Extract certified by Marketplace Legal and Registrations."),
+        ],
+    ],
+    "LP-2026-0088-northgate-ownership-note.pdf": [
+        [
+            ("head", "ANYCORP RETAIL -- LOSS PREVENTION"),
+            ("body", "Confidential. Internal distribution only."),
+            ("space", ""),
+            ("sub", "OWNERSHIP FOLLOW-UP NOTE"),
+            ("body", "Case: LP-2026-0088"),
+            ("body", "Note date: 2 April 2026"),
+            ("body", "Prepared by: Ada Okonjo, Loss Prevention Analyst"),
+            ("space", ""),
+            ("sub", "1. NORTHGATE HOLDINGS"),
+            (
+                "body",
+                "Northgate Holdings is a non-trading company whose sole director is Sam "
+                "Parker. Sam Parker controls Northgate Holdings. No further beneficial owner "
+                "is declared on Northgate Holdings' own filing.",
+            ),
+            (
+                "body",
+                "Northgate Holdings and PixelPerfect Resale share no registered address on "
+                "file; the ownership link between them runs through Aldergate Ventures, per "
+                "the registry extract obtained 20 March 2026.",
+            ),
+        ],
+        [
+            ("sub", "Ownership follow-up -- continued"),
+            ("sub", "2. STATUS"),
+            (
+                "body",
+                "This note supplies the ownership link above Aldergate Ventures that "
+                "Marketplace Onboarding's own file did not address. No conclusion is drawn "
+                "here; the resale enquiry referenced in the case opening memorandum remains "
+                "open.",
+            ),
+            ("space", ""),
+            ("body", "Ada Okonjo, Loss Prevention Analyst"),
+        ],
+    ],
+}
+
 PACKS: dict[str, dict[str, Document]] = {
     "legal": LEGAL,
     "healthcare": HEALTHCARE,
     "fintech": FINTECH,
+    "retail": RETAIL,
 }
 
 

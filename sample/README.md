@@ -16,6 +16,7 @@ see the main README.
 | Legal | [`legal-multihop-demo.zip`](legal-multihop-demo.zip) | 5 | 11 | `conflict_via_affiliate` (`AFFILIATE_OF*1..3`, 2 links), `authority_stale` |
 | Healthcare | [`healthcare-multihop-demo.zip`](healthcare-multihop-demo.zip) | 4 | 9 | `contraindication_via_ingredient`, across two encounters |
 | Fintech | [`fintech-multihop-demo.zip`](fintech-multihop-demo.zip) | 5 | 11 | `group_exposure_via_control` (`CONTROLS*1..3`, 3 links, at the bound), `related_party_lending` |
+| Retail | [`retail-multihop-demo.zip`](retail-multihop-demo.zip) | 8 | 16 | `exception_on_superseded_policy` (`SUPERSEDES`, 2-link revision chain), `exception_during_investigation`, `related_party_resale` (`CONTROLS*1..3`, 3 links, at the bound) |
 
 Regenerate after editing the content:
 
@@ -123,6 +124,43 @@ see the graph answer trace back through its premises.
   and beside the point the rule exists to surface. `related_party_lending` combines
   `LENDS_TO` + `GUARANTEES` + `RELATED_PARTY_OF` from three documents to conclude
   `(FAC-2026-0512)-[:UNDISCLOSED_RELATED_LENDING]->(Solenne Freight Logistics BV)`.
+
+### Retail (`retail-multihop-demo.zip`)
+
+- **"Does the return approval for Sam Parker rely on a policy provision that has since been
+  superseded?"**
+  The approval cites Provision 2.4 of the Return Policy Manual 2024 — a 30-day window, 10% fee
+  — issued in `AC-POL-2024-11-electronics-provision.pdf`. Neither the approval nor that
+  provision mentions what happened next: `AC-POL-2025-07-electronics-amendment.pdf` supersedes
+  the 2024 wording with a stricter 14-day, 15% version, over a year before the approval is
+  written. A plain-RAG search for "return approval" or "Provision 2.4" surfaces the approval
+  and the 2024 provision, which agree with each other and look routine together — the
+  amendment shares no obvious keyword overlap with either. `exception_on_superseded_policy`
+  walks `SUPERSEDES` and finds the withdrawal a keyword match never would.
+- **"Has a policy exception been granted to Sam Parker while case LP-2026-0088 has been
+  open?"**
+  Yes, and the one document that directly answers "have any exceptions been granted" says
+  the opposite. `LP-2026-0088-case-status-note.pdf`, filed 25 March 2026, states plainly that
+  "no exception has been granted to Sam Parker while case LP-2026-0088 has been open" — true
+  of the exception log the analyst checked, and silent about the goodwill approval a *different*
+  desk recorded directly on the order nine days after the case opened, in
+  `LP-2026-0088-return-approval.pdf`. A system that trusts the most on-topic-looking sentence
+  repeats the status note's denial. `exception_during_investigation` joins the case-opening
+  memo and the approval letter directly and does not need the status note at all — which is
+  exactly why the status note is worth asking about separately.
+- **"Does Sam Parker control a marketplace seller AnyCorp pays out to?"**
+  Yes, three links away. `MEM-2026-0231-merchant-onboarding-pixelperfect.pdf` shows only
+  PixelPerfect Resale owned by Aldergate Ventures, and stops there. The next link — Aldergate
+  Ventures owned by Northgate Holdings — is only in `AC-REG-2026-04-seller-directory-extract.pdf`.
+  The last link — Sam Parker controls Northgate Holdings — is only in
+  `LP-2026-0088-northgate-ownership-note.pdf`, a document that itself draws no conclusion.
+  `related_party_resale` walks `CONTROLS*1..3` across all three documents and concludes
+  `(LP-2026-0088)-[:RELATED_PARTY_RESALE]->(PixelPerfect Resale)`.
+- **"Is PixelPerfect Returns Direct connected to Sam Parker's case?"**
+  It is not — that is the decoy. `PixelPerfect Returns Direct` is AnyCorp's own clearance
+  channel, lexically close enough to `PixelPerfect Resale` to collide in a similarity search,
+  and disambiguated only in the seller directory extract, the one document a search for
+  "PixelPerfect" is most likely to retrieve.
 
 ## What a plain-RAG answer looks like on each
 
