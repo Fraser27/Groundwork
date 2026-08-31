@@ -7,8 +7,10 @@
 # on purpose -- it is the one step a workshop participant should do themselves, and the script
 # prints the exact commands at the end.
 #
-#   ./scripts/deploy.sh                 # us-east-1
+#   ./scripts/deploy.sh                 # us-east-1, grants S3 read on workshop* by default
 #   ./scripts/deploy.sh eu-west-1       # or REGION=eu-west-1 ./scripts/deploy.sh
+#   DATA_BUCKETS=my-other-lake ./scripts/deploy.sh   # override which buckets to grant
+#   DATA_BUCKETS="" ./scripts/deploy.sh              # opt out, leave cdk.json untouched
 #
 # Non-interactive by design: no prompts, no --require-approval, and every precondition is checked
 # before the first 25-minute deploy rather than discovered inside it.
@@ -16,6 +18,14 @@
 set -euo pipefail
 REGION="${1:-${REGION:-us-east-1}}"
 HOME_TENANT="${HOME_TENANT:-demo-firm}"
+# Comma-separated bucket names (or globs, e.g. "workshop*") behind the Glue tables this
+# deployment queries -- see `dataBuckets` in cdk/lib/config.ts. Defaults to "workshop*"
+# because this script targets the workshop account, whose lake lives in a bucket named
+# `workshop-data-<account>-<region>`; `config.ts` itself still treats an *unset* value as
+# `[]` for anyone invoking CDK directly, so this default only widens what this
+# convenience script does, not what the stack assumes. Pass DATA_BUCKETS="" to opt out
+# and leave whatever is already in cdk.json untouched.
+DATA_BUCKETS="${DATA_BUCKETS:-workshop*}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CDK_DIR="$REPO_ROOT/cdk"
 CDK_JSON="$CDK_DIR/cdk.json"
@@ -191,6 +201,16 @@ PY
 
 set_context availabilityZones "[\"$AZ_A\", \"$AZ_B\"]"
 set_context homeTenant "\"$HOME_TENANT\""
+
+# Only touched when DATA_BUCKETS is non-empty, so `DATA_BUCKETS=""` opts all the way out
+# and leaves whatever is already in cdk.json alone instead of this script clobbering it.
+if [ -n "$DATA_BUCKETS" ]; then
+  DATA_BUCKETS_JSON="$(python3 -c '
+import json, sys
+print(json.dumps([b.strip() for b in sys.argv[1].split(",") if b.strip()]))
+' "$DATA_BUCKETS")"
+  set_context dataBuckets "$DATA_BUCKETS_JSON"
+fi
 
 # ── 5. Install and bootstrap ────────────────────────────────────────────────────
 say "Installing CDK dependencies"
