@@ -149,13 +149,19 @@ see the graph answer trace back through its premises.
   memo and the approval letter directly and does not need the status note at all — which is
   exactly why the status note is worth asking about separately.
 - **"Does Sam Parker control a marketplace seller AnyCorp pays out to?"**
-  Yes, three links away. `MEM-2026-0231-merchant-onboarding-pixelperfect.pdf` shows only
-  PixelPerfect Resale owned by Aldergate Ventures, and stops there. The next link — Aldergate
-  Ventures owned by Northgate Holdings — is only in `AC-REG-2026-04-seller-directory-extract.pdf`.
-  The last link — Sam Parker controls Northgate Holdings — is only in
-  `LP-2026-0088-northgate-ownership-note.pdf`, a document that itself draws no conclusion.
-  `related_party_resale` walks `CONTROLS*1..3` across all three documents and concludes
-  `(LP-2026-0088)-[:RELATED_PARTY_RESALE]->(PixelPerfect Resale)`.
+  Yes, three links away, and no single document — or pair of documents — names both ends.
+  `MEM-2026-0231-merchant-onboarding-pixelperfect.pdf` asserts only that PixelPerfect Resale
+  is owned by Aldergate Ventures, and explicitly declines to address anything above Aldergate
+  Ventures. The next link — Aldergate Ventures owned by Northgate Holdings — is asserted only
+  in `AC-REG-2026-04-seller-directory-extract.pdf`, which was obtained to establish who holds
+  Aldergate Ventures, not what Aldergate Ventures holds, and does not restate the PixelPerfect
+  link. The last link — Sam Parker controls Northgate Holdings — is asserted only in
+  `LP-2026-0088-northgate-ownership-note.pdf`, which draws no conclusion and never mentions
+  PixelPerfect, Aldergate Ventures, or Marketplace at all. Neither `PixelPerfect` nor
+  `Aldergate Ventures` nor `Northgate Holdings` appears in more than two of the three
+  documents, and no single document contains both `Sam Parker` and `PixelPerfect` — the chain
+  exists only once all three are joined. `related_party_resale` walks `CONTROLS*1..3` across
+  all three and concludes `(LP-2026-0088)-[:RELATED_PARTY_RESALE]->(PixelPerfect Resale)`.
 - **"Is PixelPerfect Returns Direct connected to Sam Parker's case?"**
   It is not — that is the decoy. `PixelPerfect Returns Direct` is AnyCorp's own clearance
   channel, lexically close enough to `PixelPerfect Resale` to collide in a similarity search,

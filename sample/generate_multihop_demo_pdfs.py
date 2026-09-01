@@ -1220,9 +1220,9 @@ RETAIL: dict[str, Document] = {
             ("sub", "3. REGISTERED ADDRESS"),
             (
                 "body",
-                "PixelPerfect Resale's registered address is 980 Maple St, Omaha, NE 68101. "
-                "Aldergate Ventures' registered address was not supplied at application and is "
-                "not on file with Marketplace Onboarding.",
+                "PixelPerfect Resale's registered address is 4410 Distribution Way, Council "
+                "Bluffs, IA 51501. Aldergate Ventures' registered address was not supplied at "
+                "application and is not on file with Marketplace Onboarding.",
             ),
             ("space", ""),
             ("sub", "4. CHECKS PERFORMED"),
@@ -1250,16 +1250,16 @@ RETAIL: dict[str, Document] = {
             ("sub", "1. ALDERGATE VENTURES"),
             (
                 "body",
-                "Aldergate Ventures is a non-trading holding company. Aldergate Ventures "
-                "controls PixelPerfect Resale, holding the entire issued share capital. "
-                "Aldergate Ventures holds no other interest.",
+                "Aldergate Ventures is a non-trading holding company incorporated on 4 January "
+                "2026. Its own trading interests, if any, are not addressed in this extract, "
+                "which was obtained to establish who holds Aldergate Ventures rather than what "
+                "Aldergate Ventures holds.",
             ),
             (
                 "body",
-                "Aldergate Ventures is wholly owned by Northgate Holdings. Northgate Holdings "
-                "controls Aldergate Ventures and holds no other subsidiary directly; its "
-                "interest in PixelPerfect Resale, if any, is held through Aldergate Ventures "
-                "rather than in its own name.",
+                "Aldergate Ventures is wholly owned by Northgate Holdings, which holds the "
+                "entire issued share capital and appoints Aldergate Ventures' sole director. "
+                "Northgate Holdings holds no other subsidiary directly.",
             ),
         ],
         [
@@ -1267,19 +1267,17 @@ RETAIL: dict[str, Document] = {
             ("sub", "2. NOTE ON SIMILAR NAMES"),
             (
                 "body",
-                "PixelPerfect Resale (registered seller, wholly owned by Aldergate Ventures) "
-                "should not be confused with PixelPerfect Returns Direct, an AnyCorp-operated "
-                "clearance channel for customer returns that is not a third-party seller and "
-                "has no ownership link to Aldergate Ventures, Northgate Holdings or any "
-                "customer account.",
+                "PixelPerfect Resale, a registered AnyCorp Marketplace seller, should not be "
+                "confused with PixelPerfect Returns Direct, an AnyCorp-operated clearance "
+                "channel for customer returns that is not a third-party seller and does not "
+                "appear on this extract or in any seller approval on file.",
             ),
             ("space", ""),
             ("sub", "3. FILING HISTORY"),
             (
                 "body",
-                "Aldergate Ventures was incorporated on 4 January 2026 and acquired "
-                "PixelPerfect Resale on 18 January 2026, before Marketplace Onboarding's "
-                "approval of 11 February 2026. No change of ownership recorded since.",
+                "Northgate Holdings acquired Aldergate Ventures on 4 January 2026, the date of "
+                "Aldergate Ventures' incorporation. No change of ownership recorded since.",
             ),
             ("space", ""),
             ("body", "Extract certified by Marketplace Legal and Registrations."),
@@ -1304,9 +1302,8 @@ RETAIL: dict[str, Document] = {
             ),
             (
                 "body",
-                "Northgate Holdings and PixelPerfect Resale share no registered address on "
-                "file; the ownership link between them runs through Aldergate Ventures, per "
-                "the registry extract obtained 20 March 2026.",
+                "Northgate Holdings' registered address is 980 Maple St, Omaha, NE 68101, "
+                "which matches the address on Sam Parker's customer account.",
             ),
         ],
         [
@@ -1314,9 +1311,10 @@ RETAIL: dict[str, Document] = {
             ("sub", "2. STATUS"),
             (
                 "body",
-                "This note supplies the ownership link above Aldergate Ventures that "
-                "Marketplace Onboarding's own file did not address. No conclusion is drawn "
-                "here; the resale enquiry referenced in the case opening memorandum remains "
+                "This note responds to a request from the resale enquiry referenced in the "
+                "case opening memorandum, which asked whether Sam Parker holds an interest in "
+                "any non-trading company. Northgate Holdings has no dealings with AnyCorp "
+                "Marketplace of its own. No conclusion is drawn here; the enquiry remains "
                 "open.",
             ),
             ("space", ""),
