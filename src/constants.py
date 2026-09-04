@@ -45,19 +45,29 @@ DEFAULT_CHUNK_OVERLAP_CHARS = 200
 DEFAULT_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 DEFAULT_EMBEDDING_DIMENSIONS = 1024
 
-#: Every default is Nova 2 Lite, so the system runs without access to Anthropic models. It is
-#: reachable in accounts where Claude is not enabled, which is what a workshop needs, and it is the
-#: cheapest thing on the list.
+#: The cheap model, used where the work is mechanical rather than interpretive. Needs no access to
+#: Anthropic models, so the paths that use it run in an account where Claude is not enabled.
 #:
-#: The trade is real and worth stating: Nova is weaker at deciding what a passage *means*, which is
-#: extraction's whole job. Expect more claims a reviewer has to correct, and more that read as
-#: plausible rather than supported. Every model here is settable per tenant in Admin, and the
-#: `method` string on each assertion records which model produced it, so raising extraction back to
-#: Sonnet later does not orphan anything already extracted.
-#:
-#: Verified against the deployment account before switching: Nova 2 Lite returns clean JSON to a
-#: JSON-only instruction, and accepts an image block, which OCR depends on.
+#: Verified against the deployment account: Nova 2 Lite returns clean JSON to a JSON-only
+#: instruction, and accepts an image block, which OCR depends on.
 DEFAULT_TEXT_MODEL = "global.amazon.nova-2-lite-v1:0"
+
+#: The default wherever a model decides what a passage *means*: extraction, synthesis, tier 3 SQL
+#: and the Retrieval loop.
+#:
+#: Nova 2 Lite held these until 2026-09-04, and the cost was not just weaker prose. Extracting the
+#: retail demo it wrote `company:pixelperfect-resale` where the CONTROLS chain needs
+#: `merchant:pixelperfect-resale`, and since the kind is half an entity id that is a different
+#: node. Both writes are legal under the predicate's range, so nothing rejected either one; the
+#: only symptom was a reasoner rule reporting premises that never joined. Choosing the entity kind
+#: is what a small model is worst at and what the graph is least able to survive.
+#:
+#: The trade: in an account without Anthropic model access these paths now fail outright rather
+#: than running weakly. That is the better failure, because it surfaces at the first upload instead
+#: of as a graph that looks populated and infers nothing. Every model here is settable per tenant
+#: in Admin, and the `method` string on each assertion records which model produced it, so moving
+#: this either way does not orphan anything already extracted.
+DEFAULT_REASONING_MODEL = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
 #: Page transcription. A vision model rather than Textract because a legal document carries meaning
 #: in charts, org charts, signature blocks and handwriting, which OCR returns nothing for. Reading
@@ -77,8 +87,8 @@ MAX_CONCURRENT_INGESTS = 4
 
 #: Extraction models. The versioned `method` string on each assertion records
 #: which one produced it, so these can change without orphaning past extractions.
-DEFAULT_EXTRACTION_MODEL = DEFAULT_TEXT_MODEL
-DEFAULT_SYNTHESIS_MODEL = DEFAULT_TEXT_MODEL
+DEFAULT_EXTRACTION_MODEL = DEFAULT_REASONING_MODEL
+DEFAULT_SYNTHESIS_MODEL = DEFAULT_REASONING_MODEL
 
 #: Text models an administrator may choose between, with what the trade-off is.
 #:
@@ -94,13 +104,12 @@ DEFAULT_SYNTHESIS_MODEL = DEFAULT_TEXT_MODEL
 #: comparing against, and the notes say what moving away from it buys.
 SELECTABLE_MODELS: tuple[tuple[str, str, str], ...] = (
     (
-        DEFAULT_TEXT_MODEL,
-        "Amazon Nova 2 Lite",
+        DEFAULT_REASONING_MODEL,
+        "Claude Sonnet 4.5",
         (
-            "The default everywhere, and the cheapest. Needs no access to Anthropic models. "
-            "Weaker at judging what a passage means, so expect more extracted claims a reviewer "
-            "has to correct, and watch the Retrieval transcript: a small model calls tools with "
-            "wrong arguments more often."
+            "The default for extraction, synthesis and queries. A generation back, cheaper than "
+            "Sonnet 4.6, and it picks the right entity kind reliably, which decides whether two "
+            "documents naming one thing land on one node or two."
         ),
     ),
     (
@@ -114,20 +123,23 @@ SELECTABLE_MODELS: tuple[tuple[str, str, str], ...] = (
         "Close to Sonnet 5 and usually cheaper.",
     ),
     (
-        "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "Claude Sonnet 4.5",
-        (
-            "A generation back and still strong at extraction. Picks the right entity kind far "
-            "more reliably than the smaller models, which decides whether two documents naming "
-            "one thing land on one node or two."
-        ),
-    ),
-    (
         "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "Claude Haiku 4.5",
         (
             "Between Nova and Sonnet. Good for transcription and straightforward extraction, "
             "weaker at judging what a passage means."
+        ),
+    ),
+    (
+        DEFAULT_TEXT_MODEL,
+        "Amazon Nova 2 Lite",
+        (
+            "The cheapest, and the only one needing no access to Anthropic models. It is the "
+            "default for page transcription, where the work is mechanical. Choosing it for "
+            "extraction is a real downgrade: it names the same entity two ways within one "
+            "document, which splits a node and leaves reasoner rules with premises that never "
+            "join. Watch the Retrieval transcript too, since a small model calls tools with wrong "
+            "arguments more often."
         ),
     ),
 )

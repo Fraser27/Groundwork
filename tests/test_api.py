@@ -1139,6 +1139,16 @@ class TestSettingsProjectsWhatThePageCanChange:
         ):
             assert field in body, f"{field} is missing, so saving it would revert"
 
+    def test_every_model_the_page_offers_can_also_be_saved(self, client):
+        """The mirror of the test above, and the half it was missing. `synthesis_model` was
+        projected -- from the deployment config, not the tenant -- so the picker rendered with a
+        value and then refused the save with `unknown settings: ['synthesis_model']`. Projected and
+        settable are two contracts and a control needs both."""
+        body = client.get(f"/api/tenants/{TENANT}/settings").json()
+        for field in [k for k in body if k.endswith("_model")]:
+            r = client.patch(f"/api/tenants/{TENANT}/governance", json={field: "some.vendor-model"})
+            assert r.status_code == 200, f"{field}: {r.json()}"
+
     def test_a_chosen_query_model_survives_the_re_read(self, client):
         body = self._save(client, {"query_model": "anthropic.claude-haiku-4-5"})
         assert body["query_model"] == "anthropic.claude-haiku-4-5"
