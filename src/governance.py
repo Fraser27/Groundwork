@@ -226,6 +226,15 @@ class GovernanceSettings:
     which model writes SQL; changing who writes a query must not silently change who drives the
     loop that decides whether to run one at all."""
 
+    synthesis_model: str = DEFAULT_SYNTHESIS_MODEL
+    """The model that writes prose over parts already retrieved. It never decides what is true.
+
+    A tenant setting because Admin has offered this dropdown all along while the value lived only
+    in `GroundworkConfig.models`, which is per deployment. So the page showed a control that saved
+    with `unknown settings: ['synthesis_model']` -- the same drift as the router toggles above, and
+    the reason the settings endpoint's docstring says every setting the page can change has to be
+    projected there."""
+
     ocr_model: str = DEFAULT_OCR_MODEL
     """Vision model that transcribes document pages. Deliberately separate from the
     extraction model: transcription is mechanical and a cheap model does it well, so
@@ -402,6 +411,7 @@ class GovernanceSettings:
             block_model_extraction=_b("GROUNDWORK_BLOCK_MODEL_EXTRACTION", False),
             query_model=os.getenv("GROUNDWORK_QUERY_MODEL", DEFAULT_QUERY_MODEL),
             retrieval_agent_model=os.getenv("GROUNDWORK_RETRIEVAL_AGENT_MODEL", DEFAULT_QUERY_MODEL),
+            synthesis_model=os.getenv("GROUNDWORK_SYNTHESIS_MODEL", DEFAULT_SYNTHESIS_MODEL),
             ocr_model=os.getenv("GROUNDWORK_OCR_MODEL", DEFAULT_OCR_MODEL),
             extraction_model=os.getenv("GROUNDWORK_EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),
             enrichment_model=os.getenv("GROUNDWORK_ENRICHMENT_MODEL", DEFAULT_ENRICHMENT_MODEL),
@@ -549,6 +559,12 @@ FIELD_HELP: dict[str, str] = {
         "processed; each one records which model read it."
     ),
     "extraction_model": "The AI model used to read documents and propose relationships.",
+    "synthesis_model": (
+        "The AI model that phrases the final answer over facts already retrieved. It writes up "
+        "what the graph and the metrics returned and cannot add to it, so a cheaper model here "
+        "costs readability rather than accuracy. Turning synthesis off entirely still returns the "
+        "parts and their citations."
+    ),
     "enrichment_model": (
         "The AI model used to write descriptions for database tables and columns. A "
         "smaller, cheaper model is usually enough here."
