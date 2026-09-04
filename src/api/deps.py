@@ -9,6 +9,8 @@ alternative — module-level singletons initialised in a lifespan hook — makes
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path as FsPath
 from typing import Annotated, Any
@@ -54,6 +56,11 @@ MAX_BLOCKED_PER_TENANT = 200
 #: their catalog does not have -- which is worse than an empty Metrics page, because it looks like
 #: the semantic layer is already populated.
 EXAMPLE_METRICS_DIR = FsPath(__file__).resolve().parents[2] / "sample" / "metrics"
+
+#: How long to wait before trying the graph again after a failed connect. Long enough that a
+#: genuinely down Neptune is not probed once per request, short enough that a task which lost the
+#: race against a starting cluster heals on its own rather than waiting for an operator.
+GRAPH_RECONNECT_COOLDOWN_SECONDS = 30.0
 
 
 @dataclass
@@ -223,14 +230,14 @@ class Services:
         False for both a missing graph and an unreachable one, and `catalog_confirmed` is what
         keeps those apart from a cache that is empty because nothing was ever scanned.
 
-        A failed read is left retryable, per `mark_hydrated`: it costs one refused read per page
-        load while the graph is down, and the alternative is a task that reports "cannot say"
-        forever after the graph comes back. No graph at all is marked instead, because
-        `connect_graph` runs once per process and there is nothing to retry.
+        Neither a failed read nor a missing graph is marked hydrated: it costs one refused read per
+        page load while the graph is down, and the alternative is a task that reports "cannot say"
+        forever after the graph comes back. That applies to no-graph too now that `connect_graph`
+        retries -- marking it would pin an empty catalog in place across the reconnect, and
+        `catalog_reader` is what the column allowlist is built from.
         """
         store = self.catalog_graph_store()
         if store is None:
-            self.catalog.mark_hydrated(tenant_id)
             self.catalog_confirmed[tenant_id] = False
             return False
         if self.catalog.is_hydrated(tenant_id):
@@ -897,6 +904,11 @@ def set_services(services: Services) -> None:
 def get_services() -> Services:
     if _services is None:
         raise RuntimeError("services not initialised, call set_services() first")
+    # The one place both processes pass through per request, so it is where a graph that came up
+    # after startup gets noticed. Costs an attribute check once connected, and is cooldown-gated
+    # while it is not.
+    if _services.graph is None:
+        reconnect_if_due(_services)
     return _services
 
 
@@ -997,6 +1009,35 @@ def drain_blocked(services: Any, tenant_id: str, blocked: list[Any]) -> None:
         )
 
 
+#: Reentrant so `reconnect_if_due` can hold it across its own call to `connect_graph`.
+_graph_connect_lock = threading.RLock()
+_graph_retry_after = 0.0
+
+
+def reconnect_if_due(services: Services) -> bool:
+    """Retry a graph that failed to connect, at most once per cooldown. True if connected.
+
+    Separate from `connect_graph` because the cooldown must not gate an explicit call. A lifespan
+    hook or an operator asking to connect means *now*; only the per-request path is opportunistic,
+    and that is the one that would otherwise probe a down Neptune once per request.
+    """
+    global _graph_retry_after
+
+    if services.graph is not None:
+        return True
+    if time.monotonic() < _graph_retry_after:
+        return False
+    # Whoever holds it is already retrying on everyone's behalf, so no request waits on another's.
+    if not _graph_connect_lock.acquire(blocking=False):
+        return False
+    try:
+        return connect_graph(services)
+    finally:
+        if services.graph is None:
+            _graph_retry_after = time.monotonic() + GRAPH_RECONNECT_COOLDOWN_SECONDS
+        _graph_connect_lock.release()
+
+
 def connect_graph(services: Services) -> bool:
     """Connect the graph and put the assertion store on it. True when the graph is reachable.
 
@@ -1012,10 +1053,23 @@ def connect_graph(services: Services) -> bool:
     failure this codebase treats as worse than a crash.
 
     Idempotent: an already-connected container is left alone.
+
+    Failing is not terminal, see `reconnect_if_due`. This used to run once per process and give
+    up, so a task that started a few minutes before Neptune finished provisioning stayed degraded
+    for its whole life: metric authoring returned 503 long after the cluster was healthy, and only
+    a redeploy cleared it.
     """
     if services.graph is not None:
         return True
 
+    with _graph_connect_lock:
+        # Another thread may have connected while this one waited.
+        if services.graph is not None:
+            return True
+        return _connect_graph_once(services)
+
+
+def _connect_graph_once(services: Services) -> bool:
     cfg = services.config
     try:
         from src.graph.client import GraphClient
