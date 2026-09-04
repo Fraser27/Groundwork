@@ -114,6 +114,15 @@ SELECTABLE_MODELS: tuple[tuple[str, str, str], ...] = (
         "Close to Sonnet 5 and usually cheaper.",
     ),
     (
+        "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "Claude Sonnet 4.5",
+        (
+            "A generation back and still strong at extraction. Picks the right entity kind far "
+            "more reliably than the smaller models, which decides whether two documents naming "
+            "one thing land on one node or two."
+        ),
+    ),
+    (
         "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "Claude Haiku 4.5",
         (
