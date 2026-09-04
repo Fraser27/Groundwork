@@ -906,7 +906,19 @@ async def scan_sources(
     # for the life of the project: `LINK_METRIC_TO_TABLE` matches `(t:Table {full_name})` and so
     # never linked, and `enrich_tables` had nowhere to hang a description.
     catalog_store = services.catalog_graph_store()
-    if catalog_store is not None and result.nodes:
+    if catalog_store is None:
+        # Degrading is fine, reporting it as a clean scan is not. With no graph the stores below
+        # are all in-process, so this returned "6 tables, 91 assertions live, graph_error: null"
+        # and 200 OK, which is indistinguishable from a persisted scan. Two of those were run, the
+        # container was replaced, and the firewall then refused every table the metric named --
+        # by which point nothing pointed at the scan.
+        graph_error = (
+            "the graph was unreachable, so this scan reached only this process's cache and is "
+            "lost when the container is replaced. Nothing it found is queryable. Scan again once "
+            "the graph is up."
+        )
+        logger.warning("catalog scan for %s did not reach the graph, cache only", ctx.tenant_id)
+    elif result.nodes:
         try:
             nodes_written = catalog_store.persist(result.nodes)
         except Exception as e:
@@ -936,6 +948,11 @@ async def scan_sources(
         "note": (
             "Schemas only, no rows were read. Column types and descriptions are now "
             "citable as DECLARED facts, and metrics can be compiled against them."
+            if graph_error is None
+            # The old note claimed compilable facts either way, and that is the sentence a model
+            # summarising this response repeated back as success.
+            else "Schemas only, no rows were read. This scan did not reach the graph, so the "
+            "counts below describe this process only and nothing it found is queryable yet."
         ),
     }
 
