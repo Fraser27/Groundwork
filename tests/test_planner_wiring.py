@@ -74,3 +74,45 @@ class TestSynthesisIsTheOneDeliberateDifference:
         services = _services()
         services.config.models.synthesis_model = ""
         assert services.build_planner(TENANT)._synthesiser is None
+
+
+class TestTheTenantsSynthesisModelIsHonoured:
+    """Admin has offered this dropdown all along while `build_synthesiser` read only the
+    deployment config, so the save failed and the value would have been ignored anyway."""
+
+    def test_the_tenants_choice_reaches_the_synthesiser(self):
+        services = _services()
+        services.config.models.synthesis_model = "deployment.model"
+        settings = services.settings_for(TENANT)
+        services.save_settings(
+            TENANT, settings.apply({"synthesis_model": "tenant.model"}, updated_by="t")
+        )
+
+        assert services.build_planner(TENANT)._synthesiser.model_id == "tenant.model"
+
+    def test_an_unset_deployment_model_cannot_be_overruled_by_a_tenant(self):
+        """No synthesis model deployed means no Bedrock access for it, and a firm cannot grant
+        itself access by picking from a dropdown. The deployment vetoes, the tenant chooses."""
+        services = _services()
+        services.config.models.synthesis_model = ""
+        settings = services.settings_for(TENANT)
+        services.save_settings(
+            TENANT, settings.apply({"synthesis_model": "tenant.model"}, updated_by="t")
+        )
+
+        assert services.build_planner(TENANT)._synthesiser is None
+
+    def test_an_unset_tenant_inherits_the_deployments_model(self):
+        """Empty means inherit, not "use the code default". A second copy of the global here is how
+        `SYNTHESIS_MODEL` gets honoured at boot and silently overridden per tenant, which is the
+        `ontology_domain` bug and the reason that field defaults to empty too."""
+        services = _services()
+        services.config.models.synthesis_model = "deployment.model"
+        assert services.settings_for(TENANT).synthesis_model == ""
+        assert services.build_planner(TENANT)._synthesiser.model_id == "deployment.model"
+
+    def test_saving_it_is_not_an_unknown_setting(self):
+        """The reported bug: `unknown settings: ['synthesis_model']` from a control the page
+        renders next to three that do save."""
+        settings = _services().settings_for(TENANT)
+        assert settings.apply({"synthesis_model": "x"}, updated_by="t").synthesis_model == "x"

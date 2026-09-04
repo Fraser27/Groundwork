@@ -403,7 +403,7 @@ class Services:
             graph_reader=self.graph_reader,
             vector_search=VectorSearch(self.embedder) if self.embedder else None,
             catalog=self.enriched_catalog(),
-            synthesiser=build_synthesiser(self) if synthesise else None,
+            synthesiser=build_synthesiser(self, tenant_id) if synthesise else None,
             # Recorded, not obeyed: `ROUTER_NARROWS_LANES` is False, so every permitted lane still
             # runs. The router's decision is part of the trace rather than a filter on it.
             router=self.build_tier_router(),
@@ -976,16 +976,28 @@ def require_admin(principal: tuple[AuthContext, Grants]) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "requires platform-admin")
 
 
-def build_synthesiser(services: Services) -> Any | None:
+def build_synthesiser(services: Services, tenant_id: str = "") -> Any | None:
     """The synthesis model, or None when the deployment has no Bedrock access.
 
     None rather than raising: without a model the parts and their citations are still the answer,
     and refusing the question outright would trade a complete result for no result.
+
+    The deployment vetoes and the tenant chooses. An unset deployment model means this deployment
+    has no synthesis at all, and no tenant setting may overrule that -- a firm cannot grant itself
+    Bedrock access by picking from a dropdown. Given one, the tenant's choice decides which.
+
+    Until now only the deployment value was read, which made Admin's Synthesis dropdown a control
+    over nothing; unlike the other three models on that card, it had no tenant field to save into.
     """
-    model_id = getattr(getattr(services, "config", None), "models", None)
-    model_id = getattr(model_id, "synthesis_model", "")
-    if not model_id:
+    config_models = getattr(getattr(services, "config", None), "models", None)
+    deployment_model = getattr(config_models, "synthesis_model", "")
+    if not deployment_model:
         return None
+
+    model_id = ""
+    if tenant_id:
+        model_id = getattr(services.settings_for(tenant_id), "synthesis_model", "")
+    model_id = model_id or deployment_model
 
     from src.query.synthesis import Synthesiser
 
