@@ -259,6 +259,11 @@ and change it per tenant in **Admin**.
 git clone https://github.com/Fraser27/Groundwork.git && cd Groundwork
 make setup                    # venv, dependencies, CDK node modules
 ./scripts/deploy.sh           # or: ./scripts/deploy.sh eu-west-1
+
+# Grants S3 read on any bucket matching workshop* by default (see below). Point it at a
+# different lake, or opt out entirely, with DATA_BUCKETS:
+DATA_BUCKETS=my-other-lake ./scripts/deploy.sh
+DATA_BUCKETS="" ./scripts/deploy.sh
 ```
 
 Non-interactive, and takes 25-30 minutes, most of it Neptune creating itself. It does
@@ -280,6 +285,15 @@ everything that was previously three manual steps:
   redeploys the two stacks that consume it: `GroundworkAuth` for the callback and
   `GroundworkData` for the S3 CORS rule that lets a browser upload straight to the bucket.
   Deploying only Auth leaves uploads failing CORS, which looks like a broken button.
+- **Grants S3 access for governed metrics.** Athena reads a Glue table's underlying
+  objects as the task role, not as a service role, so `glue:GetTable` and
+  `athena:StartQueryExecution` alone get a query that is accepted and then fails with
+  `AccessDenied` on the data — which reaches a user as a metric that compiles, runs, and
+  never returns a figure. `DATA_BUCKETS` defaults to `workshop*`, matching the workshop
+  account's lake bucket (`workshop-data-<account>-<region>`); pass a comma-separated list
+  of bucket names or globs to point at a different lake, or `DATA_BUCKETS=""` to opt out
+  and leave `dataBuckets` in `cdk.json` untouched. Outside this script, CDK itself still
+  treats an unset `dataBuckets` as `[]` — this default only applies here.
 
 It also refuses to start if Bedrock access is missing, by invoking both models for real
 rather than asking whether they exist in the region. Those are different questions, and
@@ -344,6 +358,36 @@ Download the zip from GitHub, unzip it, and upload the PDFs through **Documents,
 Upload** the way a user would upload anything else. That is the point of shipping them as
 a plain zip rather than a fixture: the demo walks the same path a real user walks, so
 nothing about it is special-cased.
+
+### The harder tier: documents built to defeat plain RAG, not just to feed the graph
+
+The four packs above each show one rule with the minimum documents that can carry it. A
+second, harder tier exists for all four domains — [`sample/legal-multihop-demo.zip`](sample/legal-multihop-demo.zip),
+[`sample/healthcare-multihop-demo.zip`](sample/healthcare-multihop-demo.zip),
+[`sample/fintech-multihop-demo.zip`](sample/fintech-multihop-demo.zip), and
+[`sample/retail-multihop-demo.zip`](sample/retail-multihop-demo.zip) — where every document
+runs two to three pages and each pack's rule is walked to the full depth its ontology allows
+(`AFFILIATE_OF*1..3`, `CONTROLS*1..3`, `SUPERSEDES`), with the premises spread across three to
+eight documents instead of two or three.
+
+The point of this tier is that a nearest-neighbour hit over chunks cannot get the right
+answer even by luck. Each pack plants a name that is lexically close to a real entity but
+legally distinct — `Kestrel Fabrication Group` vs `Kestrel Fabrication Systems Ltd`,
+`Ridgeway Capital Partners NV` vs `...LLC` — disambiguated only in a registry extract a
+similarity search has no reason to prefer over the more prominent, wrong-entity sentence. The
+fintech credit committee memo goes further and states the wrong conclusion outright:
+"Halcyon Maritime Holdings SA is not otherwise connected to this proposal." That sentence is
+false once the three-link control chain in two *other* documents is followed
+(`FAC-2026-0512-ridgeway-registry-extract.pdf` and `FAC-2026-0512-credit-committee-memo.pdf`
+itself, read against the covenant certificate for Halcyon's own facility) — a system that
+retrieves and trusts the most relevant-looking passage will repeat the memo's own denial; a
+system that traverses `CONTROLS*1..3` will not.
+
+Load and use exactly as above. Regenerate after editing the content with:
+
+```bash
+.venv/bin/python sample/generate_multihop_demo_pdfs.py
+```
 
 `retail` is the default pack, and its four documents interlock on all three of its rules:
 `exception_on_superseded_policy`, `exception_during_investigation` and
