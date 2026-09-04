@@ -102,6 +102,15 @@ class TestTheTenantsSynthesisModelIsHonoured:
 
         assert services.build_planner(TENANT)._synthesiser is None
 
+    def test_an_unset_tenant_inherits_the_deployments_model(self):
+        """Empty means inherit, not "use the code default". A second copy of the global here is how
+        `SYNTHESIS_MODEL` gets honoured at boot and silently overridden per tenant, which is the
+        `ontology_domain` bug and the reason that field defaults to empty too."""
+        services = _services()
+        services.config.models.synthesis_model = "deployment.model"
+        assert services.settings_for(TENANT).synthesis_model == ""
+        assert services.build_planner(TENANT)._synthesiser.model_id == "deployment.model"
+
     def test_saving_it_is_not_an_unknown_setting(self):
         """The reported bug: `unknown settings: ['synthesis_model']` from a control the page
         renders next to three that do save."""

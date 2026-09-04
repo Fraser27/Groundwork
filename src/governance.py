@@ -226,14 +226,18 @@ class GovernanceSettings:
     which model writes SQL; changing who writes a query must not silently change who drives the
     loop that decides whether to run one at all."""
 
-    synthesis_model: str = DEFAULT_SYNTHESIS_MODEL
+    synthesis_model: str = ""
     """The model that writes prose over parts already retrieved. It never decides what is true.
 
     A tenant setting because Admin has offered this dropdown all along while the value lived only
     in `GroundworkConfig.models`, which is per deployment. So the page showed a control that saved
     with `unknown settings: ['synthesis_model']` -- the same drift as the router toggles above, and
     the reason the settings endpoint's docstring says every setting the page can change has to be
-    projected there."""
+    projected there.
+
+    Empty means "whatever this deployment configured", like `ontology_domain` and for the same
+    reason: `GroundworkConfig.models.synthesis_model` is the global, and a second independent copy
+    of it here would let `SYNTHESIS_MODEL` be honoured at boot and silently overridden per tenant."""
 
     ocr_model: str = DEFAULT_OCR_MODEL
     """Vision model that transcribes document pages. Deliberately separate from the
@@ -411,7 +415,8 @@ class GovernanceSettings:
             block_model_extraction=_b("GROUNDWORK_BLOCK_MODEL_EXTRACTION", False),
             query_model=os.getenv("GROUNDWORK_QUERY_MODEL", DEFAULT_QUERY_MODEL),
             retrieval_agent_model=os.getenv("GROUNDWORK_RETRIEVAL_AGENT_MODEL", DEFAULT_QUERY_MODEL),
-            synthesis_model=os.getenv("GROUNDWORK_SYNTHESIS_MODEL", DEFAULT_SYNTHESIS_MODEL),
+            # No fallback: empty defers to `SYNTHESIS_MODEL`, which sets the deployment's.
+            synthesis_model=os.getenv("GROUNDWORK_SYNTHESIS_MODEL", ""),
             ocr_model=os.getenv("GROUNDWORK_OCR_MODEL", DEFAULT_OCR_MODEL),
             extraction_model=os.getenv("GROUNDWORK_EXTRACTION_MODEL", DEFAULT_EXTRACTION_MODEL),
             enrichment_model=os.getenv("GROUNDWORK_ENRICHMENT_MODEL", DEFAULT_ENRICHMENT_MODEL),
