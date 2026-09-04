@@ -235,6 +235,9 @@ class Services:
         forever after the graph comes back. That applies to no-graph too now that `connect_graph`
         retries -- marking it would pin an empty catalog in place across the reconnect, and
         `catalog_reader` is what the column allowlist is built from.
+
+        A *successful* empty read is not permanent either. `CatalogStore._settle` expires it, which
+        is what lets this process notice a scan run in the sibling one.
         """
         store = self.catalog_graph_store()
         if store is None:

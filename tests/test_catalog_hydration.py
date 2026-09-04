@@ -303,6 +303,95 @@ class TestNeverScannedIsNotALostCache:
         assert store.sources(TENANT)[0].last_scanned_at is not None
 
 
+class TestAnEmptyTenantIsNeverSettledForGood:
+    """The bug this class exists for, measured in a live task on 2026-09-04.
+
+    The MCP sidecar hydrated `anycorp` once, at 07:32:33, and read 0 tables -- correctly, the graph
+    was empty. It marked the tenant complete and logged no second hydrate for the next eighty
+    minutes. A scan at 08:43:16 in the sibling API process wrote 6 `:Table` nodes and 83 `:Column`
+    nodes that a scoped read returned fine, and the sidecar went on refusing them:
+    `unauthorized tables: iceberg_db.orders, iceberg_db.returns`, five times, because
+    `SQLFirewall`'s allowlist is built from this cache. Only replacing the container cleared it.
+
+    Empty is the one state another process can change. So empty is settled on a clock, and
+    everything else is settled for good.
+    """
+
+    def test_a_tenant_that_gained_tables_elsewhere_is_picked_up(self, monkeypatch):
+        monkeypatch.setattr("src.discovery.catalog_store.EMPTY_RETRY_SECONDS", 0.0)
+        store = CatalogStore()
+        gs = graph_store()
+
+        assert hydrate_once(store, gs, ctx()) == 0
+        gs.graph.rows[TENANT] = rows_from_scan(scan())
+
+        assert hydrate_once(store, gs, ctx()) == 2
+        assert [t.full_name for t in store.tables(TENANT)] == ["fin.invoices", "legal.matters"]
+
+    def test_a_tenant_that_has_tables_is_never_re_read(self, monkeypatch):
+        """The cooldown must not turn into a per-request graph read for every real tenant. Nothing
+        outside this process can remove a table, so there is nothing to go back for."""
+        monkeypatch.setattr("src.discovery.catalog_store.EMPTY_RETRY_SECONDS", 0.0)
+        store = CatalogStore()
+        gs = graph_store((TENANT, scan()))
+
+        assert hydrate_once(store, gs, ctx()) == 2
+        reads_after_first = len(gs.graph.reads)
+
+        assert hydrate_once(store, gs, ctx()) == 0
+        assert len(gs.graph.reads) == reads_after_first
+
+    def test_a_scan_that_found_nothing_is_as_retryable_as_a_read_that_found_nothing(
+        self, monkeypatch
+    ):
+        """`record_scan` settled the tenant too, so a scan of an empty Glue pinned the same empty
+        cache by a second route. One rule for both, or the fix has a hole in it."""
+        monkeypatch.setattr("src.discovery.catalog_store.EMPTY_RETRY_SECONDS", 0.0)
+        store = CatalogStore()
+        store.record_scan(
+            TENANT,
+            source_id=SOURCE,
+            result=scan_catalog(FakeGlue({}), tenant_id=TENANT, source_id=SOURCE),
+        )
+
+        assert store.is_hydrated(TENANT) is False
+        assert hydrate_once(store, graph_store((TENANT, scan())), ctx()) == 2
+
+    def test_a_scan_that_found_tables_still_settles_the_tenant(self):
+        """The existing behaviour, kept: a scan has just filled the cache, so a hydrate afterwards
+        is a graph read for nothing on the page load that already paid for the scan."""
+        store = CatalogStore()
+        store.record_scan(TENANT, source_id=SOURCE, result=scan())
+        gs = graph_store((TENANT, scan()))
+
+        assert store.is_hydrated(TENANT) is True
+        assert hydrate_once(store, gs, ctx()) == 0
+        assert gs.graph.reads == []
+
+    def test_within_the_cooldown_an_empty_tenant_is_not_re_read(self):
+        """The reason for the clock rather than no flag at all: a tenant nobody has ever scanned
+        must not cost three queries per request."""
+        store = CatalogStore()
+        gs = graph_store()
+
+        hydrate_once(store, gs, ctx())
+        before = len(gs.graph.reads)
+
+        assert hydrate_once(store, gs, ctx()) == 0
+        assert len(gs.graph.reads) == before
+
+    def test_a_reset_reads_at_once_rather_than_waiting_out_the_cooldown(self):
+        """`clear` leaves the tenant empty, so a cooldown left behind would make the next read
+        stale for up to `EMPTY_RETRY_SECONDS` -- on the one action whose whole point is to reload."""
+        store = CatalogStore()
+        gs = graph_store((TENANT, scan()))
+        hydrate_once(store, gs, ctx())
+        store.clear(TENANT)
+
+        assert store.is_hydrated(TENANT) is False
+        assert hydrate_once(store, gs, ctx()) == 2
+
+
 class TestTenantIsolation:
     def test_one_tenants_tables_never_reach_another(self):
         store = CatalogStore()
@@ -565,7 +654,7 @@ class TestTheThreeStates:
 
     def test_an_unreachable_graph_is_retried(self):
         """A tenant marked hydrated on a failed read would report `unknown` until the task is
-        replaced, which is `mark_hydrated`'s own rule: an outage leaves the cache retryable."""
+        replaced. An outage leaves the cache retryable; `hydrate_catalog` never settles one."""
         client, services = TestTheApiServesAProcessThatNeverScanned().api(BrokenGraph())
         assert client.get(f"/api/tenants/{TENANT}/catalog/status").json()["state"] == "unknown"
 
