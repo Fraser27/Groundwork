@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -30,6 +31,12 @@ from datetime import UTC, datetime
 from src.discovery.glue_scanner import ScanResult
 
 logger = logging.getLogger(__name__)
+
+#: How long an *empty* tenant stays settled before the graph is read again. Shorter than
+#: `GRAPH_RECONNECT_COOLDOWN_SECONDS` because this costs three fast queries rather than a connect
+#: timeout, and short enough that someone who scans and then asks a question does not have to ask
+#: twice.
+EMPTY_RETRY_SECONDS = 15.0
 
 
 def _now() -> str:
@@ -145,6 +152,7 @@ class CatalogStore:
         self._tables: dict[str, dict[str, CatalogTable]] = {}
         self._sources: dict[str, dict[str, SourceRecord]] = {}
         self._hydrated: set[str] = set()
+        self._empty_until: dict[str, float] = {}
         # Scans run in a background task while pages read; both touch this.
         self._lock = threading.Lock()
 
@@ -183,8 +191,7 @@ class CatalogStore:
                 errors=list(result.errors),
             )
             self._sources.setdefault(tenant_id, {})[source_id] = record
-            # A scan just filled this tenant, so there is nothing left to load from the graph.
-            self._hydrated.add(tenant_id)
+            self._settle(tenant_id)
 
         logger.info(
             "recorded scan of %s for %s: %d tables, %d errors",
@@ -195,25 +202,45 @@ class CatalogStore:
         )
         return record
 
+    def _settle(self, tenant_id: str) -> None:
+        """Record that this tenant has been reconciled. Caller holds the lock.
+
+        A tenant that ended up with **tables** is settled for good: the graph cannot take them
+        away, only a scan or a reset can. A tenant that ended up empty is settled only for
+        `EMPTY_RETRY_SECONDS`, because empty is the one state something outside this process can
+        change -- a scan in the sibling process, or the graph coming up after this read.
+
+        Permanently settling the empty case is what this replaces, and it cost an afternoon: the
+        MCP sidecar read a genuinely empty `anycorp` once, marked it complete, and then refused
+        every table of a scan run four minutes later in the API process. `SQLFirewall`'s allowlist
+        is built from this cache, so the symptom was `unauthorized tables` on a catalog the graph
+        held correctly all along -- which reads as a permissions problem and is not one.
+
+        One rule in one place, so `record_scan` and `hydrate` cannot disagree about it. A scan
+        that found nothing is as retryable as a read that found nothing, and for the same reason.
+        """
+        if self._tables.get(tenant_id):
+            self._hydrated.add(tenant_id)
+            self._empty_until.pop(tenant_id, None)
+        else:
+            self._hydrated.discard(tenant_id)
+            self._empty_until[tenant_id] = time.monotonic() + EMPTY_RETRY_SECONDS
+
     def is_hydrated(self, tenant_id: str) -> bool:
         """Whether this tenant has been reconciled against the graph in this process.
 
         False and empty are different states, and conflating them is the bug: an empty cache
         means either "never scanned" or "scanned by a process that has since been replaced",
         and only the graph can say which.
+
+        An empty tenant answers True only inside its cooldown, so a never-scanned tenant costs one
+        graph read per `EMPTY_RETRY_SECONDS` rather than one per request -- and, unlike before, not
+        one per process lifetime. See `_settle`.
         """
         with self._lock:
-            return tenant_id in self._hydrated
-
-    def mark_hydrated(self, tenant_id: str) -> None:
-        """Stop trying to load this tenant, even though nothing was loaded.
-
-        Set on a successful empty read, so a genuinely unscanned tenant costs one graph read
-        rather than one per page load. Deliberately not set when the read fails: a Neptune
-        outage must leave the cache retryable, not permanently declared complete.
-        """
-        with self._lock:
-            self._hydrated.add(tenant_id)
+            if tenant_id in self._hydrated:
+                return True
+            return time.monotonic() < self._empty_until.get(tenant_id, 0.0)
 
     def hydrate(
         self,
@@ -242,7 +269,7 @@ class CatalogStore:
                 if found is None or found.last_scanned_at is None:
                     sources_for_tenant[source.source_id] = source
 
-            self._hydrated.add(tenant_id)
+            self._settle(tenant_id)
         return loaded
 
     def tables(self, tenant_id: str) -> list[CatalogTable]:
@@ -295,5 +322,7 @@ class CatalogStore:
             self._tables.pop(tenant_id, None)
             self._sources.pop(tenant_id, None)
             # Leaving the flag set would make a reset permanent: the next read would consider the
-            # tenant already loaded and never look at the graph again.
+            # tenant already loaded and never look at the graph again. The cooldown goes too, so a
+            # reset is followed by a read rather than by up to `EMPTY_RETRY_SECONDS` of staleness.
             self._hydrated.discard(tenant_id)
+            self._empty_until.pop(tenant_id, None)
