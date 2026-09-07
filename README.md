@@ -246,12 +246,17 @@ In the Bedrock console, under **Model access**, enable:
 
 | Model | Used for |
 |---|---|
-| `amazon.nova-2-lite-v1:0` | Every text and vision role, by default |
+| `anthropic.claude-haiku-4-5` | Extraction, synthesis and queries, by default |
+| `amazon.nova-2-lite-v1:0` | Page transcription, where the work is mechanical |
 | `amazon.titan-embed-text-v2:0` | Embeddings, and there is no alternative |
 
-That is the whole list. Every default is Nova 2 Lite precisely so a workshop account
-needs no Anthropic access; if you want stronger extraction, enable Claude Sonnet as well
-and change it per tenant in **Admin**.
+That is the whole list. Anthropic models are Marketplace offerings, so on an account that
+has never invoked one the console step also takes out a subscription; accept it there,
+because the first API call will not do it for you.
+
+Haiku 4.5 is the cheapest Anthropic model. If extractions start naming one entity two ways,
+which splits it across two nodes and leaves reasoner rules with premises that never join,
+move extraction to Sonnet per tenant in **Admin**.
 
 ### 3. Deploy
 

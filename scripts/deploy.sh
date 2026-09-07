@@ -30,7 +30,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CDK_DIR="$REPO_ROOT/cdk"
 CDK_JSON="$CDK_DIR/cdk.json"
 
-# The two models every default needs. Checked rather than assumed: enabling access is a console
+# The three models every default needs. Checked rather than assumed: enabling access is a console
 # action with no CLI equivalent, and without it the failure surfaces at the first document upload as
 # an AccessDeniedException, which reads as a broken app rather than a missing checkbox.
 #
@@ -38,7 +38,11 @@ CDK_JSON="$CDK_DIR/cdk.json"
 # region-pinned id can be present while the global profile is not, and `get-foundation-model` only
 # says a model exists in the region rather than that this account may invoke it. So each one is
 # invoked for real, with the smallest possible request.
+#
+# Invoking for real is also the only way to catch the Marketplace half of Anthropic access: an
+# account with the model-access checkbox ticked but no subscription still fails its first call.
 NOVA_PROFILE="global.amazon.nova-2-lite-v1:0"
+CLAUDE_PROFILE="global.anthropic.claude-haiku-4-5-20251001-v1:0"
 TITAN_MODEL="amazon.titan-embed-text-v2:0"
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
@@ -92,6 +96,15 @@ else
   note "MISSING   $NOVA_PROFILE"
 fi
 
+if aws bedrock-runtime converse --region "$REGION" --model-id "$CLAUDE_PROFILE" \
+    --messages '[{"role":"user","content":[{"text":"hi"}]}]' \
+    --inference-config '{"maxTokens":1}' >/dev/null 2>"$tmp/claude.err"; then
+  note "ok        $CLAUDE_PROFILE"
+else
+  missing+=("$CLAUDE_PROFILE")
+  note "MISSING   $CLAUDE_PROFILE"
+fi
+
 # `--cli-binary-format raw-in-base64-out` because AWS CLI v2 expects `--body` base64-encoded and
 # rejects raw JSON with "Invalid base64", which reads as a malformed request rather than a CLI
 # convention. Embeddings have no Converse API, so this is invoke-model or nothing.
@@ -115,6 +128,10 @@ Enable them in the Bedrock console under Model access, then re-run. It is a cons
 action with no CLI equivalent, and access can take a few minutes to take effect.
 
   https://$REGION.console.aws.amazon.com/bedrock/home?region=$REGION#/modelaccess
+
+Anthropic models are Marketplace offerings, so on an account that has never invoked one
+the console step also takes out a subscription. Accept it there rather than expecting the
+first API call to do it.
 
 The error was:
 $(sed 's/^/  /' "$tmp"/*.err 2>/dev/null | head -6)

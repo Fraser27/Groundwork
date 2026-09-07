@@ -62,12 +62,18 @@ DEFAULT_TEXT_MODEL = "global.amazon.nova-2-lite-v1:0"
 #: only symptom was a reasoner rule reporting premises that never joined. Choosing the entity kind
 #: is what a small model is worst at and what the graph is least able to survive.
 #:
-#: The trade: in an account without Anthropic model access these paths now fail outright rather
-#: than running weakly. That is the better failure, because it surfaces at the first upload instead
-#: of as a graph that looks populated and infers nothing. Every model here is settable per tenant
-#: in Admin, and the `method` string on each assertion records which model produced it, so moving
-#: this either way does not orphan anything already extracted.
-DEFAULT_REASONING_MODEL = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+#: Haiku 4.5 rather than Sonnet 4.5, which held this until 2026-09-07, is a cost decision and it
+#: moves back toward the failure above: Haiku is the small model on the list. So entity-kind
+#: agreement is the thing to watch after changing it, and the symptom to watch for is the one
+#: described above -- a rule whose premises never join rather than an error. Sonnet is one click
+#: away in Admin if a tenant's extractions start splitting nodes.
+#:
+#: The trade: in an account without Anthropic model access these paths fail outright rather than
+#: running weakly. That is the better failure, because it surfaces at the first upload instead of
+#: as a graph that looks populated and infers nothing. Every model here is settable per tenant in
+#: Admin, and the `method` string on each assertion records which model produced it, so moving this
+#: either way does not orphan anything already extracted.
+DEFAULT_REASONING_MODEL = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 #: Page transcription. A vision model rather than Textract because a legal document carries meaning
 #: in charts, org charts, signature blocks and handwriting, which OCR returns nothing for. Reading
@@ -105,11 +111,12 @@ DEFAULT_SYNTHESIS_MODEL = DEFAULT_REASONING_MODEL
 SELECTABLE_MODELS: tuple[tuple[str, str, str], ...] = (
     (
         DEFAULT_REASONING_MODEL,
-        "Claude Sonnet 4.5",
+        "Claude Haiku 4.5",
         (
-            "The default for extraction, synthesis and queries. A generation back, cheaper than "
-            "Sonnet 4.6, and it picks the right entity kind reliably, which decides whether two "
-            "documents naming one thing land on one node or two."
+            "The default for extraction, synthesis and queries, and the cheapest Anthropic model. "
+            "Good on straightforward extraction. If a matter's facts stop joining up, this is the "
+            "first thing to change: the smaller the model, the more often it names one entity two "
+            "ways and splits it across two nodes."
         ),
     ),
     (
@@ -123,11 +130,12 @@ SELECTABLE_MODELS: tuple[tuple[str, str, str], ...] = (
         "Close to Sonnet 5 and usually cheaper.",
     ),
     (
-        "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "Claude Haiku 4.5",
+        "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "Claude Sonnet 4.5",
         (
-            "Between Nova and Sonnet. Good for transcription and straightforward extraction, "
-            "weaker at judging what a passage means."
+            "A generation back and cheaper than Sonnet 4.6. Held the default until 2026-09-07, "
+            "and it picks the right entity kind reliably, which decides whether two documents "
+            "naming one thing land on one node or two."
         ),
     ),
     (
