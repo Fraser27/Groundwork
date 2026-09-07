@@ -266,6 +266,15 @@ export default function Metrics() {
   const [showJoins, setShowJoins] = useState(false)
   const [showParams, setShowParams] = useState(false)
 
+  /**
+   * The metric whose status write is in flight, or ''.
+   *
+   * An id rather than a boolean because it labels one row's button, but it disables *every* row's:
+   * approving re-embeds and rewrites the whole tenant's router index, so two of these at once race
+   * on one index and the loser's description is missing until the next write.
+   */
+  const [statusPending, setStatusPending] = useState('')
+
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 4000)
@@ -287,7 +296,8 @@ export default function Metrics() {
     setModal(true)
   }
 
-  const load = () => {
+  // Returns the promise so a caller can wait for the table to reflect its own write.
+  const load = () =>
     Promise.all([api.listMetrics(tenant), api.listTables(tenant)])
       .then(([m, t]) => {
         setMetrics(m)
@@ -296,9 +306,10 @@ export default function Metrics() {
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }
 
-  useEffect(load, [tenant])
+  useEffect(() => {
+    void load()
+  }, [tenant])
 
   const filtered = useMemo(() => {
     if (!filter.trim()) return metrics
@@ -436,16 +447,21 @@ export default function Metrics() {
       )
         return
     }
+    // Held until the reload lands, not just until the POST does: the row still reads `draft`
+    // until then, so re-enabling earlier offers an Approve button for something already approved.
+    setStatusPending(m.metric_id)
     try {
       await api.setMetricStatus(tenant, m.metric_id, status)
       showToast(`${m.name} ${status}`)
-      load()
+      await load()
     } catch (e) {
       // Never optimistic: approval is the governance act, so a failed write must not look done.
       showToast(
         `Could not ${status === 'approved' ? 'approve' : 'change'} ${m.name}: ${(e as Error).message.replace(/^\d+:\s*/, '')}`,
         'error',
       )
+    } finally {
+      setStatusPending('')
     }
   }
 
@@ -673,12 +689,25 @@ export default function Metrics() {
                         Edit
                       </button>
                       {m.status !== 'approved' ? (
-                        <button className="btn btn-approve btn-sm" onClick={() => setStatus(m, 'approved')}>
-                          Approve
+                        <button
+                          className="btn btn-approve btn-sm"
+                          onClick={() => setStatus(m, 'approved')}
+                          disabled={!!statusPending}
+                          title={
+                            statusPending
+                              ? 'A status change is in progress. Approving rebuilds the router index, so one runs at a time.'
+                              : undefined
+                          }
+                        >
+                          {statusPending === m.metric_id ? 'Approving…' : 'Approve'}
                         </button>
                       ) : (
-                        <button className="btn btn-ghost btn-sm" onClick={() => setStatus(m, 'deprecated')}>
-                          Deprecate
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setStatus(m, 'deprecated')}
+                          disabled={!!statusPending}
+                        >
+                          {statusPending === m.metric_id ? 'Deprecating…' : 'Deprecate'}
                         </button>
                       )}
                     </td>
