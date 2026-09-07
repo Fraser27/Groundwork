@@ -146,7 +146,7 @@ class SqlGenerator:
     bedrock_factory: Callable[[], BedrockLike] | None = None
     max_tokens: int = MAX_TOKENS
     temperature: float | None = None
-    """None by default. Sonnet 5 -- the configured default -- answers `ValidationException:
+    """None by default. Sonnet 5, which an administrator may select, answers `ValidationException:
     temperature is deprecated for this model`, which silently failed every summary this deployment
     attempted before `synthesis.py` stopped sending it. Do not set this without checking the model
     accepts one."""
