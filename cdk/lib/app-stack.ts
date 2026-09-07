@@ -461,6 +461,18 @@ export class AppStack extends cdk.Stack {
       }),
     );
 
+    // Anthropic models on Bedrock are Marketplace offerings, so the first invoke in an
+    // account that has never used one is refused until the subscription is checked and, if
+    // absent, taken out. Without these a fresh account fails on InvokeModel with an
+    // AccessDenied that names Marketplace, not Bedrock. No resource to scope to: the
+    // subscription is account-level, not per-model.
+    role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['aws-marketplace:ViewSubscriptions', 'aws-marketplace:Subscribe'],
+        resources: ['*'],
+      }),
+    );
+
     // Read-only on the catalog. Groundwork records structured *metadata* in the
     // graph and queries rows in place, so it never needs to mutate a table.
     role.addToPolicy(
